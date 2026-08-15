@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<!-- Define que este documento é um arquivo HTML5 e define o idioma principal como Português do Brasil -->
+<html lang="pt-BR">
+
+<head>
+    <!-- Define a codificação de caracteres como UTF-8 para suporte a acentuação -->
+    <meta charset="UTF-8">
+
+    <!-- Configura a escala da tela para dispositivos móveis (responsividade) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Título exibido na aba do navegador -->
+    <title>Início - ControlB</title>
+
+    <!-- Ícone da aplicação na aba do navegador -->
+    <link rel="shortcut icon" href="img/favicon.ico" type="image/x-icon">
+
+    <!-- Google Fonts: Importa a fonte 'Inter' para consistência tipográfica -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Folha de Estilos CSS externa com a navbar, layout em grid e cards translúcidos -->
+    <link rel="stylesheet" href="css/dashboard.css">
+</head>
+
+<body>
+    <!-- 1. Barra de Navegação Fixa no topo (Navbar) -->
+    <nav class="navbar">
+        <!-- Logotipo da marca no canto esquerdo -->
+        <div class="navbar-logo">
+            ControlB
+        </div>
+
+        <!-- Links de menu de navegação rápida -->
+        <div class="navbar-menu">
+            <a href="#">Dashboard</a>
+            <a href="#">Usuários</a>
+            <a href="#">Organizações</a>
+            <a href="#">Configurações</a>
+        </div>
+
+        <!-- Botão Sair: Ao ser clicado, executa a função fazerLogout() no JavaScript -->
+        <button class="btn-sair" onclick="fazerLogout()">
+            Sair
+        </button>
+    </nav>
+
+    <!-- 2. Container Principal estruturado com CSS Grid (2 colunas no desktop, 1 coluna no celular) -->
+    <div class="dashboard-container">
+
+        <!-- Card 1: Painel de Usuários Cadastrados -->
+        <div class="card card-usuarios">
+            <h2>Usuários</h2>
+            <p>Cadastrados no sistema:</p>
+            <!-- Lista <ul> onde o JavaScript insere dinamicamente os <li> com os nomes e e-mails -->
+            <ul id="lista-usuarios">
+                <li>Carregando usuários...</li>
+            </ul>
+        </div>
+
+        <!-- Card 2: Painel de Cargos/Funções (Roles) -->
+        <div class="card card-roles">
+            <h2>Cargos (Roles)</h2>
+            <p>Cadastrados no sistema:</p>
+            <!-- Lista <ul> preenchida pelo JavaScript com os cargos retornados da API -->
+            <ul id="lista-roles">
+                <li>Carregando roles...</li>
+            </ul>
+        </div>
+
+        <!-- Card 3: Painel de Organizações (Empresas/Unidades) -->
+        <div class="card card-orgs">
+            <h2>Organizações</h2>
+            <p>Cadastradas no sistema:</p>
+            <!-- Lista <ul> preenchida dinamicamente com as organizações e status (Ativa/Inativa) -->
+            <ul id="lista-organizacoes">
+                <li>Carregando organizações...</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Script JavaScript com a proteção de acesso (verificação do JWT), requisições à API e logout -->
+    <script src="js/dashboard.js"></script>
+</body>
+
+</html>

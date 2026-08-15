@@ -1,0 +1,228 @@
+// login.scss - Estilos da tela de Login (ControlB)
+// Este arquivo é o código-fonte SCSS compilado automaticamente pelo SASS Watcher para css/login.css
+
+// 1. Variáveis Globais de Cores e Temas (:root)
+// Centraliza as cores do projeto em um único lugar
+:root {
+    --primary: #918978;                      // Cor principal (dourado queimado)
+    --primary-hover: #05201f;                // Cor do botão ao passar o mouse por cima
+    --bg-color: #422902;                     // Cor de fundo base escura
+    --surface: rgba(30, 41, 59, 0.7);        // Fundo do painel de vidro (levemente translúcido)
+    --surface-border: rgba(255, 255, 255, 0.1);// Borda sutil e translúcida
+    --text-main: #f8fafc;                    // Cor do texto principal (branco gelo)
+    --text-muted: #94a3b8;                   // Cor do texto secundário (cinza)
+    --error: #ef4444;                        // Cor vermelha de alerta/erro
+}
+
+// 2. Reset Básico de CSS
+// Garante que o box-sizing inclua paddings e remove margens padrão dos navegadores
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', sans-serif;
+}
+
+// 3. Estilo do Body (Tela Inteira)
+body {
+    background-color: var(--bg-color);
+    // Gradientes radiais criando atmosfera de luz e profundidade no fundo escuro
+    background-image:
+        radial-gradient(at 0% 0%, rgba(116, 241, 99, 0.15) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(0, 0, 0, 0.39) 0px, transparent 50%);
+    color: var(--text-main);
+    display: flex;
+    justify-content: center; // Centraliza horizontalmente
+    align-items: center;     // Centraliza verticalmente
+    min-height: 100vh;       // Ocupa 100% da altura da janela
+    overflow: hidden;        // Evita barras de rolagem indesejadas
+}
+
+// 4. Container Limitador do Login
+.login-container {
+    width: 100%;
+    max-width: 420px;        // Largura máxima agradável para o card de login
+    padding: 2rem;
+    position: relative;
+    z-index: 10;             // Garante que o formulário fique à frente das bolhas de luz
+}
+
+// 5. Painel de Vidro (Efeito Glassmorphism)
+.glass-panel {
+    background: var(--surface);
+    backdrop-filter: blur(16px);         // Desfoca o que está atrás da caixa (efeito vidro fosco)
+    -webkit-backdrop-filter: blur(16px); // Compatibilidade com navegadores WebKit/Safari
+    border: 1px solid var(--surface-border);
+    border-radius: 24px;                 // Bordas bem arredondadas
+    padding: 3rem 2.5rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); // Sombra suave de elevação
+    animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1); // Animação de entrada suave
+}
+
+// Animação de entrada do formulário (sobe suavemente de baixo para a posição original)
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+// 6. Cabeçalho / Logotipo
+.logo {
+    text-align: center;
+    margin-bottom: 2rem;
+
+    h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        // Efeito de degradê dourado no texto do título
+        background: linear-gradient(to right, #b6b6b6, #015e20);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    p {
+        color: var(--text-muted);
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+    }
+}
+
+// 7. Grupos de Campos do Formulário
+.form-group {
+    margin-bottom: 1.5rem;
+    position: relative;
+
+    label {
+        display: block;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-bottom: 0.5rem;
+        color: var(--text-muted);
+        transition: color 0.3s;
+    }
+
+    // Quando o usuário clica dentro do input do grupo, a label acende para branco
+    &:focus-within label {
+        color: var(--text-main);
+    }
+}
+
+// 8. Caixas de Entrada (Inputs)
+.form-control {
+    width: 100%;
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--surface-border);
+    border-radius: 12px;
+    padding: 0.875rem 1rem;
+    color: var(--text-main);
+    font-size: 1rem;
+    transition: all 0.3s ease;
+    outline: none;
+
+    // Efeito ao focar no campo (brilho e destaque na borda)
+    &:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        background: rgba(15, 23, 42, 0.8);
+    }
+}
+
+// 9. Botão de Envio (Entrar)
+.btn-submit {
+    width: 100%;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    margin-top: 1rem;
+
+    // Efeito de levitação ao passar o mouse
+    &:hover {
+        background: var(--primary-hover);
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgba(83, 48, 1, 0.4);
+    }
+
+    // Efeito mecânico de clique
+    &:active {
+        transform: translateY(0);
+    }
+}
+
+// 10. Mensagem de Erro de Login
+.error-message {
+    color: var(--error);
+    font-size: 0.875rem;
+    margin-top: 1rem;
+    text-align: center;
+    opacity: 0;               // Invisível por padrão
+    transition: opacity 0.3s;
+
+    // O JavaScript adiciona a classe .visible quando as credenciais falham
+    &.visible {
+        opacity: 1;
+    }
+}
+
+// 11. Luzes / Formas de Fundo Animadas
+.bg-shapes {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    z-index: 0;
+}
+
+.shape {
+    position: absolute;
+    filter: blur(60px);       // Borra a forma para virar uma luz difusa
+    border-radius: 50%;       // Transforma em círculo
+    opacity: 0.5;
+    animation: float 20s infinite ease-in-out; // Flutuação infinita
+}
+
+.shape-1 {
+    width: 300px;
+    height: 300px;
+    background: var(--primary);
+    top: -100px;
+    right: -100px;
+    animation-delay: 0s;
+}
+
+.shape-2 {
+    width: 400px;
+    height: 400px;
+    background: #7b9789;
+    bottom: -200px;
+    left: -150px;
+    animation-delay: -5s;
+}
+
+// Animação que desloca as luzes suavemente no fundo
+@keyframes float {
+    0%, 100% {
+        transform: translate(0, 0) scale(1);
+    }
+    33% {
+        transform: translate(30px, -50px) scale(1.1);
+    }
+    66% {
+        transform: translate(-20px, 20px) scale(0.9);
+    }
+}

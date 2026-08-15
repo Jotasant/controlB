@@ -1,0 +1,23 @@
+# Banco de Dados e Volumes locais
+.pg_data/
+
+# Variaveis de Ambiente e Segredos
+.env
+*.env
+
+# Ambientes Virtuais Python
+.venv/
+env/
+venv/
+
+# Caches e Compilados Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# IDE e Sistema Operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

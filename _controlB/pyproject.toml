@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "controlb"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.116,<1",
+    "uvicorn[standard]>=0.35,<1",
+    "sqlalchemy>=2.0,<2.1",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic-settings>=2.10,<3",
+    "alembic>=1.16,<2",
+    "pwdlib[argon2]>=0.2.0,<1",
+    "pyjwt>=2.8,<3",
+    "python-multipart>=0.0.9,<1",
+    "email-validator>=2.2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<9",
+    "httpx>=0.28,<1",
+    "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/controlb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
