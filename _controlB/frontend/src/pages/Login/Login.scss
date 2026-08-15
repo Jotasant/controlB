@@ -1,67 +1,48 @@
-// pages/Login/Login.scss - Estilos da Página de Login
+// pages/Login/Login.scss - Tela de Login Executiva (Dark / Light)
 .login-page {
   position: relative;
   min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--bg-color);
-  background-image:
-    radial-gradient(at 0% 0%, rgba(116, 241, 99, 0.15) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(0, 0, 0, 0.4) 0px, transparent 50%);
-  overflow: hidden;
+  background-color: var(--bg-app);
+  padding: 1.5rem;
+  transition: background-color 0.2s ease, color 0.2s ease;
 
-  .bg-shapes {
+  .login-theme-btn {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 0;
+    top: 1.5rem;
+    right: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
 
-    .shape {
-      position: absolute;
-      filter: blur(70px);
-      border-radius: 50%;
-      opacity: 0.45;
-      animation: float 18s infinite ease-in-out;
-    }
-
-    .shape-1 {
-      width: 320px;
-      height: 320px;
-      background: var(--primary);
-      top: -80px;
-      right: -80px;
-    }
-
-    .shape-2 {
-      width: 420px;
-      height: 420px;
-      background: #7b9789;
-      bottom: -150px;
-      left: -120px;
-      animation-delay: -6s;
+    &:hover {
+      background: var(--bg-surface-hover);
+      color: var(--accent-brand);
+      border-color: var(--border-highlight);
     }
   }
 
   .login-container {
     width: 100%;
-    max-width: 440px;
-    padding: 1.5rem;
-    position: relative;
-    z-index: 10;
+    max-width: 380px;
 
-    .glass-panel {
-      background: var(--surface);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--surface-border);
-      border-radius: 24px;
-      padding: 3rem 2.5rem;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-      animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    .login-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 2.2rem 2rem;
+      box-shadow: var(--card-shadow);
+      transition: all 0.2s ease;
 
       &.shake {
         animation: shake 0.4s ease-in-out;
@@ -69,41 +50,46 @@
 
       .logo-header {
         text-align: center;
-        margin-bottom: 2.2rem;
+        margin-bottom: 1.8rem;
+
+        .logo-wrap {
+          display: flex;
+          justify-content: center;
+          margin-bottom: 0.85rem;
+        }
 
         h1 {
-          font-size: 2rem;
-          font-weight: 800;
-          letter-spacing: -0.5px;
-          color: #ffcc00;
+          font-size: 1.35rem;
+          font-weight: 700;
+          letter-spacing: -0.3px;
+          color: var(--text-primary);
 
-          span {
-            color: #ffffff;
+          .brand-dot {
+            color: var(--accent-brand);
           }
         }
 
         p {
           color: var(--text-muted);
-          font-size: 0.9rem;
-          margin-top: 0.4rem;
+          font-size: 0.8rem;
+          margin-top: 0.25rem;
         }
       }
 
       .login-form {
         display: flex;
         flex-direction: column;
-        gap: 1.4rem;
+        gap: 1.15rem;
 
         .form-group {
           display: flex;
           flex-direction: column;
-          gap: 0.5rem;
+          gap: 0.4rem;
 
           label {
-            font-size: 0.875rem;
+            font-size: 0.775rem;
             font-weight: 500;
-            color: var(--text-muted);
-            transition: color 0.2s ease;
+            color: var(--text-secondary);
           }
 
           .input-wrapper {
@@ -113,89 +99,74 @@
 
             .input-icon {
               position: absolute;
-              left: 1rem;
+              left: 0.8rem;
               color: var(--text-muted);
               pointer-events: none;
-              transition: color 0.2s ease;
             }
 
             input {
               width: 100%;
-              background: rgba(15, 23, 42, 0.6);
-              border: 1px solid var(--surface-border);
-              border-radius: 12px;
-              padding: 0.9rem 1rem 0.9rem 2.8rem;
-              color: var(--text-main);
-              font-size: 0.95rem;
-              transition: all 0.2s ease;
+              background: var(--bg-app);
+              border: 1px solid var(--border-subtle);
+              border-radius: 6px;
+              padding: 0.65rem 0.75rem 0.65rem 2.2rem;
+              color: var(--text-primary);
+              font-size: 0.85rem;
               outline: none;
+              transition: all 0.15s ease;
 
               &::placeholder {
-                color: #64748b;
+                color: var(--text-muted);
               }
 
               &:focus {
-                border-color: #ffcc00;
-                box-shadow: 0 0 0 3px rgba(255, 204, 0, 0.15);
-                background: rgba(15, 23, 42, 0.85);
-
-                & ~ .input-icon {
-                  color: #ffcc00;
-                }
+                border-color: var(--border-focus);
+                box-shadow: 0 0 0 2px var(--accent-brand-subtle);
               }
             }
-          }
-
-          &:focus-within label {
-            color: var(--text-main);
           }
         }
 
         .error-alert {
           display: flex;
           align-items: center;
-          gap: 0.6rem;
-          background: rgba(239, 68, 68, 0.15);
-          border: 1px solid rgba(239, 68, 68, 0.3);
-          color: #fca5a5;
-          padding: 0.8rem 1rem;
-          border-radius: 10px;
-          font-size: 0.875rem;
+          gap: 0.45rem;
+          background: var(--badge-inactive-bg);
+          border: 1px solid var(--badge-inactive-border);
+          color: var(--badge-inactive-text);
+          padding: 0.55rem 0.75rem;
+          border-radius: 6px;
+          font-size: 0.775rem;
         }
 
         .btn-submit {
           display: flex;
           justify-content: center;
           align-items: center;
-          gap: 0.6rem;
-          background: var(--primary);
-          color: white;
+          gap: 0.45rem;
+          background: var(--accent-brand);
+          color: #ffffff;
           border: none;
-          border-radius: 12px;
-          padding: 1rem;
-          font-size: 1rem;
+          border-radius: 6px;
+          padding: 0.7rem;
+          font-size: 0.85rem;
           font-weight: 600;
           cursor: pointer;
-          transition: all 0.25s ease;
-          margin-top: 0.5rem;
+          transition: all 0.15s ease;
+          margin-top: 0.4rem;
 
           &:hover:not(:disabled) {
-            background: var(--primary-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.4);
-          }
-
-          &:active:not(:disabled) {
-            transform: translateY(0);
+            background: var(--accent-brand-hover);
+            transform: translateY(-1px);
           }
 
           &:disabled {
-            opacity: 0.7;
+            opacity: 0.6;
             cursor: not-allowed;
           }
 
           &.success {
-            background: var(--success);
+            background: var(--accent-emerald);
           }
 
           .spinner {
@@ -203,38 +174,30 @@
           }
         }
       }
+
+      .login-footer {
+        margin-top: 1.6rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border-subtle);
+        text-align: center;
+
+        span {
+          font-size: 0.7rem;
+          color: var(--text-muted);
+          display: block;
+        }
+      }
     }
   }
 }
 
 @keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(25px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
-  20%, 60% { transform: translateX(-8px); }
-  40%, 80% { transform: translateX(8px); }
-}
-
-@keyframes float {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(25px, -35px) scale(1.05); }
-  66% { transform: translate(-20px, 20px) scale(0.95); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
 }

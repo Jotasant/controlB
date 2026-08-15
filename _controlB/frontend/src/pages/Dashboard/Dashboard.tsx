@@ -1,28 +1,70 @@
 /**
- * pages/Dashboard/Dashboard.tsx - Painel Principal do ControlB
+ * pages/Dashboard/Dashboard.tsx - Painel Executivo Focado em Gráficos & KPIs
  * 
- * Exibe a Navbar superior e cards interativos com dados do backend FastAPI
- * (Usuários, Cargos e Organizações) carregados em paralelo via Axios.
+ * Exibe métricas de compras, gráficos de desempenho financeiro (Recharts)
+ * e alocação por módulo de forma limpa e minimalista.
  */
 
 import React, { useEffect, useState } from 'react';
-import { Users, Shield, Building2, RefreshCw, CheckCircle2, XCircle, Mail } from 'lucide-react';
+import { 
+  Users, Shield, Building2, RefreshCw, CheckCircle2, 
+  ArrowUpRight, TrendingUp, DollarSign
+} from 'lucide-react';
+import {
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, 
+  CartesianGrid, PieChart, Pie, Cell
+} from 'recharts';
 import { identityService } from '@/services/api';
 import { User, Role, Organization } from '@/types';
 import { Navbar } from '@/components/Navbar';
 import './Dashboard.scss';
 
+// Dados de Exemplo para os Gráficos Analíticos
+const dadosCompras = [
+  { mes: 'Jan', compras: 14500, orcamento: 18000 },
+  { mes: 'Fev', compras: 19800, orcamento: 20000 },
+  { mes: 'Mar', compras: 16200, orcamento: 19000 },
+  { mes: 'Abr', compras: 24300, orcamento: 22000 },
+  { mes: 'Mai', compras: 21500, orcamento: 25000 },
+  { mes: 'Jun', compras: 28900, orcamento: 30000 },
+];
+
+const dadosCategorias = [
+  { name: 'Estoque & Matéria-Prima', value: 45, color: '#ff5500' },
+  { name: 'Contas & Fornecedores', value: 25, color: '#3b82f6' },
+  { name: 'Logística & Frota', value: 18, color: '#a855f7' },
+  { name: 'Infraestrutura & TI', value: 12, color: '#10b981' },
+];
+
+// Tooltip Minimalista para os Gráficos
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="custom-chart-tooltip">
+        <p className="tooltip-label">{label}</p>
+        <div className="tooltip-list">
+          {payload.map((item: any, idx: number) => (
+            <div key={idx} className="tooltip-row">
+              <span className="tooltip-dot" style={{ background: item.stroke || item.color }} />
+              <span className="tooltip-name">{item.name}:</span>
+              <span className="tooltip-val">R$ {item.value.toLocaleString('pt-BR')}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 export const Dashboard: React.FC = () => {
-  // Estados para armazenar as listas retornadas da API
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
 
-  // Estados de Carregamento individuais
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Função para buscar todos os dados em paralelo
   const loadData = async () => {
     setLoading(true);
     setError(null);
@@ -45,7 +87,6 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  // Carrega os dados ao montar o componente
   useEffect(() => {
     loadData();
   }, []);
@@ -55,134 +96,190 @@ export const Dashboard: React.FC = () => {
       <Navbar />
 
       <main className="dashboard-content">
-        <div className="dashboard-header">
-          <div>
-            <h1>Visão Geral do Sistema</h1>
-            <p>Gerencie organizações, acessos e usuários cadastrados</p>
+        {/* Cabeçalho Executivo Slim */}
+        <header className="page-header">
+          <div className="header-titles">
+            <h1>Painel Executivo</h1>
+            <p>Acompanhamento de compras, unidades e acessos operacionais</p>
           </div>
 
-          <button className="btn-refresh" onClick={loadData} disabled={loading} title="Recarregar Dados">
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-            <span>Atualizar</span>
-          </button>
-        </div>
+          <div className="header-actions">
+            <button className="btn-refresh" onClick={loadData} disabled={loading} title="Atualizar Dados">
+              <RefreshCw size={13} className={loading ? 'spin' : ''} />
+              <span>Atualizar</span>
+            </button>
+          </div>
+        </header>
 
         {error && (
-          <div className="dashboard-error">
+          <div className="alert-error">
             <span>{error}</span>
           </div>
         )}
 
-        <div className="cards-grid">
-          {/* Card 1: Organizações */}
-          <div className="dash-card card-orgs">
-            <div className="card-header">
-              <div className="icon-badge badge-orgs">
-                <Building2 size={20} />
-              </div>
+        {/* 1. CARDS DE KPIS EM 4 COLUNAS SLIM */}
+        <section className="metrics-grid">
+          <div className="metric-card">
+            <div className="metric-header">
+              <span className="metric-title">Organizações</span>
+              <Building2 size={15} className="metric-icon icon-brand" />
+            </div>
+            <div className="metric-body">
+              <span className="metric-value">{organizations.length}</span>
+              <span className="metric-tag green">
+                <ArrowUpRight size={11} />
+                Ativas
+              </span>
+            </div>
+            <span className="metric-footer">Empresas e filiais cadastradas</span>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-header">
+              <span className="metric-title">Usuários Ativos</span>
+              <Users size={15} className="metric-icon icon-blue" />
+            </div>
+            <div className="metric-body">
+              <span className="metric-value">{users.length}</span>
+              <span className="metric-tag green">
+                <CheckCircle2 size={11} />
+                Online
+              </span>
+            </div>
+            <span className="metric-footer">Contas com acesso ao sistema</span>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-header">
+              <span className="metric-title">Perfis de Acesso</span>
+              <Shield size={15} className="metric-icon icon-purple" />
+            </div>
+            <div className="metric-body">
+              <span className="metric-value">{roles.length}</span>
+              <span className="metric-tag neutral">
+                Níveis
+              </span>
+            </div>
+            <span className="metric-footer">Políticas de permissão</span>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-header">
+              <span className="metric-title">Compras do Mês</span>
+              <DollarSign size={15} className="metric-icon icon-emerald" />
+            </div>
+            <div className="metric-body">
+              <span className="metric-value">R$ 28.9k</span>
+              <span className="metric-tag green">
+                <TrendingUp size={11} />
+                +14.2%
+              </span>
+            </div>
+            <span className="metric-footer">Volume consolidado em Junho</span>
+          </div>
+        </section>
+
+        {/* 2. SEÇÃO DE GRÁFICOS ANALÍTICOS (RECHARTS) */}
+        <section className="charts-grid">
+          
+          {/* Gráfico Principal: Área de Compras vs Orçamento */}
+          <div className="panel-card chart-area-panel">
+            <div className="panel-header">
               <div>
-                <h2>Organizações</h2>
-                <span className="card-count">{organizations.length} cadastrada(s)</span>
+                <h2>Evolução Financeira & Orçamento</h2>
+                <p>Comparativo semestral de aquisições</p>
+              </div>
+              <div className="legend-items">
+                <span className="legend-badge"><span className="dot dot-brand" /> Compras</span>
+                <span className="legend-badge"><span className="dot dot-blue" /> Orçamento</span>
               </div>
             </div>
 
-            <div className="card-body">
-              {loading ? (
-                <div className="loading-state">Carregando organizações...</div>
-              ) : organizations.length === 0 ? (
-                <div className="empty-state">Nenhuma organização cadastrada.</div>
-              ) : (
-                <ul className="items-list">
-                  {organizations.map((org) => (
-                    <li key={org.id} className="item-row">
-                      <div className="item-info">
-                        <strong>{org.name}</strong>
-                        <span className="item-date">Criado em: {new Date(org.created_at).toLocaleDateString('pt-BR')}</span>
-                      </div>
-                      <span className={`status-pill ${org.is_active ? 'active' : 'inactive'}`}>
-                        {org.is_active ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                        {org.is_active ? 'Ativa' : 'Inativa'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+            <div className="chart-wrapper">
+              <ResponsiveContainer width="100%" height={320}>
+                <AreaChart data={dadosCompras} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="gradientCompras" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ff5500" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#ff5500" stopOpacity={0.0} />
+                    </linearGradient>
+                    <linearGradient id="gradientOrcamento" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
+
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(128, 128, 128, 0.12)" vertical={false} />
+                  <XAxis dataKey="mes" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
+                  <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} tickFormatter={(v) => `k${v/1000}`} />
+                  <Tooltip content={<CustomTooltip />} />
+                  
+                  <Area 
+                    type="monotone" 
+                    dataKey="orcamento" 
+                    name="Orçamento"
+                    stroke="#3b82f6" 
+                    strokeWidth={1.5}
+                    fillOpacity={1} 
+                    fill="url(#gradientOrcamento)" 
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="compras" 
+                    name="Compras"
+                    stroke="#ff5500" 
+                    strokeWidth={2.5}
+                    fillOpacity={1} 
+                    fill="url(#gradientCompras)" 
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Card 2: Usuários */}
-          <div className="dash-card card-users">
-            <div className="card-header">
-              <div className="icon-badge badge-users">
-                <Users size={20} />
-              </div>
+          {/* Gráfico Secundário: Donut de Categorias */}
+          <div className="panel-card chart-donut-panel">
+            <div className="panel-header">
               <div>
-                <h2>Usuários</h2>
-                <span className="card-count">{users.length} cadastrado(s)</span>
+                <h2>Alocação por Módulo</h2>
+                <p>Distribuição de despesas</p>
               </div>
             </div>
 
-            <div className="card-body">
-              {loading ? (
-                <div className="loading-state">Carregando usuários...</div>
-              ) : users.length === 0 ? (
-                <div className="empty-state">Nenhum usuário cadastrado.</div>
-              ) : (
-                <ul className="items-list">
-                  {users.map((user) => (
-                    <li key={user.id} className="item-row">
-                      <div className="item-info">
-                        <strong>{user.full_name}</strong>
-                        <span className="item-sub">
-                          <Mail size={12} />
-                          {user.email}
-                        </span>
-                      </div>
-                      <span className={`status-pill ${user.is_active ? 'active' : 'inactive'}`}>
-                        {user.is_active ? 'Ativo' : 'Inativo'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+            <div className="donut-body">
+              <div className="donut-render">
+                <ResponsiveContainer width="100%" height={180}>
+                  <PieChart>
+                    <Pie
+                      data={dadosCategorias}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={52}
+                      outerRadius={78}
+                      paddingAngle={4}
+                      dataKey="value"
+                    >
+                      {dadosCategorias.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} stroke="var(--bg-surface)" strokeWidth={2} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="donut-stats">
+                {dadosCategorias.map((item, idx) => (
+                  <div key={idx} className="stat-row">
+                    <span className="dot" style={{ background: item.color }} />
+                    <span className="name">{item.name}</span>
+                    <span className="percent">{item.value}%</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Card 3: Cargos (Roles) */}
-          <div className="dash-card card-roles">
-            <div className="card-header">
-              <div className="icon-badge badge-roles">
-                <Shield size={20} />
-              </div>
-              <div>
-                <h2>Cargos (Roles)</h2>
-                <span className="card-count">{roles.length} cadastrado(s)</span>
-              </div>
-            </div>
-
-            <div className="card-body">
-              {loading ? (
-                <div className="loading-state">Carregando cargos...</div>
-              ) : roles.length === 0 ? (
-                <div className="empty-state">Nenhum cargo cadastrado.</div>
-              ) : (
-                <ul className="items-list">
-                  {roles.map((role) => (
-                    <li key={role.id} className="item-row">
-                      <div className="item-info">
-                        <strong>{role.name}</strong>
-                        <span className="item-sub">{role.description || 'Sem descrição cadastrada'}</span>
-                      </div>
-                      <span className={`status-pill ${role.is_active ? 'active' : 'inactive'}`}>
-                        {role.is_active ? 'Ativo' : 'Inativo'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
+        </section>
       </main>
     </div>
   );

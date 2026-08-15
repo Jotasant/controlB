@@ -1,241 +1,436 @@
-// pages/Dashboard/Dashboard.scss - Estilos do Painel Principal
+// pages/Dashboard/Dashboard.scss - Painel Executivo Ultra-Slim (Dark / Light)
 .dashboard-page {
   min-height: 100vh;
-  background: radial-gradient(circle at center, #6e5f25 0%, #000000 100%);
-  padding-top: 70px;
-  color: white;
+  background-color: var(--bg-app);
+  padding-top: 52px; // Altura exata da navbar slim
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
 
   .dashboard-content {
     max-width: 1200px;
     margin: 0 auto;
-    padding: 2.5rem 1.5rem;
+    padding: 1.75rem 1.5rem 3.5rem;
 
-    .dashboard-header {
+    // Cabeçalho da Página
+    .page-header {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      margin-bottom: 2.5rem;
+      align-items: flex-end;
+      margin-bottom: 1.5rem;
 
-      h1 {
-        font-size: 1.85rem;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-        color: #ffffff;
-      }
-
-      p {
-        color: #cbd5e1;
-        font-size: 0.95rem;
-        margin-top: 0.25rem;
-      }
-
-      .btn-refresh {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        color: white;
-        padding: 0.6rem 1.2rem;
-        border-radius: 8px;
-        font-size: 0.9rem;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s ease;
-
-        &:hover:not(:disabled) {
-          background: rgba(255, 255, 255, 0.2);
-          border-color: #ffcc00;
-          color: #ffcc00;
+      .header-titles {
+        h1 {
+          font-size: 1.35rem;
+          font-weight: 700;
+          letter-spacing: -0.3px;
+          color: var(--text-primary);
         }
 
-        &:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .spin {
-          animation: spin 1s linear infinite;
+        p {
+          font-size: 0.825rem;
+          color: var(--text-secondary);
+          margin-top: 0.2rem;
         }
       }
-    }
 
-    .dashboard-error {
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
-      padding: 1rem 1.5rem;
-      border-radius: 12px;
-      margin-bottom: 2rem;
-    }
-
-    .cards-grid {
-      display: grid;
-      gap: 1.8rem;
-      grid-template-columns: repeat(2, 1fr);
-      grid-template-areas:
-        "orgs orgs"
-        "users roles";
-
-      .card-orgs {
-        grid-area: orgs;
-      }
-
-      .card-users {
-        grid-area: users;
-      }
-
-      .card-roles {
-        grid-area: roles;
-      }
-
-      .dash-card {
-        background: rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(14px);
-        -webkit-backdrop-filter: blur(14px);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 20px;
-        padding: 1.8rem;
-        display: flex;
-        flex-direction: column;
-        min-height: 340px;
-        box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.4);
-        transition: transform 0.2s ease, border-color 0.2s ease;
-
-        &:hover {
-          border-color: rgba(255, 204, 0, 0.3);
-        }
-
-        .card-header {
+      .header-actions {
+        .btn-refresh {
           display: flex;
           align-items: center;
-          gap: 1rem;
-          margin-bottom: 1.5rem;
-          padding-bottom: 1rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+          gap: 0.4rem;
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          color: var(--text-secondary);
+          padding: 0.4rem 0.8rem;
+          border-radius: 6px;
+          font-size: 0.8rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.15s ease;
 
-          .icon-badge {
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
-            display: flex;
+          &:hover:not(:disabled) {
+            background: var(--bg-surface-hover);
+            color: var(--text-primary);
+            border-color: var(--border-highlight);
+          }
+
+          &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+
+          .spin {
+            animation: spin 1s linear infinite;
+          }
+        }
+      }
+    }
+
+    .alert-error {
+      background: var(--badge-inactive-bg);
+      border: 1px solid var(--badge-inactive-border);
+      color: var(--badge-inactive-text);
+      padding: 0.65rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.825rem;
+      margin-bottom: 1.25rem;
+    }
+
+    // 1. CARDS DE KPIS EM 4 COLUNAS SLIM
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+
+      .metric-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 1rem 1.15rem;
+        box-shadow: var(--card-shadow);
+        transition: all 0.15s ease;
+
+        &:hover {
+          border-color: var(--border-highlight);
+          background: var(--bg-surface-elevated);
+        }
+
+        .metric-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.6rem;
+
+          .metric-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+          }
+
+          .metric-icon {
+            &.icon-brand { color: var(--accent-brand); }
+            &.icon-blue { color: var(--accent-blue); }
+            &.icon-purple { color: var(--accent-purple); }
+            &.icon-emerald { color: var(--accent-emerald); }
+          }
+        }
+
+        .metric-body {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 0.4rem;
+          margin-bottom: 0.3rem;
+
+          .metric-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            letter-spacing: -0.4px;
+            color: var(--text-primary);
+          }
+
+          .metric-tag {
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
+            gap: 0.2rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 0.15rem 0.45rem;
+            border-radius: 999px;
 
-            &.badge-orgs {
-              background: rgba(255, 204, 0, 0.15);
-              color: #ffcc00;
+            &.green {
+              background: var(--badge-active-bg);
+              color: var(--badge-active-text);
+              border: 1px solid var(--badge-active-border);
             }
 
-            &.badge-users {
-              background: rgba(56, 189, 248, 0.15);
-              color: #38bdf8;
-            }
-
-            &.badge-roles {
-              background: rgba(168, 85, 247, 0.15);
-              color: #c084fc;
+            &.neutral {
+              background: var(--bg-surface-hover);
+              color: var(--text-secondary);
+              border: 1px solid var(--border-subtle);
             }
           }
+        }
+
+        .metric-footer {
+          font-size: 0.725rem;
+          color: var(--text-muted);
+          display: block;
+        }
+      }
+    }
+
+    // 2. SEÇÃO DE GRÁFICOS (2FR 1FR)
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+
+      .panel-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 1.15rem 1.25rem;
+        box-shadow: var(--card-shadow);
+
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 1rem;
 
           h2 {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: #ffffff;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
           }
 
-          .card-count {
-            font-size: 0.825rem;
-            color: #94a3b8;
+          p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.1rem;
+          }
+
+          .legend-items {
+            display: flex;
+            gap: 0.6rem;
+
+            .legend-badge {
+              display: flex;
+              align-items: center;
+              gap: 0.35rem;
+              font-size: 0.725rem;
+              color: var(--text-secondary);
+
+              .dot {
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+
+                &.dot-brand { background: var(--accent-brand); }
+                &.dot-blue { background: var(--accent-blue); }
+              }
+            }
           }
         }
 
-        .card-body {
-          flex-grow: 1;
-          display: flex;
-          flex-direction: column;
-
-          .loading-state,
-          .empty-state {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            flex-grow: 1;
-            color: #94a3b8;
-            font-size: 0.95rem;
-          }
-
-          .items-list {
-            list-style: none;
+        &.chart-donut-panel {
+          .donut-body {
             display: flex;
             flex-direction: column;
-            gap: 0.8rem;
-            max-height: 280px;
-            overflow-y: auto;
-            padding-right: 0.3rem;
+            align-items: center;
 
-            .item-row {
-              background: rgba(0, 0, 0, 0.25);
-              border: 1px solid rgba(255, 255, 255, 0.05);
-              border-radius: 10px;
-              padding: 0.9rem 1.2rem;
+            .donut-render {
+              width: 100%;
+              height: 150px;
+            }
+
+            .donut-stats {
+              width: 100%;
               display: flex;
-              justify-content: space-between;
-              align-items: center;
-              transition: background 0.2s ease;
+              flex-direction: column;
+              gap: 0.35rem;
+              margin-top: 0.5rem;
 
-              &:hover {
-                background: rgba(0, 0, 0, 0.4);
-              }
-
-              .item-info {
-                display: flex;
-                flex-direction: column;
-                gap: 0.25rem;
-
-                strong {
-                  font-size: 0.95rem;
-                  color: #f8fafc;
-                }
-
-                .item-sub {
-                  display: flex;
-                  align-items: center;
-                  gap: 0.35rem;
-                  font-size: 0.825rem;
-                  color: #94a3b8;
-                }
-
-                .item-date {
-                  font-size: 0.75rem;
-                  color: #64748b;
-                }
-              }
-
-              .status-pill {
+              .stat-row {
                 display: flex;
                 align-items: center;
-                gap: 0.35rem;
-                font-size: 0.75rem;
-                font-weight: 600;
-                padding: 0.3rem 0.7rem;
-                border-radius: 20px;
+                font-size: 0.775rem;
+                color: var(--text-secondary);
 
-                &.active {
-                  background: rgba(16, 185, 129, 0.15);
-                  color: #34d399;
-                  border: 1px solid rgba(16, 185, 129, 0.3);
+                .dot {
+                  width: 7px;
+                  height: 7px;
+                  border-radius: 50%;
+                  margin-right: 0.45rem;
                 }
 
-                &.inactive {
-                  background: rgba(239, 68, 68, 0.15);
-                  color: #f87171;
-                  border: 1px solid rgba(239, 68, 68, 0.3);
+                .name {
+                  flex-grow: 1;
+                }
+
+                .percent {
+                  font-weight: 600;
+                  color: var(--text-primary);
                 }
               }
             }
           }
         }
+      }
+    }
+
+    // 3. TABELAS SLIM CONSOLIDADAS
+    .data-panels-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+
+      .panel-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 1.15rem 1.25rem;
+        box-shadow: var(--card-shadow);
+
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.85rem;
+
+          h2 {
+            font-size: 0.925rem;
+            font-weight: 600;
+            color: var(--text-primary);
+          }
+
+          .panel-count {
+            font-size: 0.725rem;
+            color: var(--text-muted);
+            background: var(--bg-surface-elevated);
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+          }
+        }
+
+        .slim-table-wrap {
+          overflow-x: auto;
+
+          .slim-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+
+            th {
+              color: var(--text-muted);
+              font-size: 0.7rem;
+              font-weight: 600;
+              text-transform: uppercase;
+              letter-spacing: 0.4px;
+              padding: 0.55rem 0.65rem;
+              border-bottom: 1px solid var(--border-subtle);
+            }
+
+            td {
+              padding: 0.65rem;
+              border-bottom: 1px solid var(--border-subtle);
+              font-size: 0.825rem;
+              color: var(--text-secondary);
+
+              strong {
+                color: var(--text-primary);
+                font-weight: 500;
+              }
+
+              .user-cell {
+                display: flex;
+                flex-direction: column;
+
+                .user-name {
+                  font-weight: 500;
+                  color: var(--text-primary);
+                }
+
+                .user-email {
+                  display: flex;
+                  align-items: center;
+                  gap: 0.3rem;
+                  font-size: 0.75rem;
+                  color: var(--text-muted);
+                }
+              }
+            }
+
+            tr:last-child td {
+              border-bottom: none;
+            }
+
+            tr:hover td {
+              background: var(--bg-surface-hover);
+            }
+          }
+        }
+
+        .empty-state {
+          padding: 2rem;
+          text-align: center;
+          color: var(--text-muted);
+          font-size: 0.825rem;
+        }
+      }
+    }
+
+    // Pílulas de Status
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+
+      &.active {
+        background: var(--badge-active-bg);
+        color: var(--badge-active-text);
+        border: 1px solid var(--badge-active-border);
+      }
+
+      &.inactive {
+        background: var(--badge-inactive-bg);
+        color: var(--badge-inactive-text);
+        border: 1px solid var(--badge-inactive-border);
+      }
+    }
+  }
+}
+
+// Tooltip Minimalista para Gráficos
+.custom-chart-tooltip {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-highlight);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  box-shadow: var(--dropdown-shadow);
+
+  .tooltip-label {
+    font-size: 0.725rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 0.3rem;
+  }
+
+  .tooltip-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+
+    .tooltip-row {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.775rem;
+
+      .tooltip-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+
+      .tooltip-name {
+        color: var(--text-secondary);
+      }
+
+      .tooltip-val {
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-left: auto;
       }
     }
   }
@@ -246,23 +441,31 @@
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 860px) {
+@media (max-width: 992px) {
   .dashboard-page {
     .dashboard-content {
-      padding: 1.5rem 1rem;
-
-      .dashboard-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 1rem;
+      .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
       }
 
-      .cards-grid {
+      .charts-grid {
         grid-template-columns: 1fr;
-        grid-template-areas:
-          "orgs"
-          "users"
-          "roles";
+      }
+
+      .data-panels-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  }
+}
+
+@media (max-width: 576px) {
+  .dashboard-page {
+    .dashboard-content {
+      padding: 1.25rem 1rem;
+
+      .metrics-grid {
+        grid-template-columns: 1fr;
       }
     }
   }

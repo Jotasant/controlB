@@ -26,6 +26,12 @@ class OrganizationCreate(OrganizationBase):
     pass
 
 
+class OrganizationUpdate(BaseModel):
+    """Dados opcionais para atualizar uma Organização."""
+    name: str | None = None
+    is_active: bool | None = None
+
+
 class OrganizationResponse(OrganizationBase):
     """
     Dados retornados para o cliente (Payload de Saída).
@@ -53,6 +59,13 @@ class RoleBase(BaseModel):
 class RoleCreate(RoleBase):
     """Dados necessários para criar um novo Cargo."""
     organization_id: uuid.UUID          # ID da organização à qual este cargo pertence
+
+
+class RoleUpdate(BaseModel):
+    """Dados opcionais para atualizar um Cargo."""
+    name: str | None = None
+    description: str | None = None
+    is_active: bool | None = None
 
 
 class RoleResponse(RoleBase):
@@ -84,6 +97,19 @@ class UserCreate(UserBase):
     organization_id: uuid.UUID          # Organização obrigatória
     role_id: uuid.UUID | None = None    # Cargo opcional
     password: str                       # Senha em texto claro informada pelo usuário
+
+
+class UserUpdate(BaseModel):
+    """
+    Dados enviados na edição de Perfil / Desvinculação do Usuário.
+    Todos os campos são opcionais.
+    """
+    full_name: str | None = None
+    email: EmailStr | None = None
+    organization_id: uuid.UUID | None = None
+    role_id: uuid.UUID | None = None
+    is_active: bool | None = None
+    password: str | None = None         # Opcional para redefinição de senha
 
 
 class UserResponse(UserBase):

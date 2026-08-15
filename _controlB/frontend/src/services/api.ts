@@ -18,8 +18,9 @@ export const api = axios.create({
   },
 });
 
-// Chave onde o token é armazenado no navegador
+// Chaves de armazenamento na sessão
 const TOKEN_KEY = 'controlb_token';
+const USER_EMAIL_KEY = 'controlb_user_email';
 
 // 1. Interceptor de Requisição: Injeta o JWT no cabeçalho Authorization se existir
 api.interceptors.request.use((config) => {
@@ -61,18 +62,25 @@ export const authService = {
 
     if (response.data.access_token) {
       localStorage.setItem(TOKEN_KEY, response.data.access_token);
+      localStorage.setItem(USER_EMAIL_KEY, email);
     }
     return response.data;
   },
 
-  // Remove o token da sessão
+  // Remove o token e dados da sessão
   logout(): void {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_EMAIL_KEY);
   },
 
   // Retorna o token atual ou null
   getToken(): string | null {
     return localStorage.getItem(TOKEN_KEY);
+  },
+
+  // Retorna o e-mail do usuário logado
+  getUserEmail(): string {
+    return localStorage.getItem(USER_EMAIL_KEY) || 'admin@controlb.com';
   },
 
   // Verifica se o usuário possui sessão ativa
@@ -81,23 +89,62 @@ export const authService = {
   },
 };
 
-// 4. Funções de Consulta de Dados
+// 4. Funções de Consulta e Manipulação de Dados
 export const identityService = {
-  // Lista todos os usuários
+  // --- USUÁRIOS ---
   async getUsers(): Promise<User[]> {
     const response = await api.get<User[]>('/identity/users');
     return response.data;
   },
 
-  // Lista todos os cargos
+  async createUser(data: { full_name: string; email: string; password: string; organization_id?: string; role_id?: string }): Promise<User> {
+    const response = await api.post<User>('/identity/users', data);
+    return response.data;
+  },
+
+  async updateUser(userId: string, data: { full_name?: string; email?: string; password?: string; organization_id?: string; role_id?: string; is_active?: boolean }): Promise<User> {
+    const response = await api.put<User>(`/identity/users/${userId}`, data);
+    return response.data;
+  },
+
+  async deleteUser(userId: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/identity/users/${userId}`);
+    return response.data;
+  },
+
+  // --- ORGANIZAÇÕES ---
+  async getOrganizations(): Promise<Organization[]> {
+    const response = await api.get<Organization[]>('/identity/organization');
+    return response.data;
+  },
+
+  async createOrganization(name: string): Promise<Organization> {
+    const response = await api.post<Organization>('/identity/organization', { name });
+    return response.data;
+  },
+
+  async deleteOrganization(orgId: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/identity/organization/${orgId}`);
+    return response.data;
+  },
+
+  // --- CARGOS ---
   async getRoles(): Promise<Role[]> {
     const response = await api.get<Role[]>('/identity/role');
     return response.data;
   },
 
-  // Lista todas as organizações
-  async getOrganizations(): Promise<Organization[]> {
-    const response = await api.get<Organization[]>('/identity/organization');
+  async createRole(name: string, description: string, organizationId?: string): Promise<Role> {
+    const response = await api.post<Role>('/identity/role', { 
+      name, 
+      description,
+      organization_id: organizationId || '00000000-0000-0000-0000-000000000000' 
+    });
     return response.data;
   },
+
+  async deleteRole(roleId: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/identity/role/${roleId}`);
+    return response.data;
+  }
 };

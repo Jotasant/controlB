@@ -10,7 +10,11 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from controlb.modules.identity.models import User, Organization, Role
-from controlb.modules.identity.schemas import UserCreate, OrganizationCreate, RoleCreate
+from controlb.modules.identity.schemas import (
+    UserCreate, UserUpdate,
+    OrganizationCreate, OrganizationUpdate,
+    RoleCreate, RoleUpdate
+)
 
 
 # ==============================================================================
@@ -50,6 +54,32 @@ def create_user(db: Session, user_data: UserCreate, hashed_password: str) -> Use
     return db_user
 
 
+def update_user(db: Session, db_user: User, user_data: UserUpdate, hashed_password: str | None = None) -> User:
+    """Atualiza os campos do perfil do usuário e desvincula se necessário."""
+    if user_data.full_name is not None:
+        db_user.full_name = user_data.full_name
+    if user_data.email is not None:
+        db_user.email = user_data.email
+    if user_data.organization_id is not None:
+        db_user.organization_id = user_data.organization_id
+    if user_data.role_id is not None:
+        db_user.role_id = user_data.role_id
+    if user_data.is_active is not None:
+        db_user.is_active = user_data.is_active
+    if hashed_password:
+        db_user.hashed_password = hashed_password
+
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+def delete_user(db: Session, db_user: User) -> None:
+    """Remove permanentemente o usuário do banco de dados (exclusão/desvinculação)."""
+    db.delete(db_user)
+    db.commit()
+
+
 # ==============================================================================
 # 2. CONSULTAS E OPERAÇÕES DE ORGANIZAÇÃO (Organization)
 # ==============================================================================
@@ -81,6 +111,12 @@ def create_organization(db: Session, organization_data: OrganizationCreate) -> O
     db.commit()
     db.refresh(db_organization)
     return db_organization
+
+
+def delete_organization(db: Session, db_org: Organization) -> None:
+    """Exclui a organização do banco de dados."""
+    db.delete(db_org)
+    db.commit()
 
 
 # ==============================================================================
@@ -117,3 +153,9 @@ def create_role(db: Session, role_data: RoleCreate) -> Role:
     db.commit()
     db.refresh(db_role)
     return db_role
+
+
+def delete_role(db: Session, db_role: Role) -> None:
+    """Exclui o cargo do banco de dados."""
+    db.delete(db_role)
+    db.commit()

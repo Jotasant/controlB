@@ -1,20 +1,22 @@
 /**
- * pages/Login/Login.tsx - Página de Login do ControlB
+ * pages/Login/Login.tsx - Tela de Autenticação Ultra-Slim & Executiva
  * 
- * Implementada em React com estado reativo, validação controlada,
- * design Glassmorphism e integração com o backend FastAPI via Axios.
+ * Integrada com o Logotipo Oficial ControlB, suporte a Dark / Light Mode
+ * e validação reativa com Axios.
  */
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Lock, LogIn, Loader2, AlertCircle } from 'lucide-react';
+import { Mail, Lock, LogIn, Loader2, AlertCircle, Sun, Moon } from 'lucide-react';
 import { authService } from '@/services/api';
+import { useTheme } from '@/context/ThemeContext';
+import { Logo } from '@/components/Logo';
 import './Login.scss';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
 
-  // Estados do Formulário
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -22,7 +24,6 @@ export const Login: React.FC = () => {
   const [isSuccess, setIsSuccess] = useState(false);
   const [shake, setShake] = useState(false);
 
-  // Manipulador de Envio do Formulário
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLoading) return;
@@ -31,17 +32,12 @@ export const Login: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      // Chama o serviço de autenticação
       await authService.login(email.trim(), password);
-
-      // Sucesso
       setIsSuccess(true);
       setTimeout(() => {
         navigate('/dashboard');
-      }, 500);
-
+      }, 400);
     } catch (err: any) {
-      // Falha de autenticação ou conexão
       setErrorMessage(
         err.response?.data?.detail || 'Credenciais inválidas ou servidor indisponível.'
       );
@@ -54,29 +50,36 @@ export const Login: React.FC = () => {
 
   return (
     <div className="login-page">
-      {/* Luzes / Formas difusas animadas de fundo */}
-      <div className="bg-shapes">
-        <div className="shape shape-1" />
-        <div className="shape shape-2" />
-      </div>
+      {/* Botão de Tema no Topo Direito */}
+      <button 
+        className="login-theme-btn" 
+        onClick={toggleTheme}
+        title={`Alternar para tema ${theme === 'dark' ? 'Claro' : 'Escuro'}`}
+      >
+        {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+      </button>
 
       <div className="login-container">
-        <div className={`glass-panel ${shake ? 'shake' : ''}`}>
+        <div className={`login-card ${shake ? 'shake' : ''}`}>
+          
+          {/* Cabeçalho com Logotipo Oficial */}
           <div className="logo-header">
-            <h1><span>Control</span>B</h1>
-            <p>Acesse sua conta para continuar</p>
+            <div className="logo-wrap">
+              <Logo size={42} showText={false} />
+            </div>
+            <h1>Control<span className="brand-dot">B</span></h1>
+            <p>Plataforma de Gestão Empresarial</p>
           </div>
 
           <form onSubmit={handleSubmit} className="login-form">
-            {/* Campo E-mail */}
             <div className="form-group">
               <label htmlFor="email">E-mail Corporativo</label>
               <div className="input-wrapper">
-                <Mail className="input-icon" size={18} />
+                <Mail className="input-icon" size={15} />
                 <input
                   type="email"
                   id="email"
-                  placeholder="voce@empresa.com"
+                  placeholder="nome@empresa.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -86,11 +89,10 @@ export const Login: React.FC = () => {
               </div>
             </div>
 
-            {/* Campo Senha */}
             <div className="form-group">
-              <label htmlFor="password">Senha</label>
+              <label htmlFor="password">Senha de Acesso</label>
               <div className="input-wrapper">
-                <Lock className="input-icon" size={18} />
+                <Lock className="input-icon" size={15} />
                 <input
                   type="password"
                   id="password"
@@ -104,15 +106,13 @@ export const Login: React.FC = () => {
               </div>
             </div>
 
-            {/* Mensagem de Erro */}
             {errorMessage && (
               <div className="error-alert">
-                <AlertCircle size={18} />
+                <AlertCircle size={15} />
                 <span>{errorMessage}</span>
               </div>
             )}
 
-            {/* Botão Entrar */}
             <button
               type="submit"
               className={`btn-submit ${isSuccess ? 'success' : ''}`}
@@ -120,19 +120,23 @@ export const Login: React.FC = () => {
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="spinner" size={20} />
+                  <Loader2 className="spinner" size={15} />
                   <span>Autenticando...</span>
                 </>
               ) : isSuccess ? (
-                <span>Sucesso! Entrando...</span>
+                <span>Acesso Autorizado!</span>
               ) : (
                 <>
-                  <LogIn size={20} />
-                  <span>Entrar</span>
+                  <LogIn size={15} />
+                  <span>Acessar Painel</span>
                 </>
               )}
             </button>
           </form>
+
+          <footer className="login-footer">
+            <span>Ambiente seguro protegido por criptografia</span>
+          </footer>
         </div>
       </div>
     </div>
