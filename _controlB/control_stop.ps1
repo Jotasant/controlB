@@ -1,15 +1,11 @@
 # ==============================================================================
 # control_stop.ps1 - Encerramento limpo e ordenado do ecossistema ControlB
 # ==============================================================================
-# Ordem de encerramento:
-# 1. Localiza os processos ouvindo nas portas 8000 (Backend) e 9090 (Frontend).
-# 2. Localiza processos Python (Uvicorn / HTTP Server) e SASS Watcher por linha de comando.
-# 3. Forca o encerramento em arvore (taskkill /F /T) matando processos pais e filhos.
-# 4. Desliga o container Nginx Proxy.
-# 5. Desliga o container PostgreSQL (preservando o volume de dados .pg_data).
+# 1. Encerra processos nas portas 8000 (Backend) e 9090 (Frontend Vite).
+# 2. Encerra processos Python/Node remanescentes por padrao de linha de comando.
+# 3. Para os containers Nginx e PostgreSQL.
 # ==============================================================================
 
-# Caminho absoluto da pasta raiz do projeto (_controlB)
 $ProjectRoot = $PSScriptRoot
 
 Write-Host "========================================" -ForegroundColor Yellow
@@ -17,14 +13,14 @@ Write-Host "[STOP] Encerrando Servicos do ControlB" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Yellow
 
 # ------------------------------------------------------------------------------
-# 1. LOCALIZAR E ENCERRA PROCESSOS PYTHON E SASS WATCHER
+# 1. LOCALIZAR E ENCERRAR PROCESSOS DO BACKEND E FRONTEND
 # ------------------------------------------------------------------------------
-Write-Host "`n1. Parando servidores Python e SASS Watcher..." -ForegroundColor Yellow
+Write-Host "`n1. Parando servidores Backend (FastAPI) e Frontend (Vite)..." -ForegroundColor Yellow
 
 $targetPorts = @(8000, 9090)
 $pidsToKill = @()
 
-# 1a. Consulta de rede: Encontra os PIDs de processos escutando nas portas 8000 e 9090
+# 1a. Busca por conexao TCP ativa nas portas 8000 e 9090
 foreach ($port in $targetPorts) {
     $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
     if ($conns) {
@@ -36,13 +32,11 @@ foreach ($port in $targetPorts) {
     }
 }
 
-# 1b. Consulta WMI/CIM: Busca processos por padrao de linha de comando
+# 1b. Busca WMI por padrao de comando (Uvicorn / Vite)
 $cmdProcesses = Get-CimInstance Win32_Process | Where-Object { 
     $_.CommandLine -like "*uvicorn*" -or 
-    $_.CommandLine -like "*http.server 9090*" -or
-    $_.CommandLine -like "*http.server*" -or
-    $_.CommandLine -like "*sass*--watch*" -or
-    $_.CommandLine -like "*sass*scss:css*"
+    $_.CommandLine -like "*vite*" -or
+    $_.CommandLine -like "*http.server 9090*"
 }
 
 if ($cmdProcesses) {
@@ -53,25 +47,25 @@ if ($cmdProcesses) {
     }
 }
 
-# 1c. Executa o taskkill /F /T para forcar encerramento da arvore de processos
+# 1c. Mata os processos e toda a arvore de filhos
 if ($pidsToKill.Count -gt 0) {
     foreach ($pidToKill in $pidsToKill) {
         Write-Host "  -> Encerrando arvore de processos PID $pidToKill..." -ForegroundColor Red
         & taskkill /F /T /PID $pidToKill 2>$null | Out-Null
     }
-    Write-Host "[OK] Servidores Backend (8000), Frontend (9090) e SASS Watcher encerrados totalmente." -ForegroundColor Green
+    Write-Host "[OK] Servidores Backend (8000) e Frontend Vite (9090) encerrados." -ForegroundColor Green
 }
 else {
-    Write-Host "[INFO] Nenhum servidor Uvicorn, Frontend ou SASS em execucao encontrado." -ForegroundColor Gray
+    Write-Host "[INFO] Nenhum processo nas portas 8000 ou 9090 em execucao." -ForegroundColor Gray
 }
 
 # ------------------------------------------------------------------------------
-# 2. ENCERRAR CONTAINERS DOCKER (NGINX E POSTGRESQL)
+# 2. ENCERRAR CONTAINERS DOCKER
 # ------------------------------------------------------------------------------
 Write-Host "`n2. Parando containers Docker..." -ForegroundColor Yellow
 Set-Location $ProjectRoot
 
-# Para o container nginx-proxy se estiver ativo
+# Para o container do Nginx Proxy
 $nginxStatus = docker inspect --format='{{.State.Running}}' nginx-proxy 2>$null
 if ($nginxStatus -eq 'true') {
     Write-Host "  -> Parando container nginx-proxy..." -ForegroundColor Yellow
@@ -79,7 +73,7 @@ if ($nginxStatus -eq 'true') {
     Write-Host "[OK] Container nginx-proxy parado." -ForegroundColor Green
 }
 
-# Para os containers do Docker Compose (controlb-postgres)
+# Para os containers do Docker Compose (PostgreSQL)
 docker compose stop
 
 if ($LASTEXITCODE -eq 0) {

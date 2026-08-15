@@ -1,76 +1,16 @@
-<!DOCTYPE html>
-<!-- Define que este documento é um arquivo HTML5 moderno e define o idioma principal como Português do Brasil -->
+<!doctype html>
 <html lang="pt-BR">
-
-<head>
-    <!-- Define a codificação de caracteres como UTF-8 (permite acentos, cedilhas e caracteres especiais) -->
-    <meta charset="UTF-8">
-
-    <!-- Configura a viewport para garantir responsividade em celulares, tablets e monitores -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <!-- Título exibido na aba do navegador -->
-    <title>Login - ControlB</title>
-
-    <!-- Favicon: ícone que aparece ao lado do título na aba do navegador -->
-    <link rel="shortcut icon" href="img/favicon.ico" type="image/x-icon">
-
-    <!-- Google Fonts: Importa a família de fontes 'Inter' nos pesos 300 (Light) até 700 (Bold) -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- Folha de Estilos CSS externa com todo o design visual da tela de login -->
-    <link rel="stylesheet" href="css/login.css">
-</head>
-
-<body>
-    <!-- Container de formas geométricas de fundo (Luzes/Orbs coloridas com efeito de blur) -->
-    <div class="bg-shapes">
-        <!-- Bolha de luz 1 (superior direita) -->
-        <div class="shape shape-1"></div>
-        <!-- Bolha de luz 2 (inferior esquerda) -->
-        <div class="shape shape-2"></div>
-    </div>
-
-    <!-- Container centralizador que limita a largura do formulário na tela -->
-    <div class="login-container">
-
-        <!-- Painel com efeito Glassmorphism (efeito visual de vidro translúcido) -->
-        <div class="glass-panel">
-
-            <!-- Cabeçalho com o nome do sistema e mensagem de boas-vindas -->
-            <div class="logo">
-                <h1>ControlB</h1>
-                <p>Acesse sua conta para continuar</p>
-            </div>
-
-            <!-- Formulário de Login: O ID 'loginForm' é capturado pelo JavaScript para interceptar o envio -->
-            <form id="loginForm">
-
-                <!-- Grupo do campo E-mail -->
-                <div class="form-group">
-                    <label for="email">E-mail</label>
-                    <!-- Input de e-mail obrigatório com suporte a preenchimento automático pelo navegador -->
-                    <input type="email" id="email" class="form-control" placeholder="voce@empresa.com" required autocomplete="email">
-                </div>
-
-                <!-- Grupo do campo Senha -->
-                <div class="form-group">
-                    <label for="password">Senha</label>
-                    <!-- Input de senha (oculta os caracteres com bolinhas) -->
-                    <input type="password" id="password" class="form-control" placeholder="••••••••" required autocomplete="current-password">
-                </div>
-
-                <!-- Botão de Enviar (Dispara o evento 'submit' do formulário) -->
-                <button type="submit" class="btn-submit" id="submitBtn">Entrar</button>
-
-                <!-- Mensagem de erro: Fica invisível por padrão e é ativada pelo JS caso a senha/e-mail estejam incorretos -->
-                <div id="errorMsg" class="error-message">Credenciais inválidas. Tente novamente.</div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Script JavaScript externo com a lógica de envio do formulário, chamada de API e redirecionamento -->
-    <script src="js/login.js"></script>
-</body>
-
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ControlB - Sistema de Gestão</title>
+    <link rel="icon" type="image/x-icon" href="/img/favicon.ico" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
