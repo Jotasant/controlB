@@ -1,49 +1,58 @@
 /**
- * pages/Cadastros/Cadastros.tsx - Central de Cadastros com Perfil de Usuários e Desvinculação/Exclusão
+ * pages/Cadastros/Cadastros.tsx - Central de Cadastros, Catálogo e Perfis de Acesso (RBAC)
  * 
- * Funcionalidades:
- * 1. 🏢 Organizações (Listar, Criar, Excluir)
- * 2. 👥 Usuários (Listar, Criar, Editar Perfil Completo, Desvincular/Excluir)
- * 3. 🛡️ Cargos (Listar, Criar, Excluir)
- * 4. 📦 Produtos & Insumos
+ * Permite gerenciar de forma integrada:
+ * 1. 🏢 Organizações (Empresas e Filiais)
+ * 2. 👥 Usuários (Perfis, Permissões, Status e Desvinculação)
+ * 3. 🛡️ Cargos (Matriz de Permissões de Acesso)
+ * 4. 🚚 Fornecedores (Razão Social, CNPJ/CPF, Contatos)
+ * 5. 📦 Produtos & Insumos (SKU, Unidade de Medida, Preço Base)
+ * 6. 🎯 Centros de Custo (Código Contábil, Unidades Orçamentárias)
  */
 
 import React, { useEffect, useState } from 'react';
 import { 
-  Building2, Users, Shield, Package, ChevronRight, 
-  Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail, 
-  Loader2, AlertCircle, Trash2, Edit3, ShieldAlert
+  Building2, Users, Shield, Package, Truck, Target, ChevronRight, 
+  Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail, Phone,
+  Loader2, AlertCircle, Trash2, Edit3, ShieldAlert, CheckSquare, Square
 } from 'lucide-react';
-import { identityService, authService } from '@/services/api';
-import { User, Role, Organization } from '@/types';
+import { identityService, purchasingService, authService } from '@/services/api';
+import { User, Role, Organization, Permission, Supplier, Product, ProductCategory, CostCenter } from '@/types';
 import { Navbar } from '@/components/Navbar';
 import { Modal } from '@/components/Modal/Modal';
+import { usePermissions } from '@/hooks/usePermissions';
 import './Cadastros.scss';
 
-type MenuOption = 'organizacoes' | 'usuarios' | 'cargos' | 'produtos';
+type MenuOption = 'organizacoes' | 'usuarios' | 'cargos' | 'fornecedores' | 'produtos' | 'centros-custo';
 
 export const Cadastros: React.FC = () => {
-  // Estado do Menu Ativo na Sidebar
-  const [activeMenu, setActiveMenu] = useState<MenuOption>('usuarios');
+  const { hasPermission } = usePermissions();
+
+  const [activeMenu, setActiveMenu] = useState<MenuOption>('fornecedores');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Estados dos Dados carregados da API
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
 
-  // Estados de Carregamento da Lista
+  // Estados de Carregamento
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // =========================================================================
-  // ESTADOS DO WIZARD / MODAL DE NOVO CADASTRO
+  // ESTADOS DO MODAL DE CRIAÇÃO (WIZARD)
   // =========================================================================
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
-  // Campos do Formulário de Criação
+  // Campos de Criação
   const [userFullName, setUserFullName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userPassword, setUserPassword] = useState('');
@@ -52,6 +61,29 @@ export const Cadastros: React.FC = () => {
   const [orgName, setOrgName] = useState('');
   const [roleName, setRoleName] = useState('');
   const [roleDescription, setRoleDescription] = useState('');
+  const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[]>([]);
+
+  // Campos de Fornecedor
+  const [supplierName, setSupplierName] = useState('');
+  const [supplierTradeName, setSupplierTradeName] = useState('');
+  const [supplierCnpj, setSupplierCnpj] = useState('');
+  const [supplierEmail, setSupplierEmail] = useState('');
+  const [supplierPhone, setSupplierPhone] = useState('');
+  const [supplierCity, setSupplierCity] = useState('');
+  const [supplierState, setSupplierState] = useState('');
+
+  // Campos de Produto
+  const [productSku, setProductSku] = useState('');
+  const [productName, setProductName] = useState('');
+  const [productDesc, setProductDesc] = useState('');
+  const [productUnit, setProductUnit] = useState('UN');
+  const [productPrice, setProductPrice] = useState('0.00');
+  const [productCategoryId, setProductCategoryId] = useState('');
+
+  // Campos de Centro de Custo
+  const [costCenterCode, setCostCenterCode] = useState('');
+  const [costCenterName, setCostCenterName] = useState('');
+  const [costCenterDesc, setCostCenterDesc] = useState('');
 
   // =========================================================================
   // ESTADOS DO MODAL DE PERFIL / EDIÇÃO DE USUÁRIO
@@ -65,30 +97,52 @@ export const Cadastros: React.FC = () => {
   const [editIsActive, setEditIsActive] = useState(true);
   const [editNewPassword, setEditNewPassword] = useState('');
 
+  // =========================================================================
+  // ESTADOS DO MODAL DE EDIÇÃO DE CARGO & MATRIZ DE PERMISSÕES
+  // =========================================================================
+  const [selectedRole, setSelectedRole] = useState<Role | null>(null);
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+  const [editRoleName, setEditRoleName] = useState('');
+  const [editRoleDescription, setEditRoleDescription] = useState('');
+  const [editRolePermissionIds, setEditRolePermissionIds] = useState<string[]>([]);
+
   // Estado do Modal de Confirmação de Exclusão
-  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: 'user' | 'org' | 'role' } | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: 'user' | 'org' | 'role' | 'supplier' } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const currentUserEmail = authService.getUserEmail();
 
-  // 1. Busca todos os dados da API em paralelo
+  // 1. Busca todos os dados da API em paralelo com tratamento de erros
   const loadData = async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const [orgsData, usersData, rolesData] = await Promise.all([
-        identityService.getOrganizations(),
-        identityService.getUsers(),
-        identityService.getRoles(),
+      const [
+        orgsData, usersData, rolesData, permsData, 
+        suppsData, prodsData, catsData, ccsData
+      ] = await Promise.all([
+        identityService.getOrganizations().catch(() => []),
+        identityService.getUsers().catch(() => []),
+        identityService.getRoles().catch(() => []),
+        identityService.getPermissions().catch(() => []),
+        purchasingService.getSuppliers().catch(() => []),
+        purchasingService.getProducts().catch(() => []),
+        purchasingService.getCategories().catch(() => []),
+        purchasingService.getCostCenters().catch(() => []),
       ]);
 
       setOrganizations(orgsData);
       setUsers(usersData);
       setRoles(rolesData);
+      setPermissions(permsData);
+      setSuppliers(suppsData);
+      setProducts(prodsData);
+      setCategories(catsData);
+      setCostCenters(ccsData);
     } catch (err: any) {
       console.error('Erro ao carregar dados de cadastros:', err);
-      setError('Não foi possível se comunicar com o backend FastAPI.');
+      setError('Não foi possível se comunicar com o backend.');
     } finally {
       setLoading(false);
     }
@@ -103,7 +157,7 @@ export const Cadastros: React.FC = () => {
     setSearchTerm('');
   };
 
-  // Abre o modal de criação e limpa os campos anteriores
+  // Abre modal de criação e limpa os campos
   const handleOpenCreateModal = () => {
     setModalError(null);
     setUserFullName('');
@@ -114,10 +168,34 @@ export const Cadastros: React.FC = () => {
     setOrgName('');
     setRoleName('');
     setRoleDescription('');
+    setSelectedPermissionIds([]);
+    
+    // Reset fornecedor
+    setSupplierName('');
+    setSupplierTradeName('');
+    setSupplierCnpj('');
+    setSupplierEmail('');
+    setSupplierPhone('');
+    setSupplierCity('');
+    setSupplierState('');
+
+    // Reset produto
+    setProductSku(`PRD-${Math.floor(1000 + Math.random() * 9000)}`);
+    setProductName('');
+    setProductDesc('');
+    setProductUnit('UN');
+    setProductPrice('0.00');
+    setProductCategoryId(categories[0]?.id || '');
+
+    // Reset centro de custo
+    setCostCenterCode(`CC-${Math.floor(100 + Math.random() * 900)}`);
+    setCostCenterName('');
+    setCostCenterDesc('');
+
     setIsModalOpen(true);
   };
 
-  // Abre o modal de Perfil do Usuário para edição
+  // Abre o modal de Perfil do Usuário
   const handleOpenUserProfile = (user: User) => {
     setSelectedUser(user);
     setEditFullName(user.full_name);
@@ -128,6 +206,24 @@ export const Cadastros: React.FC = () => {
     setEditNewPassword('');
     setModalError(null);
     setIsProfileModalOpen(true);
+  };
+
+  // Abre o modal de Edição de Cargo com Matriz de Permissões
+  const handleOpenRoleEdit = (role: Role) => {
+    setSelectedRole(role);
+    setEditRoleName(role.name);
+    setEditRoleDescription(role.description || '');
+    setEditRolePermissionIds(role.permissions?.map(p => p.id) || []);
+    setModalError(null);
+    setIsRoleModalOpen(true);
+  };
+
+  const togglePermission = (permId: string, currentList: string[], setList: React.Dispatch<React.SetStateAction<string[]>>) => {
+    if (currentList.includes(permId)) {
+      setList(currentList.filter(id => id !== permId));
+    } else {
+      setList([...currentList, permId]);
+    }
   };
 
   // 2. Submissão de Criação de Registro
@@ -157,7 +253,49 @@ export const Cadastros: React.FC = () => {
       } 
       else if (activeMenu === 'cargos') {
         if (!roleName.trim()) throw new Error('O nome do cargo é obrigatório.');
-        await identityService.createRole(roleName.trim(), roleDescription.trim(), organizations[0]?.id);
+        await identityService.createRole(
+          roleName.trim(),
+          roleDescription.trim(),
+          organizations[0]?.id || '00000000-0000-0000-0000-000000000000',
+          selectedPermissionIds
+        );
+      }
+      else if (activeMenu === 'fornecedores') {
+        if (!supplierName.trim() || !supplierCnpj.trim()) {
+          throw new Error('Razão Social e CNPJ/CPF são campos obrigatórios.');
+        }
+        await purchasingService.createSupplier({
+          name: supplierName.trim(),
+          trade_name: supplierTradeName.trim() || undefined,
+          cnpj_cpf: supplierCnpj.trim(),
+          email: supplierEmail.trim() || undefined,
+          phone: supplierPhone.trim() || undefined,
+          city: supplierCity.trim() || undefined,
+          state: supplierState.trim() || undefined,
+        });
+      }
+      else if (activeMenu === 'produtos') {
+        if (!productSku.trim() || !productName.trim()) {
+          throw new Error('SKU e Nome do Produto são obrigatórios.');
+        }
+        await purchasingService.createProduct({
+          sku: productSku.trim(),
+          name: productName.trim(),
+          description: productDesc.trim() || undefined,
+          unit_of_measure: productUnit,
+          reference_price: parseFloat(productPrice) || 0,
+          category_id: productCategoryId || undefined,
+        });
+      }
+      else if (activeMenu === 'centros-custo') {
+        if (!costCenterCode.trim() || !costCenterName.trim()) {
+          throw new Error('Código e Nome do Centro de Custo são obrigatórios.');
+        }
+        await purchasingService.createCostCenter({
+          code: costCenterCode.trim(),
+          name: costCenterName.trim(),
+          description: costCenterDesc.trim() || undefined,
+        });
       }
 
       setIsModalOpen(false);
@@ -200,7 +338,33 @@ export const Cadastros: React.FC = () => {
     }
   };
 
-  // 4. Executar Exclusão / Desvinculação Confirmada
+  // 4. Salvar Edição de Cargo & Permissões
+  const handleSaveRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRole || isSaving) return;
+
+    setIsSaving(true);
+    setModalError(null);
+
+    try {
+      await identityService.updateRole(selectedRole.id, {
+        name: editRoleName.trim(),
+        description: editRoleDescription.trim(),
+        permission_ids: editRolePermissionIds
+      });
+
+      setIsRoleModalOpen(false);
+      await loadData();
+    } catch (err: any) {
+      setModalError(
+        err.response?.data?.detail || err.message || 'Erro ao atualizar o cargo e permissões.'
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // 5. Executar Exclusão Confirmada
   const handleConfirmDelete = async () => {
     if (!itemToDelete || isDeleting) return;
 
@@ -215,16 +379,25 @@ export const Cadastros: React.FC = () => {
         await identityService.deleteOrganization(itemToDelete.id);
       } else if (itemToDelete.type === 'role') {
         await identityService.deleteRole(itemToDelete.id);
+      } else if (itemToDelete.type === 'supplier') {
+        await purchasingService.deleteSupplier(itemToDelete.id);
       }
 
       setItemToDelete(null);
       await loadData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Erro ao desvincular/excluir o registro.');
+      alert(err.response?.data?.detail || 'Erro ao excluir o registro.');
     } finally {
       setIsDeleting(false);
     }
   };
+
+  // Agrupamento de permissões por Módulo
+  const permissionsByModule = permissions.reduce((acc, perm) => {
+    if (!acc[perm.module]) acc[perm.module] = [];
+    acc[perm.module].push(perm);
+    return acc;
+  }, {} as Record<string, Permission[]>);
 
   // Filtros de busca
   const filteredOrgs = organizations.filter(o =>
@@ -241,6 +414,22 @@ export const Cadastros: React.FC = () => {
     (r.description && r.description.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
+  const filteredSuppliers = suppliers.filter(s =>
+    s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (s.trade_name && s.trade_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+    s.cnpj_cpf.includes(searchTerm)
+  );
+
+  const filteredProducts = products.filter(p =>
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.sku.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredCostCenters = costCenters.filter(c =>
+    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.code.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <div className="cadastros-page">
       <Navbar />
@@ -248,7 +437,7 @@ export const Cadastros: React.FC = () => {
       <div className="cadastros-layout">
         
         {/* ========================================================= */}
-        {/* 1. BARRA LATERAL ESQUERDA (Sidebar)                       */}
+        {/* 1. BARRA LATERAL ESQUERDA (Sidebar Protegida por RBAC)    */}
         {/* ========================================================= */}
         <aside className="sidebar-left">
           <div className="sidebar-header">
@@ -256,51 +445,24 @@ export const Cadastros: React.FC = () => {
           </div>
 
           <nav className="sidebar-menu-list">
+            
+            {/* 1. Fornecedores */}
             <button
               type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'organizacoes' ? 'active' : ''}`}
-              onClick={() => handleSelectMenu('organizacoes')}
+              className={`sidebar-menu-btn ${activeMenu === 'fornecedores' ? 'active' : ''}`}
+              onClick={() => handleSelectMenu('fornecedores')}
             >
               <div className="btn-label">
-                <Building2 size={16} className="icon-org" />
-                <span>Organizações</span>
+                <Truck size={16} className="icon-supplier" />
+                <span>Fornecedores</span>
               </div>
               <div className="btn-end">
-                <span className="count-pill">{organizations.length}</span>
+                <span className="count-pill">{suppliers.length}</span>
                 <ChevronRight size={14} className="arrow" />
               </div>
             </button>
 
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'usuarios' ? 'active' : ''}`}
-              onClick={() => handleSelectMenu('usuarios')}
-            >
-              <div className="btn-label">
-                <Users size={16} className="icon-users" />
-                <span>Usuários</span>
-              </div>
-              <div className="btn-end">
-                <span className="count-pill">{users.length}</span>
-                <ChevronRight size={14} className="arrow" />
-              </div>
-            </button>
-
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'cargos' ? 'active' : ''}`}
-              onClick={() => handleSelectMenu('cargos')}
-            >
-              <div className="btn-label">
-                <Shield size={16} className="icon-roles" />
-                <span>Cargos e Permissões</span>
-              </div>
-              <div className="btn-end">
-                <span className="count-pill">{roles.length}</span>
-                <ChevronRight size={14} className="arrow" />
-              </div>
-            </button>
-
+            {/* 2. Produtos & Insumos */}
             <button
               type="button"
               className={`sidebar-menu-btn ${activeMenu === 'produtos' ? 'active' : ''}`}
@@ -311,9 +473,81 @@ export const Cadastros: React.FC = () => {
                 <span>Produtos & Insumos</span>
               </div>
               <div className="btn-end">
+                <span className="count-pill">{products.length}</span>
                 <ChevronRight size={14} className="arrow" />
               </div>
             </button>
+
+            {/* 3. Centros de Custo */}
+            <button
+              type="button"
+              className={`sidebar-menu-btn ${activeMenu === 'centros-custo' ? 'active' : ''}`}
+              onClick={() => handleSelectMenu('centros-custo')}
+            >
+              <div className="btn-label">
+                <Target size={16} className="icon-cc" />
+                <span>Centros de Custo</span>
+              </div>
+              <div className="btn-end">
+                <span className="count-pill">{costCenters.length}</span>
+                <ChevronRight size={14} className="arrow" />
+              </div>
+            </button>
+
+            {/* 4. Organizações */}
+            {hasPermission('organizations:view') && (
+              <button
+                type="button"
+                className={`sidebar-menu-btn ${activeMenu === 'organizacoes' ? 'active' : ''}`}
+                onClick={() => handleSelectMenu('organizacoes')}
+              >
+                <div className="btn-label">
+                  <Building2 size={16} className="icon-org" />
+                  <span>Organizações</span>
+                </div>
+                <div className="btn-end">
+                  <span className="count-pill">{organizations.length}</span>
+                  <ChevronRight size={14} className="arrow" />
+                </div>
+              </button>
+            )}
+
+            {/* 5. Usuários */}
+            {hasPermission('users:view') && (
+              <button
+                type="button"
+                className={`sidebar-menu-btn ${activeMenu === 'usuarios' ? 'active' : ''}`}
+                onClick={() => handleSelectMenu('usuarios')}
+              >
+                <div className="btn-label">
+                  <Users size={16} className="icon-users" />
+                  <span>Usuários</span>
+                </div>
+                <div className="btn-end">
+                  <span className="count-pill">{users.length}</span>
+                  <ChevronRight size={14} className="arrow" />
+                </div>
+              </button>
+            )}
+
+            {/* 6. Cargos e Permissões */}
+            {hasPermission('roles:view') && (
+              <button
+                type="button"
+                className={`sidebar-menu-btn ${activeMenu === 'cargos' ? 'active' : ''}`}
+                onClick={() => handleSelectMenu('cargos')}
+              >
+                <div className="btn-label">
+                  <Shield size={16} className="icon-roles" />
+                  <span>Cargos e Permissões</span>
+                </div>
+                <div className="btn-end">
+                  <span className="count-pill">{roles.length}</span>
+                  <ChevronRight size={14} className="arrow" />
+                </div>
+              </button>
+            )}
+
           </nav>
         </aside>
 
@@ -325,16 +559,20 @@ export const Cadastros: React.FC = () => {
           <header className="content-header">
             <div className="titles">
               <h1>
+                {activeMenu === 'fornecedores' && 'Gestão de Fornecedores'}
+                {activeMenu === 'produtos' && 'Catálogo de Produtos & Insumos'}
+                {activeMenu === 'centros-custo' && 'Centros de Custo'}
                 {activeMenu === 'organizacoes' && 'Gestão de Organizações'}
                 {activeMenu === 'usuarios' && 'Gestão de Usuários & Perfis'}
-                {activeMenu === 'cargos' && 'Cargos e Perfis de Acesso'}
-                {activeMenu === 'produtos' && 'Produtos & Insumos'}
+                {activeMenu === 'cargos' && 'Cargos e Matriz de Permissões'}
               </h1>
               <p>
+                {activeMenu === 'fornecedores' && 'Empresas parceiras, dados fiscais e contatos de suprimentos'}
+                {activeMenu === 'produtos' && 'Itens cadastrados com SKU, unidade de medida e preço de referência'}
+                {activeMenu === 'centros-custo' && 'Unidades orçamentárias e alocações de compras'}
                 {activeMenu === 'organizacoes' && 'Empresas, filiais e unidades de negócio cadastradas'}
                 {activeMenu === 'usuarios' && 'Gerencie perfis, permissões, vinculação de organizações e desvinculação'}
-                {activeMenu === 'cargos' && 'Níveis de permissão e atribuições de responsabilidade'}
-                {activeMenu === 'produtos' && 'Catálogo de itens, matérias-primas e insumos'}
+                {activeMenu === 'cargos' && 'Configure os níveis de acesso e matriz de permissões granulares por cargo'}
               </p>
             </div>
 
@@ -344,16 +582,17 @@ export const Cadastros: React.FC = () => {
                 <span>Atualizar</span>
               </button>
 
-              {activeMenu !== 'produtos' && (
-                <button className="btn-primary" onClick={handleOpenCreateModal}>
-                  <Plus size={14} />
-                  <span>
-                    {activeMenu === 'organizacoes' && 'Nova Organização'}
-                    {activeMenu === 'usuarios' && 'Novo Usuário'}
-                    {activeMenu === 'cargos' && 'Novo Cargo'}
-                  </span>
-                </button>
-              )}
+              <button className="btn-primary" onClick={handleOpenCreateModal}>
+                <Plus size={14} />
+                <span>
+                  {activeMenu === 'fornecedores' && 'Novo Fornecedor'}
+                  {activeMenu === 'produtos' && 'Novo Produto'}
+                  {activeMenu === 'centros-custo' && 'Novo Centro de Custo'}
+                  {activeMenu === 'organizacoes' && 'Nova Organização'}
+                  {activeMenu === 'usuarios' && 'Novo Usuário'}
+                  {activeMenu === 'cargos' && 'Novo Cargo'}
+                </span>
+              </button>
             </div>
           </header>
 
@@ -367,10 +606,12 @@ export const Cadastros: React.FC = () => {
                 <input
                   type="text"
                   placeholder={
+                    activeMenu === 'fornecedores' ? 'Buscar fornecedor por nome ou CNPJ...' :
+                    activeMenu === 'produtos' ? 'Buscar produto por nome ou SKU...' :
+                    activeMenu === 'centros-custo' ? 'Buscar por nome ou código...' :
                     activeMenu === 'organizacoes' ? 'Buscar organização...' :
-                    activeMenu === 'usuarios' ? 'Buscar por nome ou e-mail...' :
-                    activeMenu === 'cargos' ? 'Buscar cargo ou descrição...' :
-                    'Buscar produto...'
+                    activeMenu === 'usuarios' ? 'Buscar usuário...' :
+                    'Buscar cargo...'
                   }
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
@@ -378,12 +619,175 @@ export const Cadastros: React.FC = () => {
               </div>
 
               <span className="results-count">
+                {activeMenu === 'fornecedores' && `${filteredSuppliers.length} fornecedor(es)`}
+                {activeMenu === 'produtos' && `${filteredProducts.length} produto(s)`}
+                {activeMenu === 'centros-custo' && `${filteredCostCenters.length} centro(s) de custo`}
                 {activeMenu === 'organizacoes' && `${filteredOrgs.length} organização(ões)`}
                 {activeMenu === 'usuarios' && `${filteredUsers.length} usuário(s)`}
                 {activeMenu === 'cargos' && `${filteredRoles.length} cargo(s)`}
-                {activeMenu === 'produtos' && 'Módulo de Estoque'}
               </span>
             </div>
+
+            {/* TABELA: FORNECEDORES */}
+            {activeMenu === 'fornecedores' && (
+              loading ? (
+                <div className="state-empty">Carregando fornecedores...</div>
+              ) : filteredSuppliers.length === 0 ? (
+                <div className="state-empty">Nenhum fornecedor encontrado.</div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="enterprise-table">
+                    <thead>
+                      <tr>
+                        <th>Fornecedor</th>
+                        <th>CNPJ / CPF</th>
+                        <th>Contato</th>
+                        <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSuppliers.map(supp => (
+                        <tr key={supp.id}>
+                          <td>
+                            <div className="cell-with-icon">
+                              <div className="icon-badge orange-bg">
+                                <Truck size={14} />
+                              </div>
+                              <div>
+                                <strong>{supp.name}</strong>
+                                {supp.trade_name && <span className="sub-label">{supp.trade_name}</span>}
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="code-tag">{supp.cnpj_cpf}</span>
+                          </td>
+                          <td>
+                            <div className="contact-info">
+                              {supp.email && <span className="contact-item"><Mail size={11} /> {supp.email}</span>}
+                              {supp.phone && <span className="contact-item"><Phone size={11} /> {supp.phone}</span>}
+                              {!supp.email && !supp.phone && <span className="text-muted">Não informado</span>}
+                            </div>
+                          </td>
+                          <td>
+                            <span className={`badge-pill ${supp.is_active ? 'active' : 'inactive'}`}>
+                              {supp.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                              {supp.is_active ? 'Ativo' : 'Inativo'}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              className="btn-action-icon delete"
+                              onClick={() => setItemToDelete({ id: supp.id, name: supp.name, type: 'supplier' })}
+                              title="Excluir Fornecedor"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+
+            {/* TABELA: PRODUTOS & INSUMOS */}
+            {activeMenu === 'produtos' && (
+              loading ? (
+                <div className="state-empty">Carregando catálogo de produtos...</div>
+              ) : filteredProducts.length === 0 ? (
+                <div className="state-empty">Nenhum produto cadastrado no catálogo.</div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="enterprise-table">
+                    <thead>
+                      <tr>
+                        <th>Produto / Insumo</th>
+                        <th>Código SKU</th>
+                        <th>Unidade</th>
+                        <th>Preço Referência</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredProducts.map(prod => (
+                        <tr key={prod.id}>
+                          <td>
+                            <div className="cell-with-icon">
+                              <div className="icon-badge blue-bg">
+                                <Package size={14} />
+                              </div>
+                              <div>
+                                <strong>{prod.name}</strong>
+                                {prod.description && <span className="sub-label">{prod.description}</span>}
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="code-tag">{prod.sku}</span>
+                          </td>
+                          <td>
+                            <span className="unit-badge">{prod.unit_of_measure}</span>
+                          </td>
+                          <td>
+                            <strong>R$ {Number(prod.reference_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
+                          </td>
+                          <td>
+                            <span className={`badge-pill ${prod.is_active ? 'active' : 'inactive'}`}>
+                              {prod.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                              {prod.is_active ? 'Ativo' : 'Inativo'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+
+            {/* TABELA: CENTROS DE CUSTO */}
+            {activeMenu === 'centros-custo' && (
+              loading ? (
+                <div className="state-empty">Carregando centros de custo...</div>
+              ) : filteredCostCenters.length === 0 ? (
+                <div className="state-empty">Nenhum centro de custo encontrado.</div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="enterprise-table">
+                    <thead>
+                      <tr>
+                        <th>Código</th>
+                        <th>Nome do Centro de Custo</th>
+                        <th>Descrição</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCostCenters.map(cc => (
+                        <tr key={cc.id}>
+                          <td>
+                            <span className="code-tag">{cc.code}</span>
+                          </td>
+                          <td>
+                            <strong>{cc.name}</strong>
+                          </td>
+                          <td>{cc.description || 'Sem descrição'}</td>
+                          <td>
+                            <span className={`badge-pill ${cc.is_active ? 'active' : 'inactive'}`}>
+                              {cc.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                              {cc.is_active ? 'Ativo' : 'Inativo'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
 
             {/* TABELA: ORGANIZAÇÕES */}
             {activeMenu === 'organizacoes' && (
@@ -421,13 +825,15 @@ export const Cadastros: React.FC = () => {
                           </td>
                           <td>{new Date(org.created_at).toLocaleDateString('pt-BR')}</td>
                           <td style={{ textAlign: 'right' }}>
-                            <button
-                              className="btn-action-icon delete"
-                              onClick={() => setItemToDelete({ id: org.id, name: org.name, type: 'org' })}
-                              title="Excluir Organização"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            {hasPermission('organizations:manage') && (
+                              <button
+                                className="btn-action-icon delete"
+                                onClick={() => setItemToDelete({ id: org.id, name: org.name, type: 'org' })}
+                                title="Excluir Organização"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -437,7 +843,7 @@ export const Cadastros: React.FC = () => {
               )
             )}
 
-            {/* TABELA: USUÁRIOS (Com Ações de Perfil e Exclusão) */}
+            {/* TABELA: USUÁRIOS */}
             {activeMenu === 'usuarios' && (
               loading ? (
                 <div className="state-empty">Carregando usuários...</div>
@@ -463,7 +869,7 @@ export const Cadastros: React.FC = () => {
                             <td>
                               <div 
                                 className="cell-with-icon clickable" 
-                                onClick={() => handleOpenUserProfile(user)}
+                                onClick={() => (hasPermission('users:edit') || isSelf) && handleOpenUserProfile(user)}
                                 title="Clique para abrir o perfil do usuário"
                               >
                                 <div className="avatar-circle-sm">
@@ -490,22 +896,26 @@ export const Cadastros: React.FC = () => {
                             <td>{new Date(user.created_at).toLocaleDateString('pt-BR')}</td>
                             <td style={{ textAlign: 'right' }}>
                               <div className="row-actions">
-                                <button
-                                  className="btn-action-icon edit"
-                                  onClick={() => handleOpenUserProfile(user)}
-                                  title="Editar Perfil do Usuário"
-                                >
-                                  <Edit3 size={14} />
-                                </button>
+                                {(hasPermission('users:edit') || isSelf) && (
+                                  <button
+                                    className="btn-action-icon edit"
+                                    onClick={() => handleOpenUserProfile(user)}
+                                    title="Editar Perfil do Usuário"
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
+                                )}
 
-                                <button
-                                  className="btn-action-icon delete"
-                                  onClick={() => setItemToDelete({ id: user.id, name: user.full_name, type: 'user' })}
-                                  disabled={isSelf}
-                                  title={isSelf ? 'Você não pode excluir sua própria conta' : 'Desvincular / Excluir Usuário'}
-                                >
-                                  <Trash2 size={14} />
-                                </button>
+                                {hasPermission('users:delete') && (
+                                  <button
+                                    className="btn-action-icon delete"
+                                    onClick={() => setItemToDelete({ id: user.id, name: user.full_name, type: 'user' })}
+                                    disabled={isSelf}
+                                    title={isSelf ? 'Você não pode excluir sua própria conta' : 'Desvincular / Excluir Usuário'}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -517,7 +927,7 @@ export const Cadastros: React.FC = () => {
               )
             )}
 
-            {/* TABELA: CARGOS */}
+            {/* TABELA: CARGOS & PERMISSÕES */}
             {activeMenu === 'cargos' && (
               loading ? (
                 <div className="state-empty">Carregando cargos...</div>
@@ -530,6 +940,7 @@ export const Cadastros: React.FC = () => {
                       <tr>
                         <th>Nome do Cargo</th>
                         <th>Descrição da Função</th>
+                        <th>Permissões Atribuídas</th>
                         <th>Status</th>
                         <th style={{ textAlign: 'right' }}>Ações</th>
                       </tr>
@@ -538,7 +949,10 @@ export const Cadastros: React.FC = () => {
                       {filteredRoles.map(role => (
                         <tr key={role.id}>
                           <td>
-                            <div className="cell-with-icon">
+                            <div 
+                              className={`cell-with-icon ${hasPermission('roles:manage') ? 'clickable' : ''}`}
+                              onClick={() => hasPermission('roles:manage') && handleOpenRoleEdit(role)}
+                            >
                               <div className="icon-badge purple-bg">
                                 <Shield size={14} />
                               </div>
@@ -551,19 +965,43 @@ export const Cadastros: React.FC = () => {
                             </span>
                           </td>
                           <td>
+                            <button 
+                              type="button"
+                              className="badge-permissions-btn"
+                              onClick={() => hasPermission('roles:manage') && handleOpenRoleEdit(role)}
+                              disabled={!hasPermission('roles:manage')}
+                              title="Configurar matriz de permissões"
+                            >
+                              <Shield size={12} />
+                              <span>{role.permissions?.length || 0} permissões</span>
+                            </button>
+                          </td>
+                          <td>
                             <span className={`badge-pill ${role.is_active ? 'active' : 'inactive'}`}>
                               {role.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
                               {role.is_active ? 'Ativo' : 'Inativo'}
                             </span>
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <button
-                              className="btn-action-icon delete"
-                              onClick={() => setItemToDelete({ id: role.id, name: role.name, type: 'role' })}
-                              title="Excluir Cargo"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            {hasPermission('roles:manage') && (
+                              <div className="row-actions">
+                                <button
+                                  className="btn-action-icon edit"
+                                  onClick={() => handleOpenRoleEdit(role)}
+                                  title="Editar Cargo e Permissões"
+                                >
+                                  <Edit3 size={14} />
+                                </button>
+
+                                <button
+                                  className="btn-action-icon delete"
+                                  onClick={() => setItemToDelete({ id: role.id, name: role.name, type: 'role' })}
+                                  title="Excluir Cargo"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -573,35 +1011,32 @@ export const Cadastros: React.FC = () => {
               )
             )}
 
-            {/* PRODUTOS */}
-            {activeMenu === 'produtos' && (
-              <div className="state-empty">
-                <Package size={32} style={{ color: 'var(--accent-brand)', marginBottom: '0.5rem' }} />
-                <p><strong>Módulo de Catálogo de Produtos e Insumos</strong></p>
-                <p style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>Pronto para cadastro e integração com o módulo de Estoque & Compras.</p>
-              </div>
-            )}
-
           </div>
         </main>
 
       </div>
 
       {/* ============================================================= */}
-      {/* 3. WIZARD / MODAL DE CRIAÇÃO                                  */}
+      {/* 3. MODAL DE CRIAÇÃO (WIZARD POLIVALENTE)                       */}
       {/* ============================================================= */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => !isSaving && setIsModalOpen(false)}
         title={
+          activeMenu === 'fornecedores' ? 'Novo Fornecedor' :
+          activeMenu === 'produtos' ? 'Novo Produto no Catálogo' :
+          activeMenu === 'centros-custo' ? 'Novo Centro de Custo' :
           activeMenu === 'organizacoes' ? 'Nova Organização' :
           activeMenu === 'usuarios' ? 'Novo Usuário' :
           'Novo Cargo'
         }
         subtitle={
+          activeMenu === 'fornecedores' ? 'Cadastre os dados fiscais e de contato da empresa parceira' :
+          activeMenu === 'produtos' ? 'Cadastre o item, SKU e preço base de referência' :
+          activeMenu === 'centros-custo' ? 'Cadastre o código e nome da unidade orçamentária' :
           activeMenu === 'organizacoes' ? 'Cadastre uma nova empresa ou filial' :
           activeMenu === 'usuarios' ? 'Crie uma conta de acesso para um colaborador' :
-          'Defina um novo nível de acesso no sistema'
+          'Defina o cargo e selecione a matriz de permissões'
         }
       >
         <form onSubmit={handleCreateSubmit} className="wizard-form">
@@ -612,6 +1047,243 @@ export const Cadastros: React.FC = () => {
             </div>
           )}
 
+          {/* FORNECEDOR */}
+          {activeMenu === 'fornecedores' && (
+            <>
+              <div className="form-group">
+                <label htmlFor="suppName">Razão Social / Nome Oficial *</label>
+                <input
+                  id="suppName"
+                  type="text"
+                  placeholder="Ex: Distribuidora Nacional de Medicamentos Ltda"
+                  value={supplierName}
+                  onChange={(e) => setSupplierName(e.target.value)}
+                  required
+                  autoFocus
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="suppTradeName">Nome Fantasia</label>
+                  <input
+                    id="suppTradeName"
+                    type="text"
+                    placeholder="Ex: MedDistribuidora"
+                    value={supplierTradeName}
+                    onChange={(e) => setSupplierTradeName(e.target.value)}
+                    disabled={isSaving}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="suppCnpj">CNPJ ou CPF *</label>
+                  <input
+                    id="suppCnpj"
+                    type="text"
+                    placeholder="00.000.000/0000-00"
+                    value={supplierCnpj}
+                    onChange={(e) => setSupplierCnpj(e.target.value)}
+                    required
+                    disabled={isSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="suppEmail">E-mail Comercial</label>
+                  <input
+                    id="suppEmail"
+                    type="email"
+                    placeholder="vendas@fornecedor.com"
+                    value={supplierEmail}
+                    onChange={(e) => setSupplierEmail(e.target.value)}
+                    disabled={isSaving}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="suppPhone">Telefone / WhatsApp</label>
+                  <input
+                    id="suppPhone"
+                    type="text"
+                    placeholder="(11) 99999-9999"
+                    value={supplierPhone}
+                    onChange={(e) => setSupplierPhone(e.target.value)}
+                    disabled={isSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="suppCity">Cidade</label>
+                  <input
+                    id="suppCity"
+                    type="text"
+                    placeholder="São Paulo"
+                    value={supplierCity}
+                    onChange={(e) => setSupplierCity(e.target.value)}
+                    disabled={isSaving}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="suppState">Estado (UF)</label>
+                  <input
+                    id="suppState"
+                    type="text"
+                    placeholder="SP"
+                    maxLength={2}
+                    value={supplierState}
+                    onChange={(e) => setSupplierState(e.target.value.toUpperCase())}
+                    disabled={isSaving}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* PRODUTO */}
+          {activeMenu === 'produtos' && (
+            <>
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="prodSku">Código SKU *</label>
+                  <input
+                    id="prodSku"
+                    type="text"
+                    placeholder="Ex: MAT-001"
+                    value={productSku}
+                    onChange={(e) => setProductSku(e.target.value)}
+                    required
+                    autoFocus
+                    disabled={isSaving}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="prodUnit">Unidade de Medida</label>
+                  <select
+                    id="prodUnit"
+                    value={productUnit}
+                    onChange={(e) => setProductUnit(e.target.value)}
+                    disabled={isSaving}
+                  >
+                    <option value="UN">Unidade (UN)</option>
+                    <option value="KG">Quilograma (KG)</option>
+                    <option value="L">Litro (L)</option>
+                    <option value="CX">Caixa (CX)</option>
+                    <option value="M">Metro (M)</option>
+                    <option value="PCT">Pacote (PCT)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="prodName">Nome do Produto / Insumo *</label>
+                <input
+                  id="prodName"
+                  type="text"
+                  placeholder="Ex: Luvas de Procedimento Nitrílicas"
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
+                  required
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="prodPrice">Preço de Referência (R$)</label>
+                  <input
+                    id="prodPrice"
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={productPrice}
+                    onChange={(e) => setProductPrice(e.target.value)}
+                    disabled={isSaving}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="prodCategory">Categoria</label>
+                  <select
+                    id="prodCategory"
+                    value={productCategoryId}
+                    onChange={(e) => setProductCategoryId(e.target.value)}
+                    disabled={isSaving}
+                  >
+                    <option value="">Geral / Sem Categoria</option>
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="prodDesc">Descrição Detalhada</label>
+                <input
+                  id="prodDesc"
+                  type="text"
+                  placeholder="Especificações técnicas, modelo ou marca sugerida"
+                  value={productDesc}
+                  onChange={(e) => setProductDesc(e.target.value)}
+                  disabled={isSaving}
+                />
+              </div>
+            </>
+          )}
+
+          {/* CENTRO DE CUSTO */}
+          {activeMenu === 'centros-custo' && (
+            <>
+              <div className="form-group">
+                <label htmlFor="ccCode">Código Contábil *</label>
+                <input
+                  id="ccCode"
+                  type="text"
+                  placeholder="Ex: CC-101"
+                  value={costCenterCode}
+                  onChange={(e) => setCostCenterCode(e.target.value)}
+                  required
+                  autoFocus
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="ccName">Nome da Unidade / Setor *</label>
+                <input
+                  id="ccName"
+                  type="text"
+                  placeholder="Ex: Farmácia Central / UTI"
+                  value={costCenterName}
+                  onChange={(e) => setCostCenterName(e.target.value)}
+                  required
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="ccDesc">Descrição / Finalidade</label>
+                <input
+                  id="ccDesc"
+                  type="text"
+                  placeholder="Finalidade orçamentária"
+                  value={costCenterDesc}
+                  onChange={(e) => setCostCenterDesc(e.target.value)}
+                  disabled={isSaving}
+                />
+              </div>
+            </>
+          )}
+
+          {/* ORGANIZAÇÕES */}
           {activeMenu === 'organizacoes' && (
             <div className="form-group">
               <label htmlFor="orgName">Nome da Organização *</label>
@@ -628,6 +1300,7 @@ export const Cadastros: React.FC = () => {
             </div>
           )}
 
+          {/* USUÁRIOS */}
           {activeMenu === 'usuarios' && (
             <>
               <div className="form-group">
@@ -704,6 +1377,7 @@ export const Cadastros: React.FC = () => {
             </>
           )}
 
+          {/* CARGOS */}
           {activeMenu === 'cargos' && (
             <>
               <div className="form-group">
@@ -730,6 +1404,35 @@ export const Cadastros: React.FC = () => {
                   onChange={(e) => setRoleDescription(e.target.value)}
                   disabled={isSaving}
                 />
+              </div>
+
+              <div className="permissions-matrix-wrap">
+                <span className="matrix-title">Matriz de Permissões de Acesso</span>
+                <div className="permissions-modules-list">
+                  {Object.entries(permissionsByModule).map(([moduleName, modulePerms]) => (
+                    <div key={moduleName} className="module-group">
+                      <span className="module-name">{moduleName}</span>
+                      <div className="module-perms">
+                        {modulePerms.map(perm => {
+                          const isChecked = selectedPermissionIds.includes(perm.id);
+                          return (
+                            <div 
+                              key={perm.id} 
+                              className={`perm-checkbox-item ${isChecked ? 'checked' : ''}`}
+                              onClick={() => togglePermission(perm.id, selectedPermissionIds, setSelectedPermissionIds)}
+                            >
+                              {isChecked ? <CheckSquare size={16} className="icon-checked" /> : <Square size={16} className="icon-square" />}
+                              <div className="perm-labels">
+                                <span className="perm-name">{perm.name}</span>
+                                <span className="perm-code">{perm.code}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </>
           )}
@@ -758,9 +1461,7 @@ export const Cadastros: React.FC = () => {
         </form>
       </Modal>
 
-      {/* ============================================================= */}
-      {/* 4. MODAL DE PERFIL / EDIÇÃO DE USUÁRIO & UNLINK               */}
-      {/* ============================================================= */}
+      {/* MODAL DE PERFIL / EDIÇÃO DE USUÁRIO */}
       <Modal
         isOpen={isProfileModalOpen}
         onClose={() => !isSaving && setIsProfileModalOpen(false)}
@@ -776,7 +1477,6 @@ export const Cadastros: React.FC = () => {
               </div>
             )}
 
-            {/* Cabeçalho do Perfil com Avatar */}
             <div className="profile-card-header">
               <div className="avatar-xl">
                 {selectedUser.full_name.charAt(0).toUpperCase()}
@@ -796,7 +1496,7 @@ export const Cadastros: React.FC = () => {
                 value={editFullName}
                 onChange={(e) => setEditFullName(e.target.value)}
                 required
-                disabled={isSaving}
+                disabled={isSaving || (!hasPermission('users:edit') && selectedUser.email !== currentUserEmail)}
               />
             </div>
 
@@ -808,7 +1508,7 @@ export const Cadastros: React.FC = () => {
                 value={editEmail}
                 onChange={(e) => setEditEmail(e.target.value)}
                 required
-                disabled={isSaving}
+                disabled={isSaving || !hasPermission('users:edit')}
               />
             </div>
 
@@ -819,7 +1519,7 @@ export const Cadastros: React.FC = () => {
                   id="editOrg"
                   value={editOrgId}
                   onChange={(e) => setEditOrgId(e.target.value)}
-                  disabled={isSaving}
+                  disabled={isSaving || !hasPermission('users:edit')}
                 >
                   <option value="">Selecione...</option>
                   {organizations.map(org => (
@@ -834,7 +1534,7 @@ export const Cadastros: React.FC = () => {
                   id="editRole"
                   value={editRoleId}
                   onChange={(e) => setEditRoleId(e.target.value)}
-                  disabled={isSaving}
+                  disabled={isSaving || !hasPermission('users:edit')}
                 >
                   <option value="">Selecione...</option>
                   {roles.map(role => (
@@ -851,7 +1551,7 @@ export const Cadastros: React.FC = () => {
                   id="editStatus"
                   value={editIsActive ? 'active' : 'inactive'}
                   onChange={(e) => setEditIsActive(e.target.value === 'active')}
-                  disabled={isSaving}
+                  disabled={isSaving || !hasPermission('users:edit')}
                 >
                   <option value="active">Ativo (Acesso Liberado)</option>
                   <option value="inactive">Inativo (Acesso Bloqueado)</option>
@@ -872,17 +1572,18 @@ export const Cadastros: React.FC = () => {
             </div>
 
             <footer className="modal-footer space-between">
-              {/* Botão de Desvincular / Excluir na Esquerda */}
-              <button
-                type="button"
-                className="btn-danger-unlink"
-                onClick={() => setItemToDelete({ id: selectedUser.id, name: selectedUser.full_name, type: 'user' })}
-                disabled={isSaving || selectedUser.email === currentUserEmail}
-                title={selectedUser.email === currentUserEmail ? 'Você não pode excluir sua própria conta' : 'Desvincular e Excluir Usuário'}
-              >
-                <Trash2 size={14} />
-                <span>Desvincular Usuário</span>
-              </button>
+              {hasPermission('users:delete') && (
+                <button
+                  type="button"
+                  className="btn-danger-unlink"
+                  onClick={() => setItemToDelete({ id: selectedUser.id, name: selectedUser.full_name, type: 'user' })}
+                  disabled={isSaving || selectedUser.email === currentUserEmail}
+                  title={selectedUser.email === currentUserEmail ? 'Você não pode excluir sua própria conta' : 'Desvincular e Excluir Usuário'}
+                >
+                  <Trash2 size={14} />
+                  <span>Desvincular Usuário</span>
+                </button>
+              )}
 
               <div className="right-actions">
                 <button
@@ -910,13 +1611,104 @@ export const Cadastros: React.FC = () => {
         )}
       </Modal>
 
-      {/* ============================================================= */}
-      {/* 5. MODAL DE CONFIRMAÇÃO DE EXCLUSÃO / DESVINCULAÇÃO           */}
-      {/* ============================================================= */}
+      {/* MODAL DE EDIÇÃO DE CARGO & MATRIZ DE PERMISSÕES */}
+      <Modal
+        isOpen={isRoleModalOpen}
+        onClose={() => !isSaving && setIsRoleModalOpen(false)}
+        title="Editar Cargo & Permissões"
+        subtitle="Configure os dados do cargo e a matriz de acessos permitidos"
+      >
+        {selectedRole && (
+          <form onSubmit={handleSaveRole} className="wizard-form">
+            {modalError && (
+              <div className="modal-alert-error">
+                <AlertCircle size={14} />
+                <span>{modalError}</span>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label htmlFor="editRoleName">Nome do Cargo *</label>
+              <input
+                id="editRoleName"
+                type="text"
+                value={editRoleName}
+                onChange={(e) => setEditRoleName(e.target.value)}
+                required
+                disabled={isSaving}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="editRoleDesc">Descrição da Função</label>
+              <input
+                id="editRoleDesc"
+                type="text"
+                value={editRoleDescription}
+                onChange={(e) => setEditRoleDescription(e.target.value)}
+                disabled={isSaving}
+              />
+            </div>
+
+            <div className="permissions-matrix-wrap">
+              <span className="matrix-title">Matriz de Permissões de Acesso</span>
+              <div className="permissions-modules-list">
+                {Object.entries(permissionsByModule).map(([moduleName, modulePerms]) => (
+                  <div key={moduleName} className="module-group">
+                    <span className="module-name">{moduleName}</span>
+                    <div className="module-perms">
+                      {modulePerms.map(perm => {
+                        const isChecked = editRolePermissionIds.includes(perm.id);
+                        return (
+                          <div 
+                            key={perm.id} 
+                            className={`perm-checkbox-item ${isChecked ? 'checked' : ''}`}
+                            onClick={() => togglePermission(perm.id, editRolePermissionIds, setEditRolePermissionIds)}
+                          >
+                            {isChecked ? <CheckSquare size={16} className="icon-checked" /> : <Square size={16} className="icon-square" />}
+                            <div className="perm-labels">
+                              <span className="perm-name">{perm.name}</span>
+                              <span className="perm-code">{perm.code}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <footer className="modal-footer">
+              <button
+                type="button"
+                className="btn-cancel"
+                onClick={() => setIsRoleModalOpen(false)}
+                disabled={isSaving}
+              >
+                Cancelar
+              </button>
+
+              <button type="submit" className="btn-save" disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2 size={14} className="spin" />
+                    <span>Salvando...</span>
+                  </>
+                ) : (
+                  <span>Salvar Permissões</span>
+                )}
+              </button>
+            </footer>
+          </form>
+        )}
+      </Modal>
+
+      {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO */}
       <Modal
         isOpen={!!itemToDelete}
         onClose={() => !isDeleting && setItemToDelete(null)}
-        title="Confirmar Desvinculação / Exclusão"
+        title="Confirmar Exclusão"
       >
         {itemToDelete && (
           <div className="delete-confirm-box">
@@ -925,11 +1717,11 @@ export const Cadastros: React.FC = () => {
             </div>
 
             <p className="confirm-text">
-              Tem certeza que deseja desvincular e excluir permanentemente{' '}
+              Tem certeza que deseja excluir permanentemente{' '}
               <strong>"{itemToDelete.name}"</strong>?
             </p>
             <p className="subtext">
-              Esta ação removerá todos os acessos associados e não poderá ser desfeita.
+              Esta ação removerá todos os vínculos associados e não poderá ser desfeita.
             </p>
 
             <div className="confirm-actions">
@@ -954,7 +1746,7 @@ export const Cadastros: React.FC = () => {
                 ) : (
                   <>
                     <Trash2 size={14} />
-                    <span>Sim, Desvincular e Excluir</span>
+                    <span>Sim, Excluir</span>
                   </>
                 )}
               </button>

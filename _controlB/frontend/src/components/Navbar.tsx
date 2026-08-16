@@ -1,12 +1,11 @@
 /**
- * components/Navbar.tsx - Barra Superior Ultra-Slim & Limpa
+ * components/Navbar.tsx - Barra Superior Ultra-Slim com Controle Dinâmico de Acesso (RBAC)
  * 
- * Links diretos sem submenus duplicados no topo:
- * 1. Dashboard (/dashboard)
- * 2. Cadastros (/cadastros - abre a tela com a barra lateral de opções)
- * 3. Configurações
- * 4. Alternador de Tema (Dark / Light)
- * 5. Menu de Perfil do Usuário com Logout
+ * Renderiza menus condicionalmente com base nas permissões do usuário logado:
+ * 1. Dashboard (/dashboard) - se dashboard:view
+ * 2. Configurações (/cadastros) - SOMENTE se possuir permissão para pelo menos um módulo de cadastro
+ * 3. Alternador de Tema (Dark / Light)
+ * 4. Perfil do Usuário com Cargo Real e Logout
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -17,6 +16,7 @@ import {
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
+import { usePermissions } from '@/hooks/usePermissions';
 import { Logo } from '@/components/Logo';
 import './Navbar.scss';
 
@@ -24,16 +24,23 @@ export const Navbar: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+  const { user, hasPermission, hasAnyPermission } = usePermissions();
 
-  // Estado do menu de perfil
+  // Estado do menu de perfil e menu de configurações
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const profileRef = useRef<HTMLDivElement>(null);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
 
-  // Fecha menu de perfil ao clicar fora ou mudar de rota
+  const profileRef = useRef<HTMLDivElement>(null);
+  const configRef = useRef<HTMLDivElement>(null);
+
+  // Fecha menus ao clicar fora ou mudar de rota
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
         setIsProfileOpen(false);
+      }
+      if (configRef.current && !configRef.current.contains(event.target as Node)) {
+        setIsConfigOpen(false);
       }
     };
 
@@ -43,6 +50,7 @@ export const Navbar: React.FC = () => {
 
   useEffect(() => {
     setIsProfileOpen(false);
+    setIsConfigOpen(false);
   }, [location.pathname]);
 
   const handleLogout = () => {
@@ -50,12 +58,20 @@ export const Navbar: React.FC = () => {
     navigate('/login');
   };
 
-  const userEmail = authService.getUserEmail();
-  const userName = userEmail.split('@')[0] || 'Usuário';
+  const userEmail = user?.email || authService.getUserEmail();
+  const userName = user?.full_name || userEmail.split('@')[0] || 'Usuário';
   const userInitial = userName.charAt(0).toUpperCase();
-  const [isConfigOpen, setIsConfigOpen] = useState(false);
-  const configRef = useRef<HTMLDivElement>(null);
+  const roleName = user?.role_name || 'Colaborador';
 
+  // 🛡️ Regra RBAC: O menu "Configurações" só aparece se o usuário tiver acesso a Cadastros
+  const canAccessSettings = hasAnyPermission([
+    'organizations:view', 
+    'users:view', 
+    'roles:view',
+    'organizations:manage',
+    'users:create',
+    'roles:manage'
+  ]);
 
   return (
     <header className="slim-navbar">
@@ -64,56 +80,59 @@ export const Navbar: React.FC = () => {
         <Logo size={24} showText={true} />
       </div>
 
-      {/* 2. Links Principais Diretos (Sem menus duplicados) */}
+      {/* 2. Links Principais Diretos (Filtrados por Permissões) */}
       <nav className="navbar-links">
-        {/* 1. Link direto para o Dashboard */}
-        <NavLink
-          to="/dashboard"
-          className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}
-        >
-          <LayoutDashboard size={14} />
-          <span>Dashboard</span>
-        </NavLink>
-
-        {/* 2. Menu Pai: Configurações com Dropdown */}
-        <div className="dropdown-wrapper" ref={configRef}>
-          <button
-            type="button"
-            className={`nav-link dropdown-btn ${isConfigOpen ? 'open' : ''}`}
-            onClick={() => setIsConfigOpen(!isConfigOpen)}
+        {/* Link direto para o Dashboard */}
+        {hasPermission('dashboard:view') && (
+          <NavLink
+            to="/dashboard"
+            className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}
           >
-            <Settings size={14} />
-            <span>Configurações</span>
-            <ChevronDown size={12} className={`arrow-icon ${isConfigOpen ? 'rotated' : ''}`} />
-          </button>
+            <LayoutDashboard size={14} />
+            <span>Dashboard</span>
+          </NavLink>
+        )}
 
-          {/* Submenu Suspenso */}
-          {isConfigOpen && (
-            <div className="dropdown-popover">
-              <NavLink
-                to="/cadastros"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsConfigOpen(false)}
-              >
-                <Building2 size={14} className="icon-org" />
-                <div className="item-text">
-                  <span className="title">Cadastros</span>
-                  <span className="desc">Usuários, Organizações e Cargos</span>
-                </div>
-              </NavLink>
+        {/* Menu Pai: Configurações com Dropdown (Ocultado se o usuário não tiver permissão) */}
+        {canAccessSettings && (
+          <div className="dropdown-wrapper" ref={configRef}>
+            <button
+              type="button"
+              className={`nav-link dropdown-btn ${isConfigOpen ? 'open' : ''}`}
+              onClick={() => setIsConfigOpen(!isConfigOpen)}
+            >
+              <Settings size={14} />
+              <span>Configurações</span>
+              <ChevronDown size={12} className={`arrow-icon ${isConfigOpen ? 'rotated' : ''}`} />
+            </button>
 
-              <div className="popover-item disabled">
-                <Settings size={14} />
-                <div className="item-text">
-                  <span className="title">Parâmetros Gerais</span>
-                  <span className="desc">Preferências da aplicação</span>
+            {/* Submenu Suspenso */}
+            {isConfigOpen && (
+              <div className="dropdown-popover">
+                <NavLink
+                  to="/cadastros"
+                  className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                  onClick={() => setIsConfigOpen(false)}
+                >
+                  <Building2 size={14} className="icon-org" />
+                  <div className="item-text">
+                    <span className="title">Cadastros</span>
+                    <span className="desc">Usuários, Organizações e Cargos</span>
+                  </div>
+                </NavLink>
+
+                <div className="popover-item disabled">
+                  <Settings size={14} />
+                  <div className="item-text">
+                    <span className="title">Parâmetros Gerais</span>
+                    <span className="desc">Preferências da aplicação</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </nav>
-
 
       {/* 3. Ações da Direita (Tema + Perfil do Usuário) */}
       <div className="navbar-actions">
@@ -153,7 +172,7 @@ export const Navbar: React.FC = () => {
                   <span className="email">{userEmail}</span>
                   <span className="badge-role">
                     <UserCheck size={10} />
-                    Administrador
+                    {roleName}
                   </span>
                 </div>
               </div>

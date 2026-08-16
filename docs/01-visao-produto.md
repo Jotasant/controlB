@@ -6,7 +6,7 @@ Compras, recebimentos, estoque e pagamentos frequentemente ficam dispersos em pl
 
 ## Objetivo
 
-Centralizar o ciclo da compra: solicitação, aprovação, pedido, recebimento, nota fiscal, movimentação de estoque, conta a pagar, pagamento e análise.
+Centralizar o ciclo da compra: solicitação, aprovação, pedido, recebimento, nota fiscal, movimentação de estoque, contas a pagar, pagamentos e análises.
 
 ## Perfis
 

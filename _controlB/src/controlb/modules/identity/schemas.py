@@ -2,7 +2,7 @@
 schemas.py - Contratos de Dados e Validações (Pydantic Models)
 
 Define os esquemas de validação de entrada (Requests) e formatação de saída (Responses)
-para o módulo de Identidade (Organizações, Cargos e Usuários).
+para o módulo de Identidade (Organizações, Permissões, Cargos e Usuários).
 Garante tipagem estrita, prevenção de vazamento de senhas e serialização segura.
 """
 
@@ -12,7 +12,29 @@ from pydantic import BaseModel, ConfigDict, EmailStr
 
 
 # ==============================================================================
-# 1. ESQUEMAS DE ORGANIZAÇÃO (Organization)
+# 1. ESQUEMAS DE PERMISSÃO (Permission)
+# ==============================================================================
+
+class PermissionBase(BaseModel):
+    """Atributos básicos de uma Permissão."""
+    code: str                           # Código único (ex: "users:create")
+    name: str                           # Nome legível (ex: "Cadastrar Usuários")
+    module: str                         # Módulo de negócio (ex: "Identity", "Stock")
+    description: str | None = None      # Descrição detalhada da autorização
+    is_active: bool = True
+
+
+class PermissionResponse(PermissionBase):
+    """Dados da Permissão enviados na resposta da API."""
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# 2. ESQUEMAS DE ORGANIZAÇÃO (Organization)
 # ==============================================================================
 
 class OrganizationBase(BaseModel):
@@ -41,12 +63,11 @@ class OrganizationResponse(OrganizationBase):
     created_at: datetime
     updated_at: datetime
 
-    # Permite ao Pydantic ler os dados diretamente a partir de objetos ORM do SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
 
 
 # ==============================================================================
-# 2. ESQUEMAS DE CARGO / FUNÇÃO (Role)
+# 3. ESQUEMAS DE CARGO / FUNÇÃO (Role)
 # ==============================================================================
 
 class RoleBase(BaseModel):
@@ -59,19 +80,22 @@ class RoleBase(BaseModel):
 class RoleCreate(RoleBase):
     """Dados necessários para criar um novo Cargo."""
     organization_id: uuid.UUID          # ID da organização à qual este cargo pertence
+    permission_ids: list[uuid.UUID] = [] # IDs das permissões atribuídas no cadastro
 
 
 class RoleUpdate(BaseModel):
-    """Dados opcionais para atualizar um Cargo."""
+    """Dados opcionais para atualizar um Cargo e suas Permissões."""
     name: str | None = None
     description: str | None = None
     is_active: bool | None = None
+    permission_ids: list[uuid.UUID] | None = None # Nova lista de permissões do cargo
 
 
 class RoleResponse(RoleBase):
-    """Dados do Cargo enviados na resposta da API."""
+    """Dados do Cargo enviados na resposta da API com lista de permissões."""
     id: uuid.UUID
     organization_id: uuid.UUID
+    permissions: list[PermissionResponse] = []
     created_at: datetime
     updated_at: datetime
 
@@ -79,7 +103,7 @@ class RoleResponse(RoleBase):
 
 
 # ==============================================================================
-# 3. ESQUEMAS DE USUÁRIO (User)
+# 4. ESQUEMAS DE USUÁRIO (User)
 # ==============================================================================
 
 class UserBase(BaseModel):
@@ -120,6 +144,21 @@ class UserResponse(UserBase):
     id: uuid.UUID
     organization_id: uuid.UUID
     role_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserMeResponse(UserBase):
+    """
+    Retorno do endpoint '/identity/users/me' com permissões resolvidas para o Frontend.
+    """
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    role_id: uuid.UUID | None
+    role_name: str | None = None
+    permissions: list[str] = []         # Lista de códigos: ["users:view", "dashboard:view", ...]
     created_at: datetime
     updated_at: datetime
 

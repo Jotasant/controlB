@@ -1,4 +1,4 @@
-// pages/Cadastros/Cadastros.scss - Estilos da Central de Cadastros e Perfis
+// pages/Cadastros/Cadastros.scss - Estilos da Central de Cadastros, Perfis e Permissões
 .cadastros-page {
   min-height: 100vh;
   background-color: var(--bg-app);
@@ -64,6 +64,8 @@
             .icon-users { color: var(--accent-blue); }
             .icon-roles { color: var(--accent-purple); }
             .icon-products { color: var(--accent-emerald); }
+            .icon-supplier { color: #f59e0b; }
+            .icon-cc { color: #06b6d4; }
           }
 
           .btn-end {
@@ -309,6 +311,16 @@
                   background: rgba(168, 85, 247, 0.12);
                   color: var(--accent-purple);
                 }
+
+                &.orange-bg {
+                  background: rgba(245, 158, 11, 0.12);
+                  color: #f59e0b;
+                }
+
+                &.blue-bg {
+                  background: rgba(59, 130, 246, 0.12);
+                  color: #3b82f6;
+                }
               }
 
               .avatar-circle-sm {
@@ -330,6 +342,13 @@
                 font-weight: 600;
               }
 
+              .sub-label {
+                display: block;
+                font-size: 0.725rem;
+                color: var(--text-muted);
+                font-weight: normal;
+              }
+
               .badge-self {
                 font-size: 0.65rem;
                 font-weight: 600;
@@ -338,6 +357,62 @@
                 padding: 0.1rem 0.35rem;
                 border-radius: 4px;
                 margin-left: 0.45rem;
+              }
+            }
+
+            .code-tag {
+              display: inline-block;
+              font-family: ui-monospace, monospace;
+              font-size: 0.75rem;
+              padding: 0.15rem 0.4rem;
+              background: var(--bg-surface-elevated);
+              border: 1px solid var(--border-subtle);
+              border-radius: 4px;
+              color: var(--text-secondary);
+            }
+
+            .unit-badge {
+              display: inline-block;
+              font-size: 0.725rem;
+              font-weight: 700;
+              padding: 0.15rem 0.4rem;
+              background: rgba(16, 185, 129, 0.1);
+              color: var(--accent-emerald);
+              border-radius: 4px;
+            }
+
+            .contact-info {
+              display: flex;
+              flex-direction: column;
+              gap: 0.2rem;
+
+              .contact-item {
+                display: flex;
+                align-items: center;
+                gap: 0.35rem;
+                font-size: 0.775rem;
+                color: var(--text-secondary);
+              }
+            }
+
+            .badge-permissions-btn {
+              display: inline-flex;
+              align-items: center;
+              gap: 0.35rem;
+              background: rgba(168, 85, 247, 0.1);
+              border: 1px solid rgba(168, 85, 247, 0.25);
+              color: var(--accent-purple);
+              padding: 0.2rem 0.55rem;
+              border-radius: 6px;
+              font-size: 0.75rem;
+              font-weight: 600;
+              cursor: pointer;
+              transition: all 0.15s ease;
+
+              &:hover {
+                background: rgba(168, 85, 247, 0.18);
+                border-color: var(--accent-purple);
+                transform: translateY(-1px);
               }
             }
 
@@ -352,15 +427,6 @@
             .role-desc-text {
               color: var(--text-muted);
               font-size: 0.825rem;
-            }
-
-            .code-tag {
-              font-family: ui-monospace, monospace;
-              font-size: 0.75rem;
-              background: var(--bg-surface-hover);
-              padding: 0.2rem 0.45rem;
-              border-radius: 4px;
-              color: var(--text-muted);
             }
 
             .row-actions {
@@ -431,8 +497,106 @@
 }
 
 // =========================================================================
-// ESTILOS ADICIONAIS DO PERFIL & CONFIRMAÇÃO DE EXCLUSÃO NO MODAL
+// ESTILOS DA MATRIZ DE PERMISSÕES & ACCORDIONS (RBAC)
 // =========================================================================
+.permissions-matrix-wrap {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+
+  .matrix-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-primary);
+    display: block;
+    margin-bottom: 0.75rem;
+  }
+
+  .permissions-modules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    max-height: 260px;
+    overflow-y: auto;
+    padding-right: 0.35rem;
+
+    .module-group {
+      background: var(--bg-app);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 0.75rem 0.85rem;
+
+      .module-name {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: var(--accent-brand);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 0.5rem;
+        display: block;
+      }
+
+      .module-perms {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.45rem;
+
+        .perm-checkbox-item {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.5rem;
+          padding: 0.45rem 0.6rem;
+          background: var(--bg-surface);
+          border: 1px solid var(--border-subtle);
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+
+          .icon-square {
+            color: var(--text-muted);
+            margin-top: 2px;
+          }
+
+          .icon-checked {
+            color: var(--accent-brand);
+            margin-top: 2px;
+          }
+
+          .perm-labels {
+            display: flex;
+            flex-direction: column;
+
+            .perm-name {
+              font-size: 0.775rem;
+              font-weight: 600;
+              color: var(--text-primary);
+            }
+
+            .perm-code {
+              font-size: 0.65rem;
+              font-family: ui-monospace, monospace;
+              color: var(--text-muted);
+            }
+          }
+
+          &:hover {
+            border-color: var(--border-highlight);
+            background: var(--bg-surface-hover);
+          }
+
+          &.checked {
+            background: var(--accent-brand-subtle);
+            border-color: rgba(255, 85, 0, 0.3);
+          }
+        }
+      }
+    }
+  }
+}
+
+// Estilos do Cabeçalho de Perfil
 .profile-card-header {
   display: flex;
   align-items: center;
@@ -610,6 +774,16 @@
 
       .content-right {
         padding: 1rem;
+      }
+    }
+  }
+
+  .permissions-matrix-wrap {
+    .permissions-modules-list {
+      .module-group {
+        .module-perms {
+          grid-template-columns: 1fr;
+        }
       }
     }
   }

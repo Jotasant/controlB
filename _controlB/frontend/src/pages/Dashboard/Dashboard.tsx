@@ -1,8 +1,8 @@
 /**
- * pages/Dashboard/Dashboard.tsx - Painel Executivo Focado em Gráficos & KPIs
+ * pages/Dashboard/Dashboard.tsx - Painel Executivo Focado em Gráficos & KPIs com RBAC
  * 
  * Exibe métricas de compras, gráficos de desempenho financeiro (Recharts)
- * e alocação por módulo de forma limpa e minimalista.
+ * e cards de KPIs condicionados estritamente às permissões do usuário logado.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -17,6 +17,7 @@ import {
 import { identityService } from '@/services/api';
 import { User, Role, Organization } from '@/types';
 import { Navbar } from '@/components/Navbar';
+import { usePermissions } from '@/hooks/usePermissions';
 import './Dashboard.scss';
 
 // Dados de Exemplo para os Gráficos Analíticos
@@ -58,6 +59,8 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export const Dashboard: React.FC = () => {
+  const { hasPermission, loading: permissionsLoading } = usePermissions();
+
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -70,26 +73,41 @@ export const Dashboard: React.FC = () => {
     setError(null);
 
     try {
-      const [usersData, rolesData, orgsData] = await Promise.all([
-        identityService.getUsers(),
-        identityService.getRoles(),
-        identityService.getOrganizations(),
-      ]);
+      // 🛡️ Busca SOMENTE os dados para os quais o usuário logado possui permissão
+      const promises: Promise<any>[] = [];
 
-      setUsers(usersData);
-      setRoles(rolesData);
-      setOrganizations(orgsData);
+      if (hasPermission('users:view')) {
+        promises.push(identityService.getUsers().then(res => setUsers(res)).catch(() => setUsers([])));
+      } else {
+        setUsers([]);
+      }
+
+      if (hasPermission('roles:view')) {
+        promises.push(identityService.getRoles().then(res => setRoles(res)).catch(() => setRoles([])));
+      } else {
+        setRoles([]);
+      }
+
+      if (hasPermission('organizations:view')) {
+        promises.push(identityService.getOrganizations().then(res => setOrganizations(res)).catch(() => setOrganizations([])));
+      } else {
+        setOrganizations([]);
+      }
+
+      await Promise.all(promises);
     } catch (err: any) {
       console.error('Erro ao carregar dados do Dashboard:', err);
-      setError('Não foi possível se comunicar com o backend FastAPI.');
+      // Não exibe erro para bloqueios de permissão esperados
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (!permissionsLoading) {
+      loadData();
+    }
+  }, [permissionsLoading]);
 
   return (
     <div className="dashboard-page">
@@ -117,52 +135,63 @@ export const Dashboard: React.FC = () => {
           </div>
         )}
 
-        {/* 1. CARDS DE KPIS EM 4 COLUNAS SLIM */}
+        {/* 1. CARDS DE KPIS EM GRID RESPONSIVO (Exibe apenas o que o usuário tem permissão) */}
         <section className="metrics-grid">
-          <div className="metric-card">
-            <div className="metric-header">
-              <span className="metric-title">Organizações</span>
-              <Building2 size={15} className="metric-icon icon-brand" />
+          
+          {/* Card de Organizações: Somente se tiver permissão organizations:view */}
+          {hasPermission('organizations:view') && (
+            <div className="metric-card">
+              <div className="metric-header">
+                <span className="metric-title">Organizações</span>
+                <Building2 size={15} className="metric-icon icon-brand" />
+              </div>
+              <div className="metric-body">
+                <span className="metric-value">{organizations.length}</span>
+                <span className="metric-tag green">
+                  <ArrowUpRight size={11} />
+                  Ativas
+                </span>
+              </div>
+              <span className="metric-footer">Empresas e filiais cadastradas</span>
             </div>
-            <div className="metric-body">
-              <span className="metric-value">{organizations.length}</span>
-              <span className="metric-tag green">
-                <ArrowUpRight size={11} />
-                Ativas
-              </span>
-            </div>
-            <span className="metric-footer">Empresas e filiais cadastradas</span>
-          </div>
+          )}
 
-          <div className="metric-card">
-            <div className="metric-header">
-              <span className="metric-title">Usuários Ativos</span>
-              <Users size={15} className="metric-icon icon-blue" />
+          {/* Card de Usuários: Somente se tiver permissão users:view */}
+          {hasPermission('users:view') && (
+            <div className="metric-card">
+              <div className="metric-header">
+                <span className="metric-title">Usuários Ativos</span>
+                <Users size={15} className="metric-icon icon-blue" />
+              </div>
+              <div className="metric-body">
+                <span className="metric-value">{users.length}</span>
+                <span className="metric-tag green">
+                  <CheckCircle2 size={11} />
+                  Online
+                </span>
+              </div>
+              <span className="metric-footer">Contas com acesso ao sistema</span>
             </div>
-            <div className="metric-body">
-              <span className="metric-value">{users.length}</span>
-              <span className="metric-tag green">
-                <CheckCircle2 size={11} />
-                Online
-              </span>
-            </div>
-            <span className="metric-footer">Contas com acesso ao sistema</span>
-          </div>
+          )}
 
-          <div className="metric-card">
-            <div className="metric-header">
-              <span className="metric-title">Perfis de Acesso</span>
-              <Shield size={15} className="metric-icon icon-purple" />
+          {/* Card de Cargos/Perfis: Somente se tiver permissão roles:view */}
+          {hasPermission('roles:view') && (
+            <div className="metric-card">
+              <div className="metric-header">
+                <span className="metric-title">Perfis de Acesso</span>
+                <Shield size={15} className="metric-icon icon-purple" />
+              </div>
+              <div className="metric-body">
+                <span className="metric-value">{roles.length}</span>
+                <span className="metric-tag neutral">
+                  Níveis
+                </span>
+              </div>
+              <span className="metric-footer">Políticas de permissão</span>
             </div>
-            <div className="metric-body">
-              <span className="metric-value">{roles.length}</span>
-              <span className="metric-tag neutral">
-                Níveis
-              </span>
-            </div>
-            <span className="metric-footer">Políticas de permissão</span>
-          </div>
+          )}
 
+          {/* Card de Compras do Mês (Métricas de Compras e Operação) */}
           <div className="metric-card">
             <div className="metric-header">
               <span className="metric-title">Compras do Mês</span>

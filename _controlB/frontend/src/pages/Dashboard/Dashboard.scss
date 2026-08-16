@@ -76,10 +76,10 @@
       margin-bottom: 1.25rem;
     }
 
-    // 1. CARDS DE KPIS EM 4 COLUNAS SLIM
+    // 1. CARDS DE KPIS EM GRID RESPONSIVO / DINÂMICO
     .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 1rem;
       margin-bottom: 1.25rem;
 

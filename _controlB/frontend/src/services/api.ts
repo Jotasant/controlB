@@ -1,5 +1,5 @@
 /**
- * services/api.ts - Cliente HTTP Centralizado com Axios
+ * services/api.ts - Cliente HTTP Centralizado com Axios (Identity & Purchasing)
  * 
  * Responsabilidades:
  * 1. Interceptar todas as requisições HTTP e anexar automaticamente o Bearer Token JWT.
@@ -8,7 +8,10 @@
  */
 
 import axios from 'axios';
-import { User, Role, Organization, TokenResponse } from '@/types';
+import { 
+  User, UserMe, Role, Organization, Permission, TokenResponse,
+  Supplier, CostCenter, ProductCategory, Product, PurchaseRequest, PurchaseOrder 
+} from '@/types';
 
 // Cria a instância do Axios
 export const api = axios.create({
@@ -46,7 +49,7 @@ api.interceptors.response.use(
   }
 );
 
-// 3. Funções de Serviços Autenticados
+// 3. Funções de Autenticação e Sessão
 export const authService = {
   // Realiza login no padrão OAuth2 Form Data
   async login(email: string, password: string): Promise<TokenResponse> {
@@ -89,8 +92,20 @@ export const authService = {
   },
 };
 
-// 4. Funções de Consulta e Manipulação de Dados
+// 4. Funções de Usuários, Organizações e Perfis (Identity)
 export const identityService = {
+  // --- PERFIL DO USUÁRIO LOGADO COM PERMISSÕES ---
+  async getMe(): Promise<UserMe> {
+    const response = await api.get<UserMe>('/identity/users/me');
+    return response.data;
+  },
+
+  // --- PERMISSÕES (Catálogo) ---
+  async getPermissions(): Promise<Permission[]> {
+    const response = await api.get<Permission[]>('/identity/permissions');
+    return response.data;
+  },
+
   // --- USUÁRIOS ---
   async getUsers(): Promise<User[]> {
     const response = await api.get<User[]>('/identity/users');
@@ -128,23 +143,181 @@ export const identityService = {
     return response.data;
   },
 
-  // --- CARGOS ---
+  // --- CARGOS E PERMISSÕES ---
   async getRoles(): Promise<Role[]> {
     const response = await api.get<Role[]>('/identity/role');
     return response.data;
   },
 
-  async createRole(name: string, description: string, organizationId?: string): Promise<Role> {
+  async createRole(name: string, description: string, organizationId: string, permissionIds: string[] = []): Promise<Role> {
     const response = await api.post<Role>('/identity/role', { 
       name, 
       description,
-      organization_id: organizationId || '00000000-0000-0000-0000-000000000000' 
+      organization_id: organizationId,
+      permission_ids: permissionIds
     });
+    return response.data;
+  },
+
+  async updateRole(roleId: string, data: { name?: string; description?: string; is_active?: boolean; permission_ids?: string[] }): Promise<Role> {
+    const response = await api.put<Role>(`/identity/role/${roleId}`, data);
     return response.data;
   },
 
   async deleteRole(roleId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/identity/role/${roleId}`);
+    return response.data;
+  }
+};
+
+// 5. Funções de Compras, Fornecedores, Produtos e Ordens (Purchasing)
+export const purchasingService = {
+  // --- FORNECEDORES ---
+  async getSuppliers(): Promise<Supplier[]> {
+    const response = await api.get<Supplier[]>('/purchasing/suppliers');
+    return response.data;
+  },
+
+  async createSupplier(data: {
+    name: string;
+    trade_name?: string;
+    cnpj_cpf: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    zip_code?: string;
+    country?: string;
+  }): Promise<Supplier> {
+    const response = await api.post<Supplier>('/purchasing/suppliers', {
+      ...data,
+      organization_id: '00000000-0000-0000-0000-000000000000'
+    });
+    return response.data;
+  },
+
+  async updateSupplier(supplierId: string, data: Partial<Supplier>): Promise<Supplier> {
+    const response = await api.put<Supplier>(`/purchasing/suppliers/${supplierId}`, data);
+    return response.data;
+  },
+
+  async deleteSupplier(supplierId: string): Promise<{ detail: string }> {
+    const response = await api.delete<{ detail: string }>(`/purchasing/suppliers/${supplierId}`);
+    return response.data;
+  },
+
+  // --- CENTROS DE CUSTO ---
+  async getCostCenters(): Promise<CostCenter[]> {
+    const response = await api.get<CostCenter[]>('/purchasing/cost-centers');
+    return response.data;
+  },
+
+  async createCostCenter(data: { code: string; name: string; description?: string; manager_id?: string }): Promise<CostCenter> {
+    const response = await api.post<CostCenter>('/purchasing/cost-centers', {
+      ...data,
+      organization_id: '00000000-0000-0000-0000-000000000000'
+    });
+    return response.data;
+  },
+
+  // --- CATEGORIAS & PRODUTOS ---
+  async getCategories(): Promise<ProductCategory[]> {
+    const response = await api.get<ProductCategory[]>('/purchasing/categories');
+    return response.data;
+  },
+
+  async createCategory(data: { name: string; code?: string; description?: string }): Promise<ProductCategory> {
+    const response = await api.post<ProductCategory>('/purchasing/categories', {
+      ...data,
+      organization_id: '00000000-0000-0000-0000-000000000000'
+    });
+    return response.data;
+  },
+
+  async getProducts(): Promise<Product[]> {
+    const response = await api.get<Product[]>('/purchasing/products');
+    return response.data;
+  },
+
+  async createProduct(data: {
+    sku: string;
+    name: string;
+    description?: string;
+    unit_of_measure?: string;
+    reference_price?: number;
+    category_id?: string;
+  }): Promise<Product> {
+    const response = await api.post<Product>('/purchasing/products', {
+      ...data,
+      organization_id: '00000000-0000-0000-0000-000000000000'
+    });
+    return response.data;
+  },
+
+  // --- SOLICITAÇÕES DE COMPRA ---
+  async getPurchaseRequests(status?: string): Promise<PurchaseRequest[]> {
+    const params = status ? { status } : {};
+    const response = await api.get<PurchaseRequest[]>('/purchasing/requests', { params });
+    return response.data;
+  },
+
+  async createPurchaseRequest(data: {
+    cost_center_id?: string;
+    justification: string;
+    required_date?: string;
+    items: {
+      product_id: string;
+      quantity: number;
+      estimated_unit_price: number;
+      notes?: string;
+    }[];
+  }): Promise<PurchaseRequest> {
+    const response = await api.post<PurchaseRequest>('/purchasing/requests', {
+      ...data,
+      organization_id: '00000000-0000-0000-0000-000000000000'
+    });
+    return response.data;
+  },
+
+  async approveOrRejectRequest(requestId: string, action: 'approved' | 'rejected', comments?: string): Promise<PurchaseRequest> {
+    const response = await api.post<PurchaseRequest>(`/purchasing/requests/${requestId}/approve`, {
+      action,
+      comments
+    });
+    return response.data;
+  },
+
+  // --- ORDENS DE COMPRA ---
+  async getPurchaseOrders(status?: string): Promise<PurchaseOrder[]> {
+    const params = status ? { status } : {};
+    const response = await api.get<PurchaseOrder[]>('/purchasing/orders', { params });
+    return response.data;
+  },
+
+  async createPurchaseOrder(data: {
+    supplier_id: string;
+    cost_center_id?: string;
+    purchase_request_id?: string;
+    payment_terms?: string;
+    freight_type?: string;
+    expected_delivery_date?: string;
+    notes?: string;
+    items: {
+      product_id: string;
+      quantity: number;
+      unit_price: number;
+    }[];
+  }): Promise<PurchaseOrder> {
+    const response = await api.post<PurchaseOrder>('/purchasing/orders', {
+      ...data,
+      organization_id: '00000000-0000-0000-0000-000000000000'
+    });
+    return response.data;
+  },
+
+  async cancelPurchaseOrder(orderId: string): Promise<PurchaseOrder> {
+    const response = await api.post<PurchaseOrder>(`/purchasing/orders/${orderId}/cancel`);
     return response.data;
   }
 };

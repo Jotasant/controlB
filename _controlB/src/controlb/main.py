@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from controlb.config import get_settings
 from controlb.db import get_db
 from controlb.modules.identity.api import router as identity_router
+from controlb.modules.purchasing.api import router as purchasing_router
 
 # Carrega as configurações centralizadas
 settings = get_settings()
@@ -61,5 +62,6 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     }
 
 # 5. Registro de Roteadores Modulares:
-# Conecta todos os endpoints de usuários, organizações, papéis e autenticação do módulo Identity
+# Conecta todos os endpoints de Identity (usuários, auth) e Purchasing (compras, catálogo)
 app.include_router(identity_router)
+app.include_router(purchasing_router)
