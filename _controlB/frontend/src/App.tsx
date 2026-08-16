@@ -11,12 +11,18 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { Login } from '@/pages/Login/Login';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Purchasing } from '@/pages/Purchasing/Purchasing';
+import { Inventory } from '@/pages/Inventory/Inventory';
+import { CRM } from '@/pages/CRM/CRM';
+import { Sales } from '@/pages/Sales/Sales';
+import { Finance } from '@/pages/Finance/Finance';
+import { Billing } from '@/pages/Billing/Billing';
 import { Cadastros } from '@/pages/Cadastros/Cadastros';
 import { Organizations } from '@/pages/Organizations/Organizations';
 import { Users } from '@/pages/Users/Users';
 import { Roles } from '@/pages/Roles/Roles';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { PublicRoute } from '@/components/PublicRoute';
+import { AppLayout } from '@/components/AppLayout';
 
 export const App: React.FC = () => {
   return (
@@ -33,16 +39,25 @@ export const App: React.FC = () => {
             }
           />
 
-          {/* 2. Rotas Protegidas (Exigem Token JWT) */}
+          {/* 2. Rotas Protegidas com Layout Persistente (Exigem Token JWT) */}
           <Route element={<ProtectedRoute />}>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/compras" element={<Purchasing />} />
-            <Route path="/cadastros" element={<Cadastros />} />
-            <Route path="/organizacoes" element={<Organizations />} />
-            <Route path="/usuarios" element={<Users />} />
-            <Route path="/cargos" element={<Roles />} />
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route element={<AppLayout />}>
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/crm" element={<CRM />} />
+              <Route path="/vendas" element={<Sales />} />
+              <Route path="/faturamento" element={<Billing />} />
+              <Route path="/financeiro" element={<Finance />} />
+              <Route path="/estoque" element={<Inventory />} />
+              <Route path="/compras" element={<Purchasing />} />
+              <Route path="/cadastros" element={<Cadastros />} />
+              <Route path="/organizacoes" element={<Organizations />} />
+              <Route path="/usuarios" element={<Users />} />
+              <Route path="/cargos" element={<Roles />} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            </Route>
           </Route>
+
+
 
           {/* 3. Fallback */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

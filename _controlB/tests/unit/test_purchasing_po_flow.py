@@ -166,6 +166,69 @@ def test_receive_purchase_order_shipment_success():
             db_order=mock_order,
             invoice_number="NF-e 123456",
             received_by_id=user_id,
+            invoice_attachment=None,
             received_at=None,
             notes="Itens conferidos sem avarias no almoxarifado central"
         )
+
+
+def test_create_purchase_request_success():
+    """Valida a emissão de solicitação de compra sem necessidade de organization_id no body."""
+    from controlb.modules.purchasing.service import create_purchase_request
+    db_mock = MagicMock()
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    prod_id = uuid.uuid4()
+
+    mock_user = User(id=user_id, organization_id=org_id, email="solicitante@controlb.com")
+
+    mock_prod = models.Product(
+        id=prod_id,
+        organization_id=org_id,
+        name="Dipirona 500mg",
+        sku="MED-DIP-0001",
+        current_stock=Decimal("5.00"),
+        min_stock=Decimal("10.00"),
+        reference_price=Decimal("4.50"),
+        is_active=True
+    )
+
+    payload = schemas.PurchaseRequestCreate(
+        justification="Reposição urgente de estoque da farmácia",
+        items=[
+            schemas.PurchaseRequestItemCreate(
+                product_id=prod_id,
+                quantity=Decimal("20.00"),
+                estimated_unit_price=Decimal("4.50"),
+                notes="Frascos de 20ml"
+            )
+        ]
+    )
+    # Atribuído pelo endpoint a partir do usuário autenticado
+    payload.organization_id = org_id
+
+    mock_created_pr = models.PurchaseRequest(
+        id=uuid.uuid4(),
+        organization_id=org_id,
+        requester_id=user_id,
+        request_number="SC-2026-0001",
+        status="pending_approval",
+        total_estimated_amount=Decimal("90.00"),
+        justification=payload.justification
+    )
+
+    with patch("controlb.modules.purchasing.service.repository.get_product_by_id", return_value=mock_prod), \
+         patch("controlb.modules.purchasing.service.repository.count_purchase_requests_in_year", return_value=0), \
+         patch("controlb.modules.purchasing.service.repository.create_purchase_request", return_value=mock_created_pr) as mock_create_repo:
+
+        result = create_purchase_request(
+            db=db_mock,
+            current_user=mock_user,
+            request_data=payload
+        )
+
+        assert result.status == "pending_approval"
+        assert result.request_number == "SC-2026-0001"
+        assert result.total_estimated_amount == Decimal("90.00")
+        mock_create_repo.assert_called_once()
+

@@ -1,111 +1,62 @@
 """
-service.py - Camada de Regras de Negócio, Permissões e Segurança (RBAC)
+service.py - Camada de Regras de Negócio de Identidade (Usuários, Cargos, Organizações)
 
 Responsabilidades:
-1. Hashing e verificação de senhas com algoritmo Argon2 (padrão OWASP).
-2. Geração e decodificação de tokens JWT assinados (PyJWT).
-3. Catálogo e Seed automático de permissões padrão do ControlB.
-4. Validação de regras de negócio de Usuários, Cargos, Organizações e Permissões.
-5. Dependências FastAPI de autorização: 'get_current_user' e 'require_permission'.
+1. Validação de regras de negócio de Usuários (criação, edição, exclusão, verificação de e-mail).
+2. Validação de regras de negócio de Organizações (criação e exclusão).
+3. Validação de regras de negócio de Cargos e Matriz de Permissões RBAC.
+4. Re-exportação de utilitários de segurança e autenticação a partir de 'security.py'.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Callable
-import jwt
-from pwdlib import PasswordHash
 from sqlalchemy.orm import Session
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import HTTPException, status
 
-from controlb.db import get_db
-from controlb.config import get_settings
 from controlb.modules.identity import repository
-from controlb.modules.identity.models import User, Permission
+from controlb.modules.identity.models import User
 from controlb.modules.identity.schemas import (
     UserCreate, UserUpdate,
     OrganizationCreate, OrganizationUpdate,
     RoleCreate, RoleUpdate
 )
 
-# Carrega as configurações de segurança
-settings = get_settings()
+# Re-exporta utilitários e guards de segurança a partir de security.py
+from controlb.modules.identity.security import (
+    DEFAULT_PERMISSIONS,
+    seed_default_permissions,
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    get_user_permissions,
+    get_current_user,
+    require_permission,
+    oauth2_scheme,
+    password_hash,
+)
 
-# Inicializa o hasher com o algoritmo recomendado pelo pwdlib (Argon2)
-password_hash = PasswordHash.recommended()
-
-
-# ==============================================================================
-# 0. CATÁLOGO DE PERMISSÕES PADRÃO DO SISTEMA (Default Seeds)
-# ==============================================================================
-
-DEFAULT_PERMISSIONS = [
-    # Dashboard
-    {"code": "dashboard:view", "name": "Visualizar Dashboard", "module": "Dashboard", "description": "Acesso aos gráficos e KPIs executivos"},
-    {"code": "dashboard:export", "name": "Exportar Relatórios", "module": "Dashboard", "description": "Permissão para exportar dados e planilhas"},
-
-    # Usuários & Perfis
-    {"code": "users:view", "name": "Visualizar Usuários", "module": "Usuários", "description": "Consultar a lista e perfil de colaboradores"},
-    {"code": "users:create", "name": "Cadastrar Usuários", "module": "Usuários", "description": "Criar novos usuários e acessos no sistema"},
-    {"code": "users:edit", "name": "Editar Usuários", "module": "Usuários", "description": "Editar informações, cargos e senhas de usuários"},
-    {"code": "users:delete", "name": "Desvincular/Excluir Usuários", "module": "Usuários", "description": "Excluir permanentemente contas de usuários"},
-
-    # Organizações
-    {"code": "organizations:view", "name": "Visualizar Organizações", "module": "Organizações", "description": "Consultar empresas e filiais"},
-    {"code": "organizations:manage", "name": "Gerenciar Organizações", "module": "Organizações", "description": "Cadastrar, editar e excluir empresas e filiais"},
-
-    # Cargos & Matriz de Permissões
-    {"code": "roles:view", "name": "Visualizar Cargos", "module": "Cargos", "description": "Consultar os cargos existentes"},
-    {"code": "roles:manage", "name": "Gerenciar Cargos e Permissões", "module": "Cargos", "description": "Criar cargos e configurar a matriz de permissões"},
-
-    # Catálogo de Produtos & Estoque (Módulos Futuros)
-    {"code": "products:view", "name": "Visualizar Catálogo de Produtos", "module": "Estoque", "description": "Consultar produtos e insumos"},
-    {"code": "products:manage", "name": "Gerenciar Produtos", "module": "Estoque", "description": "Cadastrar e alterar produtos"},
+__all__ = [
+    "DEFAULT_PERMISSIONS",
+    "seed_default_permissions",
+    "verify_password",
+    "get_password_hash",
+    "create_access_token",
+    "get_user_permissions",
+    "get_current_user",
+    "require_permission",
+    "oauth2_scheme",
+    "create_new_user",
+    "update_user",
+    "delete_user",
+    "create_new_organization",
+    "delete_organization",
+    "create_new_role",
+    "update_role",
+    "delete_role",
 ]
 
 
-def seed_default_permissions(db: Session) -> None:
-    """Garante que todas as permissões padrão existam no banco de dados."""
-    for perm_data in DEFAULT_PERMISSIONS:
-        repository.create_permission_if_not_exists(
-            db=db,
-            code=perm_data["code"],
-            name=perm_data["name"],
-            module=perm_data["module"],
-            description=perm_data["description"]
-        )
-
-
 # ==============================================================================
-# 1. FUNÇÕES DE CRIPTOGRAFIA E TOKENS JWT
-# ==============================================================================
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifica se a senha em texto claro bate com o hash criptografado salvo no banco."""
-    return password_hash.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str) -> str:
-    """Transforma a senha em texto claro em um hash irreversível utilizando Argon2."""
-    return password_hash.hash(password)
-
-
-def create_access_token(data: dict) -> str:
-    """Gera um token JWT assinado digitalmente com tempo de expiração."""
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    to_encode.update({"exp": expire})
-    
-    encoded_jwt = jwt.encode(
-        to_encode, 
-        settings.secret_key, 
-        algorithm=settings.algorithm
-    )
-    return encoded_jwt
-
-
-# ==============================================================================
-# 2. REGRAS DE NEGÓCIO DE USUÁRIOS
+# 1. REGRAS DE NEGÓCIO DE USUÁRIOS
 # ==============================================================================
 
 def create_new_user(db: Session, user_data: UserCreate):
@@ -195,7 +146,7 @@ def delete_user(db: Session, user_id: uuid.UUID, current_user_id: uuid.UUID):
 
 
 # ==============================================================================
-# 3. REGRAS DE NEGÓCIO DE ORGANIZAÇÃO
+# 2. REGRAS DE NEGÓCIO DE ORGANIZAÇÃO
 # ==============================================================================
 
 def create_new_organization(db: Session, organization_data: OrganizationCreate):
@@ -222,7 +173,7 @@ def delete_organization(db: Session, organization_id: uuid.UUID):
 
 
 # ==============================================================================
-# 4. REGRAS DE NEGÓCIO DE CARGOS E PERMISSÕES (RBAC)
+# 3. REGRAS DE NEGÓCIO DE CARGOS E PERMISSÕES (RBAC)
 # ==============================================================================
 
 def create_new_role(db: Session, role_data: RoleCreate):
@@ -274,64 +225,3 @@ def delete_role(db: Session, role_id: uuid.UUID):
         )
     repository.delete_role(db, db_role)
     return {"message": "Cargo excluído com sucesso."}
-
-
-def get_user_permissions(user: User) -> list[str]:
-    """Extrai e retorna a lista de códigos de permissões ativas de um usuário."""
-    if not user.role or not user.role.is_active:
-        return []
-    return [p.code for p in user.role.permissions if p.is_active]
-
-
-# ==============================================================================
-# 5. DEPENDÊNCIAS DE SEGURANÇA E AUTORIZAÇÃO (Guards)
-# ==============================================================================
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="identity/token")
-
-
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    """Guarda de Autenticação (AuthN): Valida o token JWT e retorna o usuário logado."""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Credenciais inválidas ou token expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.secret_key,
-            algorithms=[settings.algorithm]
-        )
-        user_id_str: str = payload.get("sub")
-        if user_id_str is None:
-            raise credentials_exception
-            
-        user_id = uuid.UUID(user_id_str)
-        
-    except (jwt.PyJWTError, ValueError):
-        raise credentials_exception
-    
-    user = repository.get_user_by_id(db, id=user_id)
-    if user is None or not user.is_active:
-        raise credentials_exception
-        
-    return user
-
-
-def require_permission(permission_code: str) -> Callable:
-    """
-    Guarda de Autorização (AuthZ):
-    Garante que o usuário autenticado possua o código de permissão necessário.
-    Caso contrário, bloqueia com HTTP 403 Forbidden.
-    """
-    def permission_checker(current_user: User = Depends(get_current_user)) -> User:
-        user_perms = get_user_permissions(current_user)
-        if permission_code not in user_perms:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Acesso negado: Você não possui a permissão '{permission_code}'."
-            )
-        return current_user
-
-    return permission_checker

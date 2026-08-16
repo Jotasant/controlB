@@ -18,6 +18,8 @@ from fastapi import HTTPException, status
 
 from controlb.modules.purchasing import models, schemas, repository
 from controlb.modules.identity.models import User
+from controlb.modules.inventory import service as inventory_service
+
 
 
 def utcnow() -> datetime:
@@ -147,6 +149,44 @@ def list_categories(db: Session, organization_id: uuid.UUID) -> list[models.Prod
 def create_new_category(db: Session, category_data: schemas.ProductCategoryCreate) -> models.ProductCategory:
     """Cria uma nova categoria de produto."""
     return repository.create_product_category(db, category_data=category_data)
+
+
+def update_category_data(
+    db: Session,
+    category_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    category_data: schemas.ProductCategoryUpdate
+) -> models.ProductCategory:
+    """Atualiza dados cadastrais da categoria de produto."""
+    db_cat = repository.get_product_category_by_id(db, category_id=category_id, organization_id=organization_id)
+    if not db_cat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Categoria de produto não encontrada."
+        )
+    return repository.update_product_category(db, db_category=db_cat, category_data=category_data)
+
+
+def delete_category_record(
+    db: Session,
+    category_id: uuid.UUID,
+    organization_id: uuid.UUID
+) -> dict:
+    """Exclui uma categoria de produto se não houver produtos vinculados."""
+    db_cat = repository.get_product_category_by_id(db, category_id=category_id, organization_id=organization_id)
+    if not db_cat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Categoria de produto não encontrada."
+        )
+    if db_cat.products and len(db_cat.products) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Não é possível excluir esta categoria pois ela possui {len(db_cat.products)} produto(s) vinculado(s)."
+        )
+    repository.delete_product_category(db, db_category=db_cat)
+    return {"detail": "Categoria de produto excluída com sucesso."}
+
 
 
 def list_products(db: Session, organization_id: uuid.UUID) -> list[models.Product]:
@@ -359,7 +399,11 @@ def update_purchase_request_data(
 
 
 def delete_purchase_request_record(db: Session, request_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
-    """Exclui ou cancela uma solicitação de compra."""
+    """
+    Exclui permanentemente uma solicitação de compra em qualquer status,
+    limpando vínculos de ordens de compra e disparando deleção em cascata
+    de itens, processos de cotação e eventos de aprovação.
+    """
     db_request = repository.get_purchase_request_by_id(db, request_id=request_id, organization_id=organization_id)
     if not db_request:
         raise HTTPException(
@@ -367,8 +411,39 @@ def delete_purchase_request_record(db: Session, request_id: uuid.UUID, organizat
             detail="Solicitação de compra não encontrada."
         )
 
+    # 1. Desvincula ordens de compra para evitar conflito de chave estrangeira
+    orders = repository.get_purchase_orders_by_request_id(db, request_id=request_id, organization_id=organization_id)
+    for o in orders:
+        o.purchase_request_id = None
+        o.supplier_quote_id = None
+
+    # 2. Remove a solicitação (itens, aprovações e cotação são removidos em cascata)
+    req_number = db_request.request_number
     repository.delete_purchase_request(db, db_request=db_request)
-    return {"detail": "Solicitação de compra excluída com sucesso."}
+    return {"detail": f"Solicitação {req_number} excluída com sucesso."}
+
+
+def purge_purchase_requests(db: Session, organization_id: uuid.UUID, request_ids: list[uuid.UUID] | None = None) -> dict:
+    """
+    Rotina de limpeza de desenvolvimento: exclui múltiplas ou todas as solicitações de compra.
+    """
+    query = db.query(models.PurchaseRequest).filter(models.PurchaseRequest.organization_id == organization_id)
+    if request_ids:
+        query = query.filter(models.PurchaseRequest.id.in_(request_ids))
+    
+    requests = query.all()
+    count = len(requests)
+    
+    for r in requests:
+        orders = repository.get_purchase_orders_by_request_id(db, request_id=r.id, organization_id=organization_id)
+        for o in orders:
+            o.purchase_request_id = None
+            o.supplier_quote_id = None
+        db.delete(r)
+    
+    db.commit()
+    return {"detail": f"{count} solicitação(ões) de compra excluída(s) com sucesso.", "deleted_count": count}
+
 
 
 def cancel_purchase_request(db: Session, request_id: uuid.UUID, organization_id: uuid.UUID) -> models.PurchaseRequest:
@@ -624,14 +699,35 @@ def receive_purchase_order_shipment(
             detail=f"Não é possível receber uma ordem que se encontra no status '{db_order.status}'."
         )
 
-    return repository.receive_purchase_order(
+    received_order = repository.receive_purchase_order(
         db=db,
         db_order=db_order,
         invoice_number=data.invoice_number.strip(),
         received_by_id=current_user.id,
+        invoice_attachment=data.invoice_attachment,
         received_at=data.received_at,
         notes=data.notes
     )
+
+    # Notifica o módulo de Inventário para dar entrada física nos produtos recebidos
+    for item in received_order.items:
+        inventory_service.register_purchase_receipt(
+            db=db,
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            unit_cost=item.unit_price,
+            reference_doc=f"{received_order.order_number} / NF {data.invoice_number.strip()}",
+            invoice_attachment=data.invoice_attachment,
+            notes=f"Entrada por recebimento de Ordem de Compra. Fornecedor: {received_order.supplier.name if received_order.supplier else ''}"
+        )
+
+    db.commit()
+    db.refresh(received_order)
+    return received_order
+
+
 
 
 def list_purchase_orders(
@@ -680,9 +776,76 @@ def cancel_purchase_order(
     return repository.update_purchase_order_status(db, db_order=db_order, new_status="cancelled")
 
 
+def delete_purchase_order_record(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
+    """Exclui permanentemente uma ordem de compra e seus itens vinculados."""
+    db_order = repository.get_purchase_order_by_id(db, order_id=order_id, organization_id=organization_id)
+    if not db_order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ordem de compra não encontrada."
+        )
+
+    num = db_order.order_number
+    repository.delete_purchase_order(db, db_order=db_order)
+    return {"detail": f"Ordem de compra {num} excluída com sucesso."}
+
+
+def purge_purchase_orders(db: Session, organization_id: uuid.UUID, order_ids: list[uuid.UUID] | None = None) -> dict:
+    """Rotina de limpeza de desenvolvimento: exclui ordens de compra de teste."""
+    query = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.organization_id == organization_id)
+    if order_ids:
+        query = query.filter(models.PurchaseOrder.id.in_(order_ids))
+    
+    orders = query.all()
+    count = len(orders)
+    for o in orders:
+        db.delete(o)
+    db.commit()
+    return {"detail": f"{count} ordem(ns) de compra excluída(s) com sucesso.", "deleted_count": count}
+
+
+def delete_quotation_record(db: Session, quotation_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
+    """Exclui permanentemente um processo de cotação e propostas vinculadas."""
+    quot = repository.get_quotation_process_by_id(db, quotation_id=quotation_id, organization_id=organization_id)
+    if not quot:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Processo de cotação não encontrado."
+        )
+
+    # Desvincula ordens de compra que apontavam para propostas desta cotação
+    for q in quot.quotes:
+        orders = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.supplier_quote_id == q.id).all()
+        for o in orders:
+            o.supplier_quote_id = None
+
+    num = quot.quotation_number
+    repository.delete_quotation_process(db, quotation=quot)
+    return {"detail": f"Cotação {num} excluída com sucesso."}
+
+
+def purge_quotations(db: Session, organization_id: uuid.UUID, quotation_ids: list[uuid.UUID] | None = None) -> dict:
+    """Rotina de limpeza de desenvolvimento: exclui cotações de teste."""
+    query = db.query(models.QuotationProcess).filter(models.QuotationProcess.organization_id == organization_id)
+    if quotation_ids:
+        query = query.filter(models.QuotationProcess.id.in_(quotation_ids))
+    
+    quots = query.all()
+    count = len(quots)
+    for quot in quots:
+        for q in quot.quotes:
+            orders = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.supplier_quote_id == q.id).all()
+            for o in orders:
+                o.supplier_quote_id = None
+        db.delete(quot)
+    db.commit()
+    return {"detail": f"{count} cotação(ões) excluída(s) com sucesso.", "deleted_count": count}
+
+
 # ==============================================================================
 # 6. SERVIÇOS DE PROCESSOS DE COTAÇÃO (RFQ) E MAPA COMPARATIVO
 # ==============================================================================
+
 
 def generate_quotation_number(db: Session, organization_id: uuid.UUID) -> str:
     """Gera o próximo número sequencial da Cotação (Ex: COT-2026-0001)."""
@@ -1106,5 +1269,147 @@ def delete_supplier_quote(
         repository.update_quotation_process_status(db, db_process=db_process, new_status="open")
 
     return {"detail": "Proposta comercial removida com sucesso."}
+
+
+# ==============================================================================
+# 9. FLUXO ÁGIL: MOTOR DE SUGESTÕES DE COMPRA & CONTROLE DE INVENTÁRIO
+# ==============================================================================
+
+def generate_replenishment_suggestions(
+    db: Session,
+    organization_id: uuid.UUID
+) -> schemas.PurchaseSuggestionsSummary:
+    """
+    Motor de Sugestões de Compra (Replenishment Engine):
+    Varre os produtos da organização identificando itens com saldo <= estoque mínimo.
+    Calcula a necessidade de reposição = max_stock - current_stock.
+    Classifica urgência:
+    - 'critical': estoque zerado ou negativo
+    - 'high': estoque <= 50% do mínimo
+    - 'medium': estoque <= estoque mínimo
+    """
+    # Consulta os produtos que estão no ponto de reposição diretamente do serviço de Inventário
+    products = inventory_service.get_replenishment_candidates(db, organization_id=organization_id)
+    
+    suggestion_items: list[schemas.PurchaseSuggestionItem] = []
+    critical_count = 0
+    total_cost = Decimal("0.00")
+
+    for prod in products:
+        current = prod.current_stock or Decimal("0.0000")
+        min_s = prod.min_stock or Decimal("0.00")
+        
+        # Se max_stock definido e coerente, usa ele; senão usa dobro do mínimo ou 10
+        if prod.max_stock and prod.max_stock > min_s:
+            target_stock = prod.max_stock
+        elif min_s > Decimal("0.00"):
+            target_stock = min_s * Decimal("2.0")
+        else:
+            target_stock = Decimal("10.00")
+
+        suggested_qty = target_stock - current
+        if suggested_qty <= Decimal("0.00"):
+            suggested_qty = min_s if min_s > Decimal("0.00") else Decimal("1.00")
+
+        ref_price = prod.reference_price or Decimal("0.0000")
+        est_total = suggested_qty * ref_price
+        total_cost += est_total
+
+        # Nível de urgência
+        if current <= Decimal("0.00"):
+            urgency = "critical"
+            critical_count += 1
+        elif min_s > Decimal("0.00") and current <= (min_s / Decimal("2.0")):
+            urgency = "high"
+        else:
+            urgency = "medium"
+
+        suggestion_items.append(
+            schemas.PurchaseSuggestionItem(
+                product_id=prod.id,
+                product_name=prod.name,
+                sku=prod.sku,
+                category_name=prod.category.name if prod.category else None,
+                brand=prod.brand,
+                unit_of_measure=prod.unit_of_measure,
+                current_stock=current,
+                min_stock=min_s,
+                max_stock=prod.max_stock,
+                suggested_quantity=suggested_qty,
+                reference_price=ref_price,
+                estimated_total=est_total,
+                urgency_level=urgency,
+                storage_location=prod.storage_location
+            )
+        )
+
+    # Ordena: críticos primeiro, depois high, depois medium
+    urgency_order = {"critical": 0, "high": 1, "medium": 2}
+    suggestion_items.sort(key=lambda item: (urgency_order.get(item.urgency_level, 3), item.product_name))
+
+    return schemas.PurchaseSuggestionsSummary(
+        total_suggestions=len(suggestion_items),
+        critical_count=critical_count,
+        estimated_total_cost=total_cost,
+        items=suggestion_items
+    )
+
+
+def create_quick_replenishment_order(
+    db: Session,
+    current_user: User,
+    data: schemas.QuickReplenishmentOrderCreate
+) -> models.PurchaseOrder:
+    """
+    Fluxo Ágil / Enxuto: Emite uma Ordem de Compra direta para um fornecedor
+    a partir de múltiplos itens de sugestão de reposição, sem exigir abertura prévia de PR.
+    """
+    supplier = repository.get_supplier_by_id(db, supplier_id=data.supplier_id, organization_id=current_user.organization_id)
+    if not supplier or not supplier.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O fornecedor selecionado não existe ou está inativo."
+        )
+
+    if not data.items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A ordem de reposição precisa conter pelo menos um produto selecionado."
+        )
+
+    items_total = sum(Decimal(str(item.quantity)) * Decimal(str(item.unit_price)) for item in data.items)
+    freight = Decimal(str(data.freight_amount or 0))
+    discount = Decimal(str(data.discount_amount or 0))
+    total_order = items_total + freight - discount
+    if total_order < Decimal("0.00"):
+        total_order = Decimal("0.00")
+
+    order_number = generate_order_number(db, organization_id=current_user.organization_id)
+
+    order_payload = schemas.PurchaseOrderCreate(
+        organization_id=current_user.organization_id,
+        buyer_id=current_user.id,
+        purchase_request_id=None,  # Ordem direta de reposição
+        supplier_id=data.supplier_id,
+        cost_center_id=data.cost_center_id,
+        payment_terms=data.payment_terms or supplier.payment_terms or "30 DDL",
+        freight_type=data.freight_type or "CIF",
+        freight_amount=freight,
+        discount_amount=discount,
+        expected_delivery_date=data.expected_delivery_date,
+        notes=data.notes or "Pedido de Reposição Ágil de Estoque (Assistente de Compras)",
+        items=data.items
+    )
+
+    db_order = repository.create_purchase_order(
+        db=db,
+        order_number=order_number,
+        total_amount=total_order,
+        order_data=order_payload
+    )
+
+    return db_order
+
+
 
 

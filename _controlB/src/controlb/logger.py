@@ -11,7 +11,17 @@ import os
 import sys
 import logging
 import logging.config
+
+# Reconfigura stdout e stderr no Windows para UTF-8 sem falha de encoding de emojis
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 from controlb.config import ROOT_DIR
+
 
 # 1. Caminho dos logs e do arquivo de configuração
 LOGS_DIR = os.path.join(ROOT_DIR, "logs")

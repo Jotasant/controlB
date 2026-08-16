@@ -24,6 +24,12 @@ from controlb.db import get_db
 from controlb.logger import logger
 from controlb.modules.identity.api import router as identity_router
 from controlb.modules.purchasing.api import router as purchasing_router
+from controlb.modules.inventory.api import router as inventory_router
+from controlb.modules.crm.api import router as crm_router
+from controlb.modules.sales.api import router as sales_router
+from controlb.modules.billing.api import router as billing_router
+from controlb.modules.finance.api import router as finance_router
+
 
 # Carrega as configurações centralizadas
 settings = get_settings()
@@ -32,7 +38,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="API do ecossistema ControlB para compras, estoque, financeiro e indicadores.",
+    description="API do ecossistema ControlB para compras, estoque, CRM, vendas, faturamento e financeiro.",
 )
 
 # 2. Configuração do Middleware de CORS
@@ -126,6 +132,12 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
 
 # 7. Registro de Roteadores Modulares:
 app.include_router(identity_router)
+app.include_router(inventory_router, prefix="/inventory")
 app.include_router(purchasing_router)
+app.include_router(crm_router)
+app.include_router(sales_router)
+app.include_router(billing_router)
+app.include_router(finance_router)
 
 logger.info("🚀 Sistema ControlB API inicializado com sucesso e pronto para requisições.")
+

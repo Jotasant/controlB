@@ -23,6 +23,13 @@ class SupplierBase(BaseModel):
     name: str = Field(..., min_length=2, max_length=500, description="Razão Social / Nome Oficial")
     trade_name: str | None = Field(None, max_length=500, description="Nome Fantasia")
     cnpj_cpf: str = Field(..., min_length=11, max_length=100, description="CNPJ ou CPF do Fornecedor")
+    state_registration: str | None = Field(None, max_length=100, description="Inscrição Estadual")
+    contact_name: str | None = Field(None, max_length=200, description="Nome do Vendedor / Representante")
+    segments: str | None = Field(None, max_length=500, description="Categorias/Segmentos atendidos (ex: Medicamentos, Perfumaria)")
+    payment_terms: str | None = Field(None, max_length=200, description="Condição de Pagamento Padrão (ex: 30 DDL)")
+    min_order_amount: Decimal = Field(Decimal("0.00"), description="Valor Mínimo de Pedido (R$)")
+    anvisa_license: str | None = Field(None, max_length=200, description="AFE Anvisa / Alvará Sanitário")
+    notes: str | None = Field(None, description="Observações comerciais gerais")
     email: EmailStr | None = None
     phone: str | None = Field(None, max_length=100)
     address: str | None = Field(None, max_length=500)
@@ -34,7 +41,7 @@ class SupplierBase(BaseModel):
 
 class SupplierCreate(SupplierBase):
     """Payload para cadastro de um novo Fornecedor."""
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID | None = None
 
 
 class SupplierUpdate(BaseModel):
@@ -42,6 +49,13 @@ class SupplierUpdate(BaseModel):
     name: str | None = None
     trade_name: str | None = None
     cnpj_cpf: str | None = None
+    state_registration: str | None = None
+    contact_name: str | None = None
+    segments: str | None = None
+    payment_terms: str | None = None
+    min_order_amount: Decimal | None = None
+    anvisa_license: str | None = None
+    notes: str | None = None
     email: EmailStr | None = None
     phone: str | None = None
     address: str | None = None
@@ -77,7 +91,7 @@ class CostCenterBase(BaseModel):
 
 class CostCenterCreate(CostCenterBase):
     """Payload para criação de Centro de Custo."""
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID | None = None
 
 
 class CostCenterUpdate(BaseModel):
@@ -113,7 +127,7 @@ class ProductCategoryBase(BaseModel):
 
 class ProductCategoryCreate(ProductCategoryBase):
     """Payload para cadastro de Categoria."""
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID | None = None
 
 
 class ProductCategoryUpdate(BaseModel):
@@ -156,15 +170,16 @@ class ProductBase(BaseModel):
     requires_batch: bool = False
     shelf_life_days: int | None = Field(None, ge=1, description="Prazo de validade padrão em dias")
 
-    # Parâmetros de Estoque
+    # Parâmetros de Estoque & Saldo Atual
+    current_stock: Decimal = Field(default=Decimal("0.0000"), ge=0, description="Saldo físico atual em estoque")
     min_stock: Decimal = Field(default=Decimal("0.00"), ge=0, description="Estoque mínimo de segurança")
-    max_stock: Decimal | None = Field(None, ge=0, description="Estoque máximo")
+    max_stock: Decimal | None = Field(None, ge=0, description="Estoque máximo / Alvo de reposição")
     storage_location: str | None = None
 
 
 class ProductCreate(ProductBase):
     """Payload para cadastro de Produto."""
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID | None = None
 
 
 class ProductUpdate(BaseModel):
@@ -181,6 +196,7 @@ class ProductUpdate(BaseModel):
     is_perishable: bool | None = None
     requires_batch: bool | None = None
     shelf_life_days: int | None = None
+    current_stock: Decimal | None = None
     min_stock: Decimal | None = None
     max_stock: Decimal | None = None
     storage_location: str | None = None
@@ -266,13 +282,13 @@ class ApprovalActionRequest(BaseModel):
 class PurchaseRequestBase(BaseModel):
     """Atributos centrais da Solicitação de Compra."""
     cost_center_id: uuid.UUID | None = None
-    justification: str = Field(..., min_length=5, description="Motivo / justificativa da aquisição")
-    required_date: datetime | None = None
+    justification: str = Field(..., min_length=1, description="Motivo / justificativa da aquisição")
+    required_date: datetime | str | None = None
 
 
 class PurchaseRequestCreate(PurchaseRequestBase):
     """Payload para emissão de nova Solicitação de Compra com seus itens."""
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID | None = None
     items: list[PurchaseRequestItemCreate] = Field(..., min_length=1, description="Lista de itens solicitados")
 
 
@@ -280,7 +296,8 @@ class PurchaseRequestUpdate(BaseModel):
     """Payload para edição da solicitação em estado de rascunho."""
     cost_center_id: uuid.UUID | None = None
     justification: str | None = None
-    required_date: datetime | None = None
+    required_date: datetime | str | None = None
+
 
 
 class PurchaseRequestResponse(PurchaseRequestBase):
@@ -347,14 +364,15 @@ class PurchaseOrderBase(BaseModel):
 
 class PurchaseOrderCreate(PurchaseOrderBase):
     """Payload para emissão de Ordem de Compra."""
-    organization_id: uuid.UUID
-    buyer_id: uuid.UUID
+    organization_id: uuid.UUID | None = None
+    buyer_id: uuid.UUID | None = None
     items: list[PurchaseOrderItemCreate] = Field(..., min_length=1, description="Itens negociados")
 
 
 class PurchaseOrderReceive(BaseModel):
     """Payload para registro de recebimento físico de mercadoria."""
     invoice_number: str = Field(..., min_length=1, description="Número da Nota Fiscal / DANFE")
+    invoice_attachment: str | None = Field(None, description="Arquivo anexado da NF-e (PDF/XML/Imagem em base64 ou URL)")
     received_at: datetime | None = None
     notes: str | None = None
 
@@ -393,6 +411,7 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     status: str
     total_amount: Decimal
     invoice_number: str | None = None
+    invoice_attachment: str | None = None
     received_at: datetime | None = None
     received_by_id: uuid.UUID | None = None
     is_active: bool
@@ -524,3 +543,74 @@ class QuotationComparisonMatrix(BaseModel):
 class SelectWinnerQuoteRequest(BaseModel):
     """Payload para homologação da proposta vencedora e geração da PO."""
     notes: str | None = None
+
+
+# ==============================================================================
+# 9. ESQUEMAS DE INVENTÁRIO, MOVIMENTAÇÕES E SUGESTÕES DE REPOSIÇÃO (ÁGIL)
+# ==============================================================================
+
+class PurchaseSuggestionItem(BaseModel):
+    """Item sugerido pelo motor de reposição automática de estoque."""
+    product_id: uuid.UUID
+    product_name: str
+    sku: str
+    category_name: str | None = None
+    brand: str | None = None
+    unit_of_measure: str = "UN"
+    current_stock: Decimal
+    min_stock: Decimal
+    max_stock: Decimal | None = None
+    suggested_quantity: Decimal
+    reference_price: Decimal
+    estimated_total: Decimal
+    urgency_level: str  # critical (estoque <= 0), high (estoque <= min/2), medium (estoque <= min)
+    storage_location: str | None = None
+
+
+class PurchaseSuggestionsSummary(BaseModel):
+    """Resumo geral de sugestões de reposição ativas."""
+    total_suggestions: int
+    critical_count: int
+    estimated_total_cost: Decimal
+    items: list[PurchaseSuggestionItem]
+
+
+class QuickReplenishmentOrderCreate(BaseModel):
+    """Payload para emissão ágil de Ordem de Compra a partir de sugestões de compra."""
+    supplier_id: uuid.UUID
+    cost_center_id: uuid.UUID | None = None
+    payment_terms: str | None = "30 DDL"
+    freight_type: str | None = "CIF"
+    freight_amount: Decimal = Decimal("0.00")
+    discount_amount: Decimal = Decimal("0.00")
+    expected_delivery_date: datetime | None = None
+    notes: str | None = None
+    items: list[PurchaseOrderItemCreate]
+
+
+class StockAdjustmentCreate(BaseModel):
+    """Payload para ajuste manual / contagem de inventário."""
+    product_id: uuid.UUID
+    adjustment_type: str = Field("set_balance", description="'set_balance' (ajuste para saldo exato), 'add_stock' (incremento), 'remove_stock' (baixa)")
+    quantity: Decimal = Field(..., ge=0, description="Quantidade ajustada ou saldo físico contado")
+    unit_cost: Decimal | None = Field(default=Decimal("0.0000"), ge=0)
+    reason: str | None = "Inventário Físico"
+    notes: str | None = None
+
+
+class StockMovementResponse(BaseModel):
+    """Registro no extrato de movimentações de estoque."""
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str | None = None
+    sku: str | None = None
+    movement_type: str
+    quantity: Decimal
+    unit_cost: Decimal
+    balance_after: Decimal
+    reference_doc: str | None = None
+    notes: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

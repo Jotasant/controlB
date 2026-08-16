@@ -65,22 +65,28 @@ else {
 Write-Host "`n2. Parando containers Docker..." -ForegroundColor Yellow
 Set-Location $ProjectRoot
 
-# Para o container do Nginx Proxy
-$nginxStatus = docker inspect --format='{{.State.Running}}' nginx-proxy 2>$null
-if ($nginxStatus -eq 'true') {
-    Write-Host "  -> Parando container nginx-proxy..." -ForegroundColor Yellow
-    docker stop nginx-proxy | Out-Null
-    Write-Host "[OK] Container nginx-proxy parado." -ForegroundColor Green
-}
-
-# Para os containers do Docker Compose (PostgreSQL)
-docker compose stop
-
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "[OK] Containers Docker parados com sucesso." -ForegroundColor Green
+docker info > $null 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[INFO] Docker Desktop nao esta em execucao. Containers ja estao inativos." -ForegroundColor Gray
 }
 else {
-    Write-Host "[ERRO] Erro ao parar os containers Docker." -ForegroundColor Red
+    # Para o container do Nginx Proxy
+    $nginxStatus = docker inspect --format='{{.State.Running}}' nginx-proxy 2>$null
+    if ($nginxStatus -eq 'true') {
+        Write-Host "  -> Parando container nginx-proxy..." -ForegroundColor Yellow
+        docker stop nginx-proxy | Out-Null
+        Write-Host "[OK] Container nginx-proxy parado." -ForegroundColor Green
+    }
+
+    # Para os containers do Docker Compose (PostgreSQL)
+    docker compose stop
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Containers Docker parados com sucesso." -ForegroundColor Green
+    }
+    else {
+        Write-Host "[ERRO] Erro ao parar os containers Docker." -ForegroundColor Red
+    }
 }
 
 Write-Host "`n========================================" -ForegroundColor Green

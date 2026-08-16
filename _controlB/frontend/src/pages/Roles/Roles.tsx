@@ -6,7 +6,6 @@ import React, { useEffect, useState } from 'react';
 import { Shield, Search, CheckCircle2, XCircle, RefreshCw, Plus } from 'lucide-react';
 import { identityService } from '@/services/api';
 import { Role } from '@/types';
-import { Navbar } from '@/components/Navbar';
 import './Roles.scss';
 
 export const Roles: React.FC = () => {
@@ -40,9 +39,8 @@ export const Roles: React.FC = () => {
 
   return (
     <div className="page-container">
-      <Navbar />
-
       <main className="page-content">
+
         <header className="page-header">
           <div>
             <h1>Cargos e Permissões</h1>

@@ -13,12 +13,12 @@ import {
   Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail,
   Loader2, AlertCircle, Trash2, Edit3, ShieldAlert, CheckSquare, Square
 } from 'lucide-react';
-import { identityService, authService } from '@/services/api';
+import { identityService, authService, formatApiError } from '@/services/api';
 import { User, Role, Organization, Permission } from '@/types';
-import { Navbar } from '@/components/Navbar';
 import { Modal } from '@/components/Modal/Modal';
 import { usePermissions } from '@/hooks/usePermissions';
 import './Cadastros.scss';
+
 
 type MenuOption = 'usuarios' | 'organizacoes' | 'cargos';
 
@@ -203,9 +203,7 @@ export const Cadastros: React.FC = () => {
       setIsModalOpen(false);
       await loadData();
     } catch (err: any) {
-      setModalError(
-        err.response?.data?.detail || err.message || 'Erro ao salvar o registro no servidor.'
-      );
+      setModalError(formatApiError(err, 'Erro ao salvar o registro no servidor.'));
     } finally {
       setIsSaving(false);
     }
@@ -232,12 +230,11 @@ export const Cadastros: React.FC = () => {
       setIsProfileModalOpen(false);
       await loadData();
     } catch (err: any) {
-      setModalError(
-        err.response?.data?.detail || err.message || 'Erro ao atualizar o perfil do usuário.'
-      );
+      setModalError(formatApiError(err, 'Erro ao atualizar o perfil do usuário.'));
     } finally {
       setIsSaving(false);
     }
+
   };
 
   // 4. Salvar Edição de Cargo & Permissões
@@ -364,9 +361,8 @@ export const Cadastros: React.FC = () => {
 
   return (
     <div className="cadastros-page">
-      <Navbar />
-
       <div className="cadastros-layout">
+
         
         {/* ========================================================= */}
         {/* 1. BARRA LATERAL ESQUERDA (Sidebar Protegida por RBAC)    */}

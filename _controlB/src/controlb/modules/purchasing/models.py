@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
+from controlb.modules.inventory.models import Product, ProductCategory
 
 
 def utcnow() -> datetime:
@@ -25,7 +26,7 @@ def utcnow() -> datetime:
 
 
 # ==============================================================================
-# 1. CADASTROS DE APOIO E CATÁLOGO DE NEGÓCIO
+# 1. CADASTROS DE APOIO COMERCIAIS (Supplier, CostCenter)
 # ==============================================================================
 
 class Supplier(Base):
@@ -39,6 +40,13 @@ class Supplier(Base):
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     trade_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     cnpj_cpf: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    state_registration: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    segments: Mapped[str | None] = mapped_column(String(500), nullable=True)  # ex: "Medicamentos, Perfumaria, Insumos Médicos"
+    payment_terms: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    min_order_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    anvisa_license: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     email: Mapped[str | None] = mapped_column(String(500), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(100), nullable=True)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -70,65 +78,9 @@ class CostCenter(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
-class ProductCategory(Base):
-    """
-    Tabela 'product_category' - Categorias de agrupamento de produtos e insumos.
-    """
-    __tablename__ = "product_category"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
-    name: Mapped[str] = mapped_column(String(500), nullable=False)
-    code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
-
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
-    # Relacionamento 1:N com produtos
-    products: Mapped[list["Product"]] = relationship(back_populates="category", cascade="all, delete-orphan")
-
-
-class Product(Base):
-    """
-    Tabela 'product' - Catálogo de produtos, insumos, medicamentos e matérias-primas.
-    """
-    __tablename__ = "product"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
-    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("product_category.id", ondelete="SET NULL"), nullable=True)
-    
-    sku: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    unit_of_measure: Mapped[str] = mapped_column(String(50), default="UN")  # UN, KG, L, CX, M, etc.
-    reference_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0.0000"))
-
-    # Rastreabilidade & Validade (Controle posterior)
-    brand: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    barcode: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
-    ncm: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    is_perishable: Mapped[bool] = mapped_column(Boolean, default=False)
-    requires_batch: Mapped[bool] = mapped_column(Boolean, default=False)
-    shelf_life_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    # Parâmetros de Estoque
-    min_stock: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
-    max_stock: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
-    storage_location: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
-    # Relacionamento N:1 com categoria
-    category: Mapped["ProductCategory | None"] = relationship(back_populates="products", lazy="selectin")
-
-
 # ==============================================================================
 # 2. FLUXO DE SOLICITAÇÃO DE COMPRA E APROVAÇÃO POR ALÇADA
+
 # ==============================================================================
 
 class PurchaseRequest(Base):
@@ -253,6 +205,7 @@ class PurchaseOrder(Base):
 
     # Faturamento e Recebimento Físico no Almoxarifado
     invoice_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    invoice_attachment: Mapped[str | None] = mapped_column(Text, nullable=True)  # Arquivo anexado da NF-e (PDF/XML/Imagem)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     received_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
 
@@ -395,4 +348,5 @@ class SupplierQuoteItem(Base):
     # Relacionamentos
     supplier_quote: Mapped["SupplierQuote"] = relationship(back_populates="items")
     product: Mapped["Product"] = relationship(lazy="selectin")
+
 

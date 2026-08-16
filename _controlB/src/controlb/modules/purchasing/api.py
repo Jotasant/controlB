@@ -150,6 +150,37 @@ def create_category(
     return service.create_new_category(db, category_data=category_data)
 
 
+@router.put("/categories/{category_id}", response_model=schemas.ProductCategoryResponse)
+def update_category(
+    category_id: uuid.UUID,
+    category_data: schemas.ProductCategoryUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Atualiza dados da categoria de produto."""
+    return service.update_category_data(
+        db,
+        category_id=category_id,
+        organization_id=current_user.organization_id,
+        category_data=category_data
+    )
+
+
+@router.delete("/categories/{category_id}", status_code=status.HTTP_200_OK)
+def delete_category(
+    category_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Remove a categoria de produto do sistema."""
+    return service.delete_category_record(
+        db,
+        category_id=category_id,
+        organization_id=current_user.organization_id
+    )
+
+
+
 @router.get("/products", response_model=list[schemas.ProductResponse])
 def get_products(
     db: Session = Depends(get_db),
@@ -265,12 +296,27 @@ def delete_purchase_request(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    """Cancela ou remove uma solicitação de compra."""
+    """Exclui permanentemente uma solicitação de compra em qualquer etapa."""
     return service.delete_purchase_request_record(
         db,
         request_id=request_id,
         organization_id=current_user.organization_id
     )
+
+
+@router.delete("/requests", status_code=status.HTTP_200_OK)
+def purge_all_purchase_requests(
+    request_ids: list[uuid.UUID] | None = Query(None, description="Lista opcional de IDs para remoção"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Rotina de desenvolvimento para limpar solicitações de teste."""
+    return service.purge_purchase_requests(
+        db,
+        organization_id=current_user.organization_id,
+        request_ids=request_ids
+    )
+
 
 
 @router.post("/requests/{request_id}/cancel", response_model=schemas.PurchaseRequestResponse)
@@ -393,9 +439,65 @@ def cancel_purchase_order(
     )
 
 
+@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK)
+def delete_purchase_order(
+    order_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Exclui permanentemente uma ordem de compra."""
+    return service.delete_purchase_order_record(
+        db,
+        order_id=order_id,
+        organization_id=current_user.organization_id
+    )
+
+
+@router.delete("/orders", status_code=status.HTTP_200_OK)
+def purge_all_purchase_orders(
+    order_ids: list[uuid.UUID] | None = Query(None, description="Lista opcional de IDs de ordens para remoção"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Rotina de desenvolvimento para limpar ordens de compra de teste."""
+    return service.purge_purchase_orders(
+        db,
+        organization_id=current_user.organization_id,
+        order_ids=order_ids
+    )
+
+
 # ==============================================================================
 # 6. ENDPOINTS DE PROCESSOS DE COTAÇÃO (RFQ) E MAPA COMPARATIVO
 # ==============================================================================
+
+@router.delete("/quotations/{quotation_id}", status_code=status.HTTP_200_OK)
+def delete_quotation(
+    quotation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Exclui permanentemente um processo de cotação e propostas vinculadas."""
+    return service.delete_quotation_record(
+        db,
+        quotation_id=quotation_id,
+        organization_id=current_user.organization_id
+    )
+
+
+@router.delete("/quotations", status_code=status.HTTP_200_OK)
+def purge_all_quotations(
+    quotation_ids: list[uuid.UUID] | None = Query(None, description="Lista opcional de IDs de cotações para remoção"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Rotina de desenvolvimento para limpar cotações de teste."""
+    return service.purge_quotations(
+        db,
+        organization_id=current_user.organization_id,
+        quotation_ids=quotation_ids
+    )
+
 
 @router.post("/requests/{request_id}/quotations", response_model=schemas.QuotationProcessResponse, status_code=status.HTTP_201_CREATED)
 def open_quotation_for_request(
@@ -533,4 +635,41 @@ def delete_supplier_quote(
         quotation_id=quotation_id,
         quote_id=quote_id
     )
+
+
+# ==============================================================================
+# 9. ENDPOINTS DE REPOSIÇÃO ÁGIL & CONTROLE DE INVENTÁRIO (ESTOQUE)
+# ==============================================================================
+
+@router.get("/suggestions", response_model=schemas.PurchaseSuggestionsSummary)
+def get_replenishment_suggestions(
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """
+    Motor de Sugestões de Compra (Replenishment Engine):
+    Retorna todos os produtos com estoque abaixo ou igual ao ponto de pedido (mínimo).
+    """
+    return service.generate_replenishment_suggestions(
+        db,
+        organization_id=current_user.organization_id
+    )
+
+
+@router.post("/orders/quick-replenishment", response_model=schemas.PurchaseOrderResponse, status_code=status.HTTP_201_CREATED)
+def create_quick_replenishment_order(
+    data: schemas.QuickReplenishmentOrderCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """
+    Emite diretamente uma Ordem de Compra oficial a partir de itens selecionados da sugestão de reposição.
+    """
+    return service.create_quick_replenishment_order(
+        db,
+        current_user=current_user,
+        data=data
+    )
+
+
 

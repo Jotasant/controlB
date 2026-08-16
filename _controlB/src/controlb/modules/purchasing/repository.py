@@ -15,6 +15,7 @@ import uuid
 from decimal import Decimal
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 
 from controlb.modules.purchasing.models import (
     Supplier, CostCenter, ProductCategory, Product, 
@@ -70,6 +71,13 @@ def create_supplier(db: Session, supplier_data: SupplierCreate) -> Supplier:
         name=supplier_data.name,
         trade_name=supplier_data.trade_name,
         cnpj_cpf=supplier_data.cnpj_cpf,
+        state_registration=supplier_data.state_registration,
+        contact_name=supplier_data.contact_name,
+        segments=supplier_data.segments,
+        payment_terms=supplier_data.payment_terms,
+        min_order_amount=supplier_data.min_order_amount,
+        anvisa_license=supplier_data.anvisa_license,
+        notes=supplier_data.notes,
         email=supplier_data.email,
         phone=supplier_data.phone,
         address=supplier_data.address,
@@ -261,6 +269,7 @@ def create_product(db: Session, product_data: ProductCreate) -> Product:
         is_perishable=product_data.is_perishable,
         requires_batch=product_data.requires_batch,
         shelf_life_days=product_data.shelf_life_days,
+        current_stock=product_data.current_stock or Decimal("0.0000"),
         min_stock=product_data.min_stock,
         max_stock=product_data.max_stock,
         storage_location=product_data.storage_location,
@@ -509,12 +518,14 @@ def receive_purchase_order(
     db_order: PurchaseOrder,
     invoice_number: str,
     received_by_id: uuid.UUID,
+    invoice_attachment: str | None = None,
     received_at: datetime | None = None,
     notes: str | None = None
 ) -> PurchaseOrder:
     """Registra o recebimento físico e faturamento da ordem de compra."""
     db_order.status = "received"
     db_order.invoice_number = invoice_number
+    db_order.invoice_attachment = invoice_attachment
     db_order.received_by_id = received_by_id
     db_order.received_at = received_at or datetime.now(timezone.utc)
     if notes:
@@ -550,9 +561,22 @@ def update_purchase_order_status(
     return db_order
 
 
+def delete_purchase_order(db: Session, db_order: PurchaseOrder) -> None:
+    """Remove a ordem de compra e seus itens em cascata."""
+    db.delete(db_order)
+    db.commit()
+
+
+def delete_quotation_process(db: Session, quotation: QuotationProcess) -> None:
+    """Remove o processo de cotação e propostas em cascata."""
+    db.delete(quotation)
+    db.commit()
+
+
 # ==============================================================================
 # 8. PROCESSOS DE COTAÇÃO (RFQ) E PROPOSTAS DE FORNECEDORES
 # ==============================================================================
+
 
 def count_quotation_processes_in_year(db: Session, organization_id: uuid.UUID, year: int) -> int:
     """Retorna o total de cotações abertas no ano para geração do número sequencial (COT-YYYY-XXXX)."""
@@ -708,4 +732,3 @@ def delete_supplier_quote(db: Session, db_quote: SupplierQuote) -> None:
     """Exclui permanentemente uma proposta comercial do fornecedor na cotação."""
     db.delete(db_quote)
     db.commit()
-

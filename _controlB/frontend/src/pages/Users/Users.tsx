@@ -6,7 +6,6 @@ import React, { useEffect, useState } from 'react';
 import { Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail } from 'lucide-react';
 import { identityService } from '@/services/api';
 import { User } from '@/types';
-import { Navbar } from '@/components/Navbar';
 import './Users.scss';
 
 export const Users: React.FC = () => {
@@ -40,9 +39,8 @@ export const Users: React.FC = () => {
 
   return (
     <div className="page-container">
-      <Navbar />
-
       <main className="page-content">
+
         <header className="page-header">
           <div>
             <h1>Gestão de Usuários</h1>

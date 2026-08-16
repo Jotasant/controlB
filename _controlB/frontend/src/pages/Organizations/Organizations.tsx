@@ -6,7 +6,6 @@ import React, { useEffect, useState } from 'react';
 import { Building2, Search, CheckCircle2, XCircle, RefreshCw, Plus } from 'lucide-react';
 import { identityService } from '@/services/api';
 import { Organization } from '@/types';
-import { Navbar } from '@/components/Navbar';
 import './Organizations.scss';
 
 export const Organizations: React.FC = () => {
@@ -39,9 +38,8 @@ export const Organizations: React.FC = () => {
 
   return (
     <div className="page-container">
-      <Navbar />
-
       <main className="page-content">
+
         <header className="page-header">
           <div>
             <h1>Gestão de Organizações</h1>

@@ -13,7 +13,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, Sun, Moon, ChevronDown, User,
-  LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart
+  LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart, Package,
+  Layers, Landmark, ReceiptText, Users, ShoppingBag
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
@@ -27,12 +28,14 @@ export const Navbar: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
   const { user, hasPermission, hasAnyPermission } = usePermissions();
 
-  // Estado do menu de perfil e menu de configurações
+  // Estado do menu de perfil, configurações e módulos
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [isModulesOpen, setIsModulesOpen] = useState(false);
 
   const profileRef = useRef<HTMLDivElement>(null);
   const configRef = useRef<HTMLDivElement>(null);
+  const modulesRef = useRef<HTMLDivElement>(null);
 
   // Fecha menus ao clicar fora ou mudar de rota
   useEffect(() => {
@@ -43,6 +46,9 @@ export const Navbar: React.FC = () => {
       if (configRef.current && !configRef.current.contains(event.target as Node)) {
         setIsConfigOpen(false);
       }
+      if (modulesRef.current && !modulesRef.current.contains(event.target as Node)) {
+        setIsModulesOpen(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -52,6 +58,7 @@ export const Navbar: React.FC = () => {
   useEffect(() => {
     setIsProfileOpen(false);
     setIsConfigOpen(false);
+    setIsModulesOpen(false);
   }, [location.pathname]);
 
   const handleLogout = () => {
@@ -74,6 +81,11 @@ export const Navbar: React.FC = () => {
     'roles:manage'
   ]);
 
+  // Verifica se está dentro de alguma rota de módulo para destacar o menu "Módulos"
+  const isModuleActive = ['/crm', '/vendas', '/faturamento', '/financeiro', '/estoque', '/compras'].some(path => 
+    location.pathname.startsWith(path)
+  );
+
   return (
     <header className="slim-navbar">
       {/* 1. Logotipo Oficial */}
@@ -81,7 +93,7 @@ export const Navbar: React.FC = () => {
         <Logo size={24} showText={true} />
       </div>
 
-      {/* 2. Links Principais Diretos (Filtrados por Permissões) */}
+      {/* 2. Links Principais Diretos e Menus Suspensos */}
       <nav className="navbar-links">
         {/* Link direto para o Dashboard */}
         {hasPermission('dashboard:view') && (
@@ -94,14 +106,100 @@ export const Navbar: React.FC = () => {
           </NavLink>
         )}
 
-        {/* 🛍️ Módulo de Compras (Purchasing) */}
-        <NavLink
-          to="/compras"
-          className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}
-        >
-          <ShoppingCart size={14} />
-          <span>Compras</span>
-        </NavLink>
+        {/* 🗂️ Menu Principal: Módulos (CRM, Vendas, Faturamento, Financeiro, Estoque, Compras) */}
+        <div className="dropdown-wrapper" ref={modulesRef}>
+          <button
+            type="button"
+            className={`nav-link dropdown-btn ${isModulesOpen || isModuleActive ? 'active' : ''}`}
+            onClick={() => setIsModulesOpen(!isModulesOpen)}
+          >
+            <Layers size={14} />
+            <span>Módulos</span>
+            <ChevronDown size={12} className={`arrow-icon ${isModulesOpen ? 'rotated' : ''}`} />
+          </button>
+
+          {isModulesOpen && (
+            <div className="dropdown-popover modules-popover">
+              {/* 👥 Módulo de CRM */}
+              <NavLink
+                to="/crm"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <Users size={16} className="icon-module icon-crm" />
+                <div className="item-text">
+                  <span className="title">CRM & Relacionamento</span>
+                  <span className="desc">Leads, oportunidades e pipeline</span>
+                </div>
+              </NavLink>
+
+              {/* 🛍️ Módulo de Vendas & PDV */}
+              <NavLink
+                to="/vendas"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <ShoppingBag size={16} className="icon-module icon-sales" />
+                <div className="item-text">
+                  <span className="title">Vendas & Frente de Caixa</span>
+                  <span className="desc">Orçamentos, pedidos e PDV</span>
+                </div>
+              </NavLink>
+
+              {/* 🧾 Módulo de Faturamento */}
+              <NavLink
+                to="/faturamento"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <ReceiptText size={16} className="icon-module icon-billing" />
+                <div className="item-text">
+                  <span className="title">Faturamento & Notas</span>
+                  <span className="desc">Faturas comerciais e NF-e/NFC-e</span>
+                </div>
+              </NavLink>
+
+              {/* 💰 Módulo Financeiro */}
+              <NavLink
+                to="/financeiro"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <Landmark size={16} className="icon-module icon-finance" />
+                <div className="item-text">
+                  <span className="title">Gestão Financeira</span>
+                  <span className="desc">Contas a pagar/receber e bancos</span>
+                </div>
+              </NavLink>
+
+              {/* 📦 Módulo de Estoque */}
+              <NavLink
+                to="/estoque"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <Package size={16} className="icon-module icon-inventory" />
+                <div className="item-text">
+                  <span className="title">Estoque & Almoxarifado</span>
+                  <span className="desc">Saldos físicos e movimentações</span>
+                </div>
+              </NavLink>
+
+              {/* 🛒 Módulo de Compras */}
+              <NavLink
+                to="/compras"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <ShoppingCart size={16} className="icon-module icon-purchasing" />
+                <div className="item-text">
+                  <span className="title">Compras & Suprimentos</span>
+                  <span className="desc">Solicitações, cotações e ordens</span>
+                </div>
+              </NavLink>
+            </div>
+          )}
+        </div>
 
         {/* Menu Pai: Configurações com Dropdown (Ocultado se o usuário não tiver permissão) */}
         {canAccessSettings && (

@@ -15,12 +15,26 @@ from alembic import context
 # 1. Importações dos modelos do projeto para detecção automática de alterações de schema (autogenerate)
 from controlb.db import Base
 from controlb.modules.identity.models import Organization, Role, User, Permission
+from controlb.modules.inventory.models import ProductCategory, Product, StockMovement
 from controlb.modules.purchasing.models import (
-    Supplier, CostCenter, ProductCategory, Product, 
+    Supplier, CostCenter, 
     PurchaseRequest, PurchaseRequestItem, ApprovalEvent, 
-    PurchaseOrder, PurchaseOrderItem
+    PurchaseOrder, PurchaseOrderItem,
+    QuotationProcess, SupplierQuote, SupplierQuoteItem
 )
+from controlb.modules.finance.models import (
+    FinancialCategory, BankAccount, FiscalDocument,
+    Payable, PaymentInstrument, Payment, PaymentAttachment,
+    BankTransaction, Reconciliation, Receivable, Receipt, SalesReport
+)
+from controlb.modules.crm.models import Lead, Opportunity, CustomerInteraction
+from controlb.modules.sales.models import (
+    SalesQuote, SalesQuoteItem, SalesOrder, SalesOrderItem,
+    POSSession, POSSale, POSSaleItem
+)
+from controlb.modules.billing.models import Invoice, InvoiceInstallment
 from controlb.config import get_settings
+
 
 # Carrega as configurações de logging definidas no alembic.ini
 config = context.config

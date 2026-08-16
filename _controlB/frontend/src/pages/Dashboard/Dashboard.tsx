@@ -16,9 +16,9 @@ import {
 } from 'recharts';
 import { identityService } from '@/services/api';
 import { User, Role, Organization } from '@/types';
-import { Navbar } from '@/components/Navbar';
 import { usePermissions } from '@/hooks/usePermissions';
 import './Dashboard.scss';
+
 
 // Dados de Exemplo para os Gráficos Analíticos
 const dadosCompras = [
@@ -111,9 +111,8 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="dashboard-page">
-      <Navbar />
-
       <main className="dashboard-content">
+
         {/* Cabeçalho Executivo Slim */}
         <header className="page-header">
           <div className="header-titles">
