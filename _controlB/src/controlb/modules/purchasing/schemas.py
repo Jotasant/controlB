@@ -141,12 +141,25 @@ class ProductCategoryResponse(ProductCategoryBase):
 
 class ProductBase(BaseModel):
     """Atributos base do Produto."""
-    sku: str = Field(..., min_length=1, max_length=100, description="Código SKU único interno")
+    sku: str | None = Field(None, max_length=100, description="Código SKU único interno (gerado automaticamente se omitido)")
     name: str = Field(..., min_length=2, max_length=500, description="Nome do Produto / Insumo")
     description: str | None = None
     unit_of_measure: str = Field("UN", max_length=50, description="Unidade de Medida (UN, KG, L, CX, M)")
     reference_price: Decimal = Field(default=Decimal("0.0000"), ge=0, description="Preço unitário base/referência")
     category_id: uuid.UUID | None = None
+
+    # Rastreabilidade & Validade
+    brand: str | None = None
+    barcode: str | None = None
+    ncm: str | None = None
+    is_perishable: bool = False
+    requires_batch: bool = False
+    shelf_life_days: int | None = Field(None, ge=1, description="Prazo de validade padrão em dias")
+
+    # Parâmetros de Estoque
+    min_stock: Decimal = Field(default=Decimal("0.00"), ge=0, description="Estoque mínimo de segurança")
+    max_stock: Decimal | None = Field(None, ge=0, description="Estoque máximo")
+    storage_location: str | None = None
 
 
 class ProductCreate(ProductBase):
@@ -162,6 +175,15 @@ class ProductUpdate(BaseModel):
     unit_of_measure: str | None = None
     reference_price: Decimal | None = None
     category_id: uuid.UUID | None = None
+    brand: str | None = None
+    barcode: str | None = None
+    ncm: str | None = None
+    is_perishable: bool | None = None
+    requires_batch: bool | None = None
+    shelf_life_days: int | None = None
+    min_stock: Decimal | None = None
+    max_stock: Decimal | None = None
+    storage_location: str | None = None
     is_active: bool | None = None
 
 
@@ -211,6 +233,8 @@ class PurchaseRequstItemUpdate(BaseModel):
     quantity: Decimal | None = Field(None, gt=0, description="Quantidade requisitada")
     estimated_unit_price: Decimal | None = Field(None, ge=0, description="Preço unitário estimado")
     notes: str | None = None
+    is_active: bool | None = None
+
 
 
 # ==============================================================================
@@ -312,8 +336,11 @@ class PurchaseOrderBase(BaseModel):
     supplier_id: uuid.UUID
     cost_center_id: uuid.UUID | None = None
     purchase_request_id: uuid.UUID | None = None
+    supplier_quote_id: uuid.UUID | None = None
     payment_terms: str | None = Field(None, description="Ex: 30 dias, À vista, 3x")
     freight_type: str | None = Field("CIF", description="CIF, FOB ou Sem Frete")
+    freight_amount: Decimal = Field(default=Decimal("0.00"), ge=0, description="Valor do frete em R$")
+    discount_amount: Decimal = Field(default=Decimal("0.00"), ge=0, description="Desconto negociado em R$")
     expected_delivery_date: datetime | None = None
     notes: str | None = None
 
@@ -325,11 +352,33 @@ class PurchaseOrderCreate(PurchaseOrderBase):
     items: list[PurchaseOrderItemCreate] = Field(..., min_length=1, description="Itens negociados")
 
 
+class PurchaseOrderReceive(BaseModel):
+    """Payload para registro de recebimento físico de mercadoria."""
+    invoice_number: str = Field(..., min_length=1, description="Número da Nota Fiscal / DANFE")
+    received_at: datetime | None = None
+    notes: str | None = None
+
+
+class GeneratePOFromRequest(BaseModel):
+    """Payload para conversão direta de uma Solicitação de Compra aprovada em Ordem de Compra."""
+    supplier_id: uuid.UUID
+    cost_center_id: uuid.UUID | None = None
+    payment_terms: str | None = Field(None, description="Ex: 30 dias, À vista")
+    freight_type: str | None = Field("CIF", description="CIF, FOB ou Sem Frete")
+    freight_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    discount_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    expected_delivery_date: datetime | None = None
+    notes: str | None = None
+    items: list[PurchaseOrderItemCreate] = Field(..., min_length=1, description="Linhas de itens com quantidades e preços negociados")
+
+
 class PurchaseOrderUpdate(BaseModel):
     """Payload para atualização de Ordem de Compra."""
     supplier_id: uuid.UUID | None = None
     payment_terms: str | None = None
     freight_type: str | None = None
+    freight_amount: Decimal | None = None
+    discount_amount: Decimal | None = None
     expected_delivery_date: datetime | None = None
     notes: str | None = None
     status: str | None = None
@@ -343,10 +392,135 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     order_number: str
     status: str
     total_amount: Decimal
+    invoice_number: str | None = None
+    received_at: datetime | None = None
+    received_by_id: uuid.UUID | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
     items: list[PurchaseOrderItemResponse] = []
     supplier: SupplierResponse | None = None
+    purchase_request: PurchaseRequestResponse | None = None
+    supplier_quote_id: uuid.UUID | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# 10. ESQUEMAS DE COTAÇÃO (RFQ) E PROPOSTAS DE FORNECEDORES
+# ==============================================================================
+
+class SupplierQuoteItemBase(BaseModel):
+    """Atributos de um item cotado por um fornecedor."""
+    product_id: uuid.UUID
+    quantity: Decimal = Field(..., gt=0)
+    unit_price: Decimal = Field(..., ge=0, description="Preço unitário cotado pelo fornecedor")
+    brand_offered: str | None = Field(None, description="Marca ou fabricante ofertado")
+    notes: str | None = None
+
+
+class SupplierQuoteItemCreate(SupplierQuoteItemBase):
+    """Payload para envio de item cotado."""
+    pass
+
+
+class SupplierQuoteItemResponse(SupplierQuoteItemBase):
+    """Resposta com dados do item cotado."""
+    id: uuid.UUID
+    supplier_quote_id: uuid.UUID
+    total_price: Decimal
+    product: ProductResponse | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupplierQuoteBase(BaseModel):
+    """Atributos da proposta comercial enviada por um fornecedor."""
+    supplier_id: uuid.UUID
+    quote_reference: str | None = Field(None, description="Número da proposta comercial do fornecedor")
+    payment_terms: str | None = Field("30 DDL", description="Ex: 30 DDL, À Vista, 30/60 Dias")
+    freight_type: str | None = Field("CIF", description="CIF, FOB ou Sem Frete")
+    freight_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    discount_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    lead_time_days: int | None = Field(None, ge=0, description="Prazo de entrega em dias úteis")
+    valid_until: datetime | None = None
+    notes: str | None = None
+
+
+class SupplierQuoteCreate(SupplierQuoteBase):
+    """Payload para registro de proposta de fornecedor em uma cotação."""
+    items: list[SupplierQuoteItemCreate] = Field(..., min_length=1, description="Lista de itens e preços cotados")
+
+
+class SupplierQuoteResponse(SupplierQuoteBase):
+    """Schema de resposta da proposta de um fornecedor."""
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    quotation_process_id: uuid.UUID
+    status: str  # pending, selected, rejected
+    total_amount: Decimal
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    items: list[SupplierQuoteItemResponse] = []
+    supplier: SupplierResponse | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuotationProcessBase(BaseModel):
+    """Atributos centrais do Processo de Cotação."""
+    purchase_request_id: uuid.UUID
+    notes: str | None = None
+
+
+class QuotationProcessCreate(QuotationProcessBase):
+    """Payload para abertura de processo de cotação a partir de uma SC aprovada."""
+    pass
+
+
+class QuotationProcessResponse(QuotationProcessBase):
+    """Schema de resposta do Processo de Cotação com suas propostas concorrentes."""
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    quotation_number: str
+    status: str  # open, analyzing, completed, cancelled
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    quotes: list[SupplierQuoteResponse] = []
+    purchase_request: PurchaseRequestResponse | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuotationComparisonItem(BaseModel):
+    """Item individual no mapa comparativo."""
+    product_id: uuid.UUID
+    product_name: str
+    sku: str
+    unit_of_measure: str
+    requested_quantity: Decimal
+    reference_unit_price: Decimal
+    supplier_prices: dict[str, Decimal]  # supplier_id -> unit_price
+    lowest_unit_price: Decimal | None = None
+    lowest_supplier_id: str | None = None
+
+
+class QuotationComparisonMatrix(BaseModel):
+    """Estrutura do Mapa Comparativo de Cotações."""
+    quotation_id: uuid.UUID
+    quotation_number: str
+    purchase_request_number: str
+    status: str
+    items_comparison: list[QuotationComparisonItem]
+    quotes_summary: list[SupplierQuoteResponse]
+    best_total_quote_id: uuid.UUID | None = None
+    best_lead_time_quote_id: uuid.UUID | None = None
+
+
+class SelectWinnerQuoteRequest(BaseModel):
+    """Payload para homologação da proposta vencedora e geração da PO."""
+    notes: str | None = None

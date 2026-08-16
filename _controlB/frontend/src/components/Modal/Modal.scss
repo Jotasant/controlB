@@ -17,13 +17,21 @@
 
   .modal-card {
     width: 100%;
-    max-width: 480px;
+    max-width: 520px;
     background: var(--bg-surface);
     border: 1px solid var(--border-highlight);
     border-radius: 12px;
     box-shadow: var(--dropdown-shadow);
     overflow: hidden;
     animation: scaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+
+    &.size-sm { max-width: 420px; }
+    &.size-md { max-width: 540px; }
+    &.size-lg { max-width: 820px; }
+    &.size-xl { max-width: 980px; }
 
     .modal-header {
       display: flex;
@@ -63,6 +71,8 @@
 
     .modal-body {
       padding: 1.5rem;
+      overflow-y: auto;
+      flex: 1;
 
       .modal-alert-error {
         display: flex;

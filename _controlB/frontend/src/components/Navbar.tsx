@@ -3,16 +3,17 @@
  * 
  * Renderiza menus condicionalmente com base nas permissões do usuário logado:
  * 1. Dashboard (/dashboard) - se dashboard:view
- * 2. Configurações (/cadastros) - SOMENTE se possuir permissão para pelo menos um módulo de cadastro
- * 3. Alternador de Tema (Dark / Light)
- * 4. Perfil do Usuário com Cargo Real e Logout
+ * 2. Compras (/compras) - Central Operacional de Compras e Catálogo
+ * 3. Configurações (/cadastros) - SOMENTE se possuir permissão para módulos de cadastro administrativo
+ * 4. Alternador de Tema (Dark / Light)
+ * 5. Perfil do Usuário com Cargo Real e Logout
  */
 
 import React, { useState, useRef, useEffect } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, Sun, Moon, ChevronDown, User,
-  LayoutDashboard, Building2, Settings, UserCheck
+  LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
@@ -60,10 +61,10 @@ export const Navbar: React.FC = () => {
 
   const userEmail = user?.email || authService.getUserEmail();
   const userName = user?.full_name || userEmail.split('@')[0] || 'Usuário';
-  const userInitial = userName.charAt(0).toUpperCase();
+  const userInitial = (userName || 'U').charAt(0).toUpperCase();
   const roleName = user?.role_name || 'Colaborador';
 
-  // 🛡️ Regra RBAC: O menu "Configurações" só aparece se o usuário tiver acesso a Cadastros
+  // 🛡️ Regra RBAC: O menu "Configurações" só aparece se o usuário tiver acesso a Cadastros Administrativos
   const canAccessSettings = hasAnyPermission([
     'organizations:view', 
     'users:view', 
@@ -93,6 +94,15 @@ export const Navbar: React.FC = () => {
           </NavLink>
         )}
 
+        {/* 🛍️ Módulo de Compras (Purchasing) */}
+        <NavLink
+          to="/compras"
+          className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}
+        >
+          <ShoppingCart size={14} />
+          <span>Compras</span>
+        </NavLink>
+
         {/* Menu Pai: Configurações com Dropdown (Ocultado se o usuário não tiver permissão) */}
         {canAccessSettings && (
           <div className="dropdown-wrapper" ref={configRef}>
@@ -116,7 +126,7 @@ export const Navbar: React.FC = () => {
                 >
                   <Building2 size={14} className="icon-org" />
                   <div className="item-text">
-                    <span className="title">Cadastros</span>
+                    <span className="title">Identidade & Acessos</span>
                     <span className="desc">Usuários, Organizações e Cargos</span>
                   </div>
                 </NavLink>

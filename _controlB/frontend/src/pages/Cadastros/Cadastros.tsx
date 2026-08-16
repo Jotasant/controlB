@@ -1,34 +1,31 @@
 /**
- * pages/Cadastros/Cadastros.tsx - Central de Cadastros, Catálogo e Perfis de Acesso (RBAC)
+ * pages/Cadastros/Cadastros.tsx - Central de Configurações, Organizações, Usuários e Perfis de Acesso (RBAC)
  * 
  * Permite gerenciar de forma integrada:
  * 1. 🏢 Organizações (Empresas e Filiais)
  * 2. 👥 Usuários (Perfis, Permissões, Status e Desvinculação)
  * 3. 🛡️ Cargos (Matriz de Permissões de Acesso)
- * 4. 🚚 Fornecedores (Razão Social, CNPJ/CPF, Contatos)
- * 5. 📦 Produtos & Insumos (SKU, Unidade de Medida, Preço Base)
- * 6. 🎯 Centros de Custo (Código Contábil, Unidades Orçamentárias)
  */
 
 import React, { useEffect, useState } from 'react';
 import { 
-  Building2, Users, Shield, Package, Truck, Target, ChevronRight, 
-  Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail, Phone,
+  Building2, Users, Shield, ChevronRight, 
+  Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail,
   Loader2, AlertCircle, Trash2, Edit3, ShieldAlert, CheckSquare, Square
 } from 'lucide-react';
-import { identityService, purchasingService, authService } from '@/services/api';
-import { User, Role, Organization, Permission, Supplier, Product, ProductCategory, CostCenter } from '@/types';
+import { identityService, authService } from '@/services/api';
+import { User, Role, Organization, Permission } from '@/types';
 import { Navbar } from '@/components/Navbar';
 import { Modal } from '@/components/Modal/Modal';
 import { usePermissions } from '@/hooks/usePermissions';
 import './Cadastros.scss';
 
-type MenuOption = 'organizacoes' | 'usuarios' | 'cargos' | 'fornecedores' | 'produtos' | 'centros-custo';
+type MenuOption = 'usuarios' | 'organizacoes' | 'cargos';
 
 export const Cadastros: React.FC = () => {
   const { hasPermission } = usePermissions();
 
-  const [activeMenu, setActiveMenu] = useState<MenuOption>('fornecedores');
+  const [activeMenu, setActiveMenu] = useState<MenuOption>('usuarios');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Estados dos Dados carregados da API
@@ -36,10 +33,6 @@ export const Cadastros: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<ProductCategory[]>([]);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
 
   // Estados de Carregamento
   const [loading, setLoading] = useState(true);
@@ -63,28 +56,6 @@ export const Cadastros: React.FC = () => {
   const [roleDescription, setRoleDescription] = useState('');
   const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[]>([]);
 
-  // Campos de Fornecedor
-  const [supplierName, setSupplierName] = useState('');
-  const [supplierTradeName, setSupplierTradeName] = useState('');
-  const [supplierCnpj, setSupplierCnpj] = useState('');
-  const [supplierEmail, setSupplierEmail] = useState('');
-  const [supplierPhone, setSupplierPhone] = useState('');
-  const [supplierCity, setSupplierCity] = useState('');
-  const [supplierState, setSupplierState] = useState('');
-
-  // Campos de Produto
-  const [productSku, setProductSku] = useState('');
-  const [productName, setProductName] = useState('');
-  const [productDesc, setProductDesc] = useState('');
-  const [productUnit, setProductUnit] = useState('UN');
-  const [productPrice, setProductPrice] = useState('0.00');
-  const [productCategoryId, setProductCategoryId] = useState('');
-
-  // Campos de Centro de Custo
-  const [costCenterCode, setCostCenterCode] = useState('');
-  const [costCenterName, setCostCenterName] = useState('');
-  const [costCenterDesc, setCostCenterDesc] = useState('');
-
   // =========================================================================
   // ESTADOS DO MODAL DE PERFIL / EDIÇÃO DE USUÁRIO
   // =========================================================================
@@ -107,7 +78,7 @@ export const Cadastros: React.FC = () => {
   const [editRolePermissionIds, setEditRolePermissionIds] = useState<string[]>([]);
 
   // Estado do Modal de Confirmação de Exclusão
-  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: 'user' | 'org' | 'role' | 'supplier' } | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: 'user' | 'org' | 'role' } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const currentUserEmail = authService.getUserEmail();
@@ -119,29 +90,20 @@ export const Cadastros: React.FC = () => {
 
     try {
       const [
-        orgsData, usersData, rolesData, permsData, 
-        suppsData, prodsData, catsData, ccsData
+        orgsData, usersData, rolesData, permsData
       ] = await Promise.all([
         identityService.getOrganizations().catch(() => []),
         identityService.getUsers().catch(() => []),
         identityService.getRoles().catch(() => []),
         identityService.getPermissions().catch(() => []),
-        purchasingService.getSuppliers().catch(() => []),
-        purchasingService.getProducts().catch(() => []),
-        purchasingService.getCategories().catch(() => []),
-        purchasingService.getCostCenters().catch(() => []),
       ]);
 
-      setOrganizations(orgsData);
-      setUsers(usersData);
-      setRoles(rolesData);
-      setPermissions(permsData);
-      setSuppliers(suppsData);
-      setProducts(prodsData);
-      setCategories(catsData);
-      setCostCenters(ccsData);
+      setOrganizations(Array.isArray(orgsData) ? orgsData : []);
+      setUsers(Array.isArray(usersData) ? usersData : []);
+      setRoles(Array.isArray(rolesData) ? rolesData : []);
+      setPermissions(Array.isArray(permsData) ? permsData : []);
     } catch (err: any) {
-      console.error('Erro ao carregar dados de cadastros:', err);
+      console.error('Erro ao carregar dados de configurações:', err);
       setError('Não foi possível se comunicar com o backend.');
     } finally {
       setLoading(false);
@@ -169,29 +131,6 @@ export const Cadastros: React.FC = () => {
     setRoleName('');
     setRoleDescription('');
     setSelectedPermissionIds([]);
-    
-    // Reset fornecedor
-    setSupplierName('');
-    setSupplierTradeName('');
-    setSupplierCnpj('');
-    setSupplierEmail('');
-    setSupplierPhone('');
-    setSupplierCity('');
-    setSupplierState('');
-
-    // Reset produto
-    setProductSku(`PRD-${Math.floor(1000 + Math.random() * 9000)}`);
-    setProductName('');
-    setProductDesc('');
-    setProductUnit('UN');
-    setProductPrice('0.00');
-    setProductCategoryId(categories[0]?.id || '');
-
-    // Reset centro de custo
-    setCostCenterCode(`CC-${Math.floor(100 + Math.random() * 900)}`);
-    setCostCenterName('');
-    setCostCenterDesc('');
-
     setIsModalOpen(true);
   };
 
@@ -259,43 +198,6 @@ export const Cadastros: React.FC = () => {
           organizations[0]?.id || '00000000-0000-0000-0000-000000000000',
           selectedPermissionIds
         );
-      }
-      else if (activeMenu === 'fornecedores') {
-        if (!supplierName.trim() || !supplierCnpj.trim()) {
-          throw new Error('Razão Social e CNPJ/CPF são campos obrigatórios.');
-        }
-        await purchasingService.createSupplier({
-          name: supplierName.trim(),
-          trade_name: supplierTradeName.trim() || undefined,
-          cnpj_cpf: supplierCnpj.trim(),
-          email: supplierEmail.trim() || undefined,
-          phone: supplierPhone.trim() || undefined,
-          city: supplierCity.trim() || undefined,
-          state: supplierState.trim() || undefined,
-        });
-      }
-      else if (activeMenu === 'produtos') {
-        if (!productSku.trim() || !productName.trim()) {
-          throw new Error('SKU e Nome do Produto são obrigatórios.');
-        }
-        await purchasingService.createProduct({
-          sku: productSku.trim(),
-          name: productName.trim(),
-          description: productDesc.trim() || undefined,
-          unit_of_measure: productUnit,
-          reference_price: parseFloat(productPrice) || 0,
-          category_id: productCategoryId || undefined,
-        });
-      }
-      else if (activeMenu === 'centros-custo') {
-        if (!costCenterCode.trim() || !costCenterName.trim()) {
-          throw new Error('Código e Nome do Centro de Custo são obrigatórios.');
-        }
-        await purchasingService.createCostCenter({
-          code: costCenterCode.trim(),
-          name: costCenterName.trim(),
-          description: costCenterDesc.trim() || undefined,
-        });
       }
 
       setIsModalOpen(false);
@@ -379,8 +281,6 @@ export const Cadastros: React.FC = () => {
         await identityService.deleteOrganization(itemToDelete.id);
       } else if (itemToDelete.type === 'role') {
         await identityService.deleteRole(itemToDelete.id);
-      } else if (itemToDelete.type === 'supplier') {
-        await purchasingService.deleteSupplier(itemToDelete.id);
       }
 
       setItemToDelete(null);
@@ -392,43 +292,75 @@ export const Cadastros: React.FC = () => {
     }
   };
 
-  // Agrupamento de permissões por Módulo
-  const permissionsByModule = permissions.reduce((acc, perm) => {
+  // Agrupamento de permissões por Módulo (com verificação defensiva)
+  const safePermissions = Array.isArray(permissions) ? permissions : [];
+  const permissionsByModule = safePermissions.reduce((acc, perm) => {
+    if (!perm || !perm.module) return acc;
     if (!acc[perm.module]) acc[perm.module] = [];
     acc[perm.module].push(perm);
     return acc;
   }, {} as Record<string, Permission[]>);
 
-  // Filtros de busca
-  const filteredOrgs = organizations.filter(o =>
-    o.name.toLowerCase().includes(searchTerm.toLowerCase())
+  // Filtros de busca defensivos
+  const term = (searchTerm || '').toLowerCase().trim();
+
+  const safeOrgs = Array.isArray(organizations) ? organizations : [];
+  const filteredOrgs = safeOrgs.filter(o =>
+    (o?.name || '').toLowerCase().includes(term)
   );
 
-  const filteredUsers = users.filter(u =>
-    u.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.email.toLowerCase().includes(searchTerm.toLowerCase())
+  const safeUsers = Array.isArray(users) ? users : [];
+  const filteredUsers = safeUsers.filter(u =>
+    (u?.full_name || '').toLowerCase().includes(term) ||
+    (u?.email || '').toLowerCase().includes(term)
   );
 
-  const filteredRoles = roles.filter(r =>
-    r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r.description && r.description.toLowerCase().includes(searchTerm.toLowerCase()))
+  const safeRoles = Array.isArray(roles) ? roles : [];
+  const filteredRoles = safeRoles.filter(r =>
+    (r?.name || '').toLowerCase().includes(term) ||
+    ((r?.description || '').toLowerCase().includes(term))
   );
 
-  const filteredSuppliers = suppliers.filter(s =>
-    s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (s.trade_name && s.trade_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    s.cnpj_cpf.includes(searchTerm)
-  );
+  // Helpers determinísticos de UI para evitar nós booleanos no DOM (reconciliation segura)
+  const getMenuTitle = () => {
+    switch (activeMenu) {
+      case 'usuarios': return 'Gestão de Usuários & Perfis';
+      case 'organizacoes': return 'Gestão de Organizações & Filiais';
+      case 'cargos': return 'Cargos e Matriz de Permissões';
+    }
+  };
 
-  const filteredProducts = products.filter(p =>
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.sku.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const getMenuSubtitle = () => {
+    switch (activeMenu) {
+      case 'usuarios': return 'Gerencie contas de colaboradores, status de acesso e papéis de permissão';
+      case 'organizacoes': return 'Empresas, filiais e unidades de negócio cadastradas no ecossistema';
+      case 'cargos': return 'Configure os níveis de acesso e matriz de permissões granulares por função';
+    }
+  };
 
-  const filteredCostCenters = costCenters.filter(c =>
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.code.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const getButtonLabel = () => {
+    switch (activeMenu) {
+      case 'usuarios': return 'Novo Usuário';
+      case 'organizacoes': return 'Nova Organização';
+      case 'cargos': return 'Novo Cargo';
+    }
+  };
+
+  const getSearchPlaceholder = () => {
+    switch (activeMenu) {
+      case 'usuarios': return 'Buscar usuário por nome ou e-mail...';
+      case 'organizacoes': return 'Buscar organização...';
+      case 'cargos': return 'Buscar cargo...';
+    }
+  };
+
+  const getCountLabel = () => {
+    switch (activeMenu) {
+      case 'usuarios': return `${filteredUsers.length} usuário(s)`;
+      case 'organizacoes': return `${filteredOrgs.length} organização(ões)`;
+      case 'cargos': return `${filteredRoles.length} cargo(s)`;
+    }
+  };
 
   return (
     <div className="cadastros-page">
@@ -441,78 +373,12 @@ export const Cadastros: React.FC = () => {
         {/* ========================================================= */}
         <aside className="sidebar-left">
           <div className="sidebar-header">
-            <span className="sidebar-section-title">Menu de Cadastros</span>
+            <span className="sidebar-section-title">Configurações Gerais</span>
           </div>
 
           <nav className="sidebar-menu-list">
-            
-            {/* 1. Fornecedores */}
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'fornecedores' ? 'active' : ''}`}
-              onClick={() => handleSelectMenu('fornecedores')}
-            >
-              <div className="btn-label">
-                <Truck size={16} className="icon-supplier" />
-                <span>Fornecedores</span>
-              </div>
-              <div className="btn-end">
-                <span className="count-pill">{suppliers.length}</span>
-                <ChevronRight size={14} className="arrow" />
-              </div>
-            </button>
 
-            {/* 2. Produtos & Insumos */}
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'produtos' ? 'active' : ''}`}
-              onClick={() => handleSelectMenu('produtos')}
-            >
-              <div className="btn-label">
-                <Package size={16} className="icon-products" />
-                <span>Produtos & Insumos</span>
-              </div>
-              <div className="btn-end">
-                <span className="count-pill">{products.length}</span>
-                <ChevronRight size={14} className="arrow" />
-              </div>
-            </button>
-
-            {/* 3. Centros de Custo */}
-            <button
-              type="button"
-              className={`sidebar-menu-btn ${activeMenu === 'centros-custo' ? 'active' : ''}`}
-              onClick={() => handleSelectMenu('centros-custo')}
-            >
-              <div className="btn-label">
-                <Target size={16} className="icon-cc" />
-                <span>Centros de Custo</span>
-              </div>
-              <div className="btn-end">
-                <span className="count-pill">{costCenters.length}</span>
-                <ChevronRight size={14} className="arrow" />
-              </div>
-            </button>
-
-            {/* 4. Organizações */}
-            {hasPermission('organizations:view') && (
-              <button
-                type="button"
-                className={`sidebar-menu-btn ${activeMenu === 'organizacoes' ? 'active' : ''}`}
-                onClick={() => handleSelectMenu('organizacoes')}
-              >
-                <div className="btn-label">
-                  <Building2 size={16} className="icon-org" />
-                  <span>Organizações</span>
-                </div>
-                <div className="btn-end">
-                  <span className="count-pill">{organizations.length}</span>
-                  <ChevronRight size={14} className="arrow" />
-                </div>
-              </button>
-            )}
-
-            {/* 5. Usuários */}
+            {/* 1. Usuários */}
             {hasPermission('users:view') && (
               <button
                 type="button"
@@ -521,16 +387,34 @@ export const Cadastros: React.FC = () => {
               >
                 <div className="btn-label">
                   <Users size={16} className="icon-users" />
-                  <span>Usuários</span>
+                  <span>Usuários & Perfis</span>
                 </div>
                 <div className="btn-end">
-                  <span className="count-pill">{users.length}</span>
+                  <span className="count-pill">{safeUsers.length}</span>
                   <ChevronRight size={14} className="arrow" />
                 </div>
               </button>
             )}
 
-            {/* 6. Cargos e Permissões */}
+            {/* 2. Organizações */}
+            {hasPermission('organizations:view') && (
+              <button
+                type="button"
+                className={`sidebar-menu-btn ${activeMenu === 'organizacoes' ? 'active' : ''}`}
+                onClick={() => handleSelectMenu('organizacoes')}
+              >
+                <div className="btn-label">
+                  <Building2 size={16} className="icon-org" />
+                  <span>Organizações & Filiais</span>
+                </div>
+                <div className="btn-end">
+                  <span className="count-pill">{safeOrgs.length}</span>
+                  <ChevronRight size={14} className="arrow" />
+                </div>
+              </button>
+            )}
+
+            {/* 3. Cargos e Permissões */}
             {hasPermission('roles:view') && (
               <button
                 type="button"
@@ -542,7 +426,7 @@ export const Cadastros: React.FC = () => {
                   <span>Cargos e Permissões</span>
                 </div>
                 <div className="btn-end">
-                  <span className="count-pill">{roles.length}</span>
+                  <span className="count-pill">{safeRoles.length}</span>
                   <ChevronRight size={14} className="arrow" />
                 </div>
               </button>
@@ -558,22 +442,8 @@ export const Cadastros: React.FC = () => {
           
           <header className="content-header">
             <div className="titles">
-              <h1>
-                {activeMenu === 'fornecedores' && 'Gestão de Fornecedores'}
-                {activeMenu === 'produtos' && 'Catálogo de Produtos & Insumos'}
-                {activeMenu === 'centros-custo' && 'Centros de Custo'}
-                {activeMenu === 'organizacoes' && 'Gestão de Organizações'}
-                {activeMenu === 'usuarios' && 'Gestão de Usuários & Perfis'}
-                {activeMenu === 'cargos' && 'Cargos e Matriz de Permissões'}
-              </h1>
-              <p>
-                {activeMenu === 'fornecedores' && 'Empresas parceiras, dados fiscais e contatos de suprimentos'}
-                {activeMenu === 'produtos' && 'Itens cadastrados com SKU, unidade de medida e preço de referência'}
-                {activeMenu === 'centros-custo' && 'Unidades orçamentárias e alocações de compras'}
-                {activeMenu === 'organizacoes' && 'Empresas, filiais e unidades de negócio cadastradas'}
-                {activeMenu === 'usuarios' && 'Gerencie perfis, permissões, vinculação de organizações e desvinculação'}
-                {activeMenu === 'cargos' && 'Configure os níveis de acesso e matriz de permissões granulares por cargo'}
-              </p>
+              <h1>{getMenuTitle()}</h1>
+              <p>{getMenuSubtitle()}</p>
             </div>
 
             <div className="header-actions">
@@ -584,14 +454,7 @@ export const Cadastros: React.FC = () => {
 
               <button className="btn-primary" onClick={handleOpenCreateModal}>
                 <Plus size={14} />
-                <span>
-                  {activeMenu === 'fornecedores' && 'Novo Fornecedor'}
-                  {activeMenu === 'produtos' && 'Novo Produto'}
-                  {activeMenu === 'centros-custo' && 'Novo Centro de Custo'}
-                  {activeMenu === 'organizacoes' && 'Nova Organização'}
-                  {activeMenu === 'usuarios' && 'Novo Usuário'}
-                  {activeMenu === 'cargos' && 'Novo Cargo'}
-                </span>
+                <span>{getButtonLabel()}</span>
               </button>
             </div>
           </header>
@@ -605,184 +468,93 @@ export const Cadastros: React.FC = () => {
                 <Search size={14} />
                 <input
                   type="text"
-                  placeholder={
-                    activeMenu === 'fornecedores' ? 'Buscar fornecedor por nome ou CNPJ...' :
-                    activeMenu === 'produtos' ? 'Buscar produto por nome ou SKU...' :
-                    activeMenu === 'centros-custo' ? 'Buscar por nome ou código...' :
-                    activeMenu === 'organizacoes' ? 'Buscar organização...' :
-                    activeMenu === 'usuarios' ? 'Buscar usuário...' :
-                    'Buscar cargo...'
-                  }
+                  placeholder={getSearchPlaceholder()}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
 
-              <span className="results-count">
-                {activeMenu === 'fornecedores' && `${filteredSuppliers.length} fornecedor(es)`}
-                {activeMenu === 'produtos' && `${filteredProducts.length} produto(s)`}
-                {activeMenu === 'centros-custo' && `${filteredCostCenters.length} centro(s) de custo`}
-                {activeMenu === 'organizacoes' && `${filteredOrgs.length} organização(ões)`}
-                {activeMenu === 'usuarios' && `${filteredUsers.length} usuário(s)`}
-                {activeMenu === 'cargos' && `${filteredRoles.length} cargo(s)`}
-              </span>
+              <span className="results-count">{getCountLabel()}</span>
             </div>
 
-            {/* TABELA: FORNECEDORES */}
-            {activeMenu === 'fornecedores' && (
+            {/* TABELA: USUÁRIOS */}
+            {activeMenu === 'usuarios' && (
               loading ? (
-                <div className="state-empty">Carregando fornecedores...</div>
-              ) : filteredSuppliers.length === 0 ? (
-                <div className="state-empty">Nenhum fornecedor encontrado.</div>
+                <div className="state-empty">Carregando usuários...</div>
+              ) : filteredUsers.length === 0 ? (
+                <div className="state-empty">Nenhum usuário encontrado.</div>
               ) : (
                 <div className="table-responsive">
                   <table className="enterprise-table">
                     <thead>
                       <tr>
-                        <th>Fornecedor</th>
-                        <th>CNPJ / CPF</th>
-                        <th>Contato</th>
+                        <th>Colaborador</th>
+                        <th>E-mail Corporativo</th>
                         <th>Status</th>
-                        <th style={{ textAlign: 'right' }}>Ações</th>
+                        <th>Data de Cadastro</th>
+                        <th style={{ textAlign: 'right' }}>Ações / Perfil</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredSuppliers.map(supp => (
-                        <tr key={supp.id}>
-                          <td>
-                            <div className="cell-with-icon">
-                              <div className="icon-badge orange-bg">
-                                <Truck size={14} />
+                      {filteredUsers.map(user => {
+                        const isSelf = user.email === currentUserEmail;
+                        return (
+                          <tr key={user.id}>
+                            <td>
+                              <div 
+                                className="cell-with-icon clickable" 
+                                onClick={() => (hasPermission('users:edit') || isSelf) && handleOpenUserProfile(user)}
+                                title="Clique para abrir o perfil do usuário"
+                              >
+                                <div className="avatar-circle-sm">
+                                  {(user?.full_name || 'U').charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                  <strong>{user?.full_name || 'Usuário sem nome'}</strong>
+                                  {isSelf && <span className="badge-self">Você</span>}
+                                </div>
                               </div>
-                              <div>
-                                <strong>{supp.name}</strong>
-                                {supp.trade_name && <span className="sub-label">{supp.trade_name}</span>}
-                              </div>
-                            </div>
-                          </td>
-                          <td>
-                            <span className="code-tag">{supp.cnpj_cpf}</span>
-                          </td>
-                          <td>
-                            <div className="contact-info">
-                              {supp.email && <span className="contact-item"><Mail size={11} /> {supp.email}</span>}
-                              {supp.phone && <span className="contact-item"><Phone size={11} /> {supp.phone}</span>}
-                              {!supp.email && !supp.phone && <span className="text-muted">Não informado</span>}
-                            </div>
-                          </td>
-                          <td>
-                            <span className={`badge-pill ${supp.is_active ? 'active' : 'inactive'}`}>
-                              {supp.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                              {supp.is_active ? 'Ativo' : 'Inativo'}
-                            </span>
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <button
-                              className="btn-action-icon delete"
-                              onClick={() => setItemToDelete({ id: supp.id, name: supp.name, type: 'supplier' })}
-                              title="Excluir Fornecedor"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
-            )}
+                            </td>
+                            <td>
+                              <span className="email-text">
+                                <Mail size={12} />
+                                {user?.email || '-'}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`badge-pill ${user?.is_active ? 'active' : 'inactive'}`}>
+                                {user?.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                {user?.is_active ? 'Ativo' : 'Inativo'}
+                              </span>
+                            </td>
+                            <td>{user?.created_at ? new Date(user.created_at).toLocaleDateString('pt-BR') : '-'}</td>
+                            <td style={{ textAlign: 'right' }}>
+                              <div className="row-actions">
+                                {(hasPermission('users:edit') || isSelf) && (
+                                  <button
+                                    className="btn-action-icon edit"
+                                    onClick={() => handleOpenUserProfile(user)}
+                                    title="Editar Perfil do Usuário"
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
+                                )}
 
-            {/* TABELA: PRODUTOS & INSUMOS */}
-            {activeMenu === 'produtos' && (
-              loading ? (
-                <div className="state-empty">Carregando catálogo de produtos...</div>
-              ) : filteredProducts.length === 0 ? (
-                <div className="state-empty">Nenhum produto cadastrado no catálogo.</div>
-              ) : (
-                <div className="table-responsive">
-                  <table className="enterprise-table">
-                    <thead>
-                      <tr>
-                        <th>Produto / Insumo</th>
-                        <th>Código SKU</th>
-                        <th>Unidade</th>
-                        <th>Preço Referência</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredProducts.map(prod => (
-                        <tr key={prod.id}>
-                          <td>
-                            <div className="cell-with-icon">
-                              <div className="icon-badge blue-bg">
-                                <Package size={14} />
+                                {hasPermission('users:delete') && (
+                                  <button
+                                    className="btn-action-icon delete"
+                                    onClick={() => setItemToDelete({ id: user.id, name: user.full_name, type: 'user' })}
+                                    disabled={isSelf}
+                                    title={isSelf ? 'Você não pode excluir sua própria conta' : 'Desvincular / Excluir Usuário'}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
                               </div>
-                              <div>
-                                <strong>{prod.name}</strong>
-                                {prod.description && <span className="sub-label">{prod.description}</span>}
-                              </div>
-                            </div>
-                          </td>
-                          <td>
-                            <span className="code-tag">{prod.sku}</span>
-                          </td>
-                          <td>
-                            <span className="unit-badge">{prod.unit_of_measure}</span>
-                          </td>
-                          <td>
-                            <strong>R$ {Number(prod.reference_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
-                          </td>
-                          <td>
-                            <span className={`badge-pill ${prod.is_active ? 'active' : 'inactive'}`}>
-                              {prod.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                              {prod.is_active ? 'Ativo' : 'Inativo'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
-            )}
-
-            {/* TABELA: CENTROS DE CUSTO */}
-            {activeMenu === 'centros-custo' && (
-              loading ? (
-                <div className="state-empty">Carregando centros de custo...</div>
-              ) : filteredCostCenters.length === 0 ? (
-                <div className="state-empty">Nenhum centro de custo encontrado.</div>
-              ) : (
-                <div className="table-responsive">
-                  <table className="enterprise-table">
-                    <thead>
-                      <tr>
-                        <th>Código</th>
-                        <th>Nome do Centro de Custo</th>
-                        <th>Descrição</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredCostCenters.map(cc => (
-                        <tr key={cc.id}>
-                          <td>
-                            <span className="code-tag">{cc.code}</span>
-                          </td>
-                          <td>
-                            <strong>{cc.name}</strong>
-                          </td>
-                          <td>{cc.description || 'Sem descrição'}</td>
-                          <td>
-                            <span className={`badge-pill ${cc.is_active ? 'active' : 'inactive'}`}>
-                              {cc.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                              {cc.is_active ? 'Ativo' : 'Inativo'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -823,7 +595,7 @@ export const Cadastros: React.FC = () => {
                               {org.is_active ? 'Ativa' : 'Inativa'}
                             </span>
                           </td>
-                          <td>{new Date(org.created_at).toLocaleDateString('pt-BR')}</td>
+                          <td>{org?.created_at ? new Date(org.created_at).toLocaleDateString('pt-BR') : '-'}</td>
                           <td style={{ textAlign: 'right' }}>
                             {hasPermission('organizations:manage') && (
                               <button
@@ -837,90 +609,6 @@ export const Cadastros: React.FC = () => {
                           </td>
                         </tr>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
-            )}
-
-            {/* TABELA: USUÁRIOS */}
-            {activeMenu === 'usuarios' && (
-              loading ? (
-                <div className="state-empty">Carregando usuários...</div>
-              ) : filteredUsers.length === 0 ? (
-                <div className="state-empty">Nenhum usuário encontrado.</div>
-              ) : (
-                <div className="table-responsive">
-                  <table className="enterprise-table">
-                    <thead>
-                      <tr>
-                        <th>Colaborador</th>
-                        <th>E-mail Corporativo</th>
-                        <th>Status</th>
-                        <th>Data de Cadastro</th>
-                        <th style={{ textAlign: 'right' }}>Ações / Perfil</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredUsers.map(user => {
-                        const isSelf = user.email === currentUserEmail;
-                        return (
-                          <tr key={user.id}>
-                            <td>
-                              <div 
-                                className="cell-with-icon clickable" 
-                                onClick={() => (hasPermission('users:edit') || isSelf) && handleOpenUserProfile(user)}
-                                title="Clique para abrir o perfil do usuário"
-                              >
-                                <div className="avatar-circle-sm">
-                                  {user.full_name.charAt(0).toUpperCase()}
-                                </div>
-                                <div>
-                                  <strong>{user.full_name}</strong>
-                                  {isSelf && <span className="badge-self">Você</span>}
-                                </div>
-                              </div>
-                            </td>
-                            <td>
-                              <span className="email-text">
-                                <Mail size={12} />
-                                {user.email}
-                              </span>
-                            </td>
-                            <td>
-                              <span className={`badge-pill ${user.is_active ? 'active' : 'inactive'}`}>
-                                {user.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                                {user.is_active ? 'Ativo' : 'Inativo'}
-                              </span>
-                            </td>
-                            <td>{new Date(user.created_at).toLocaleDateString('pt-BR')}</td>
-                            <td style={{ textAlign: 'right' }}>
-                              <div className="row-actions">
-                                {(hasPermission('users:edit') || isSelf) && (
-                                  <button
-                                    className="btn-action-icon edit"
-                                    onClick={() => handleOpenUserProfile(user)}
-                                    title="Editar Perfil do Usuário"
-                                  >
-                                    <Edit3 size={14} />
-                                  </button>
-                                )}
-
-                                {hasPermission('users:delete') && (
-                                  <button
-                                    className="btn-action-icon delete"
-                                    onClick={() => setItemToDelete({ id: user.id, name: user.full_name, type: 'user' })}
-                                    disabled={isSelf}
-                                    title={isSelf ? 'Você não pode excluir sua própria conta' : 'Desvincular / Excluir Usuário'}
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1017,23 +705,17 @@ export const Cadastros: React.FC = () => {
       </div>
 
       {/* ============================================================= */}
-      {/* 3. MODAL DE CRIAÇÃO (WIZARD POLIVALENTE)                       */}
+      {/* 3. MODAL DE CRIAÇÃO (WIZARD DE CONFIGURAÇÃO)                  */}
       {/* ============================================================= */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => !isSaving && setIsModalOpen(false)}
         title={
-          activeMenu === 'fornecedores' ? 'Novo Fornecedor' :
-          activeMenu === 'produtos' ? 'Novo Produto no Catálogo' :
-          activeMenu === 'centros-custo' ? 'Novo Centro de Custo' :
           activeMenu === 'organizacoes' ? 'Nova Organização' :
           activeMenu === 'usuarios' ? 'Novo Usuário' :
           'Novo Cargo'
         }
         subtitle={
-          activeMenu === 'fornecedores' ? 'Cadastre os dados fiscais e de contato da empresa parceira' :
-          activeMenu === 'produtos' ? 'Cadastre o item, SKU e preço base de referência' :
-          activeMenu === 'centros-custo' ? 'Cadastre o código e nome da unidade orçamentária' :
           activeMenu === 'organizacoes' ? 'Cadastre uma nova empresa ou filial' :
           activeMenu === 'usuarios' ? 'Crie uma conta de acesso para um colaborador' :
           'Defina o cargo e selecione a matriz de permissões'
@@ -1045,242 +727,6 @@ export const Cadastros: React.FC = () => {
               <AlertCircle size={14} />
               <span>{modalError}</span>
             </div>
-          )}
-
-          {/* FORNECEDOR */}
-          {activeMenu === 'fornecedores' && (
-            <>
-              <div className="form-group">
-                <label htmlFor="suppName">Razão Social / Nome Oficial *</label>
-                <input
-                  id="suppName"
-                  type="text"
-                  placeholder="Ex: Distribuidora Nacional de Medicamentos Ltda"
-                  value={supplierName}
-                  onChange={(e) => setSupplierName(e.target.value)}
-                  required
-                  autoFocus
-                  disabled={isSaving}
-                />
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="suppTradeName">Nome Fantasia</label>
-                  <input
-                    id="suppTradeName"
-                    type="text"
-                    placeholder="Ex: MedDistribuidora"
-                    value={supplierTradeName}
-                    onChange={(e) => setSupplierTradeName(e.target.value)}
-                    disabled={isSaving}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="suppCnpj">CNPJ ou CPF *</label>
-                  <input
-                    id="suppCnpj"
-                    type="text"
-                    placeholder="00.000.000/0000-00"
-                    value={supplierCnpj}
-                    onChange={(e) => setSupplierCnpj(e.target.value)}
-                    required
-                    disabled={isSaving}
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="suppEmail">E-mail Comercial</label>
-                  <input
-                    id="suppEmail"
-                    type="email"
-                    placeholder="vendas@fornecedor.com"
-                    value={supplierEmail}
-                    onChange={(e) => setSupplierEmail(e.target.value)}
-                    disabled={isSaving}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="suppPhone">Telefone / WhatsApp</label>
-                  <input
-                    id="suppPhone"
-                    type="text"
-                    placeholder="(11) 99999-9999"
-                    value={supplierPhone}
-                    onChange={(e) => setSupplierPhone(e.target.value)}
-                    disabled={isSaving}
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="suppCity">Cidade</label>
-                  <input
-                    id="suppCity"
-                    type="text"
-                    placeholder="São Paulo"
-                    value={supplierCity}
-                    onChange={(e) => setSupplierCity(e.target.value)}
-                    disabled={isSaving}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="suppState">Estado (UF)</label>
-                  <input
-                    id="suppState"
-                    type="text"
-                    placeholder="SP"
-                    maxLength={2}
-                    value={supplierState}
-                    onChange={(e) => setSupplierState(e.target.value.toUpperCase())}
-                    disabled={isSaving}
-                  />
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* PRODUTO */}
-          {activeMenu === 'produtos' && (
-            <>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="prodSku">Código SKU *</label>
-                  <input
-                    id="prodSku"
-                    type="text"
-                    placeholder="Ex: MAT-001"
-                    value={productSku}
-                    onChange={(e) => setProductSku(e.target.value)}
-                    required
-                    autoFocus
-                    disabled={isSaving}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="prodUnit">Unidade de Medida</label>
-                  <select
-                    id="prodUnit"
-                    value={productUnit}
-                    onChange={(e) => setProductUnit(e.target.value)}
-                    disabled={isSaving}
-                  >
-                    <option value="UN">Unidade (UN)</option>
-                    <option value="KG">Quilograma (KG)</option>
-                    <option value="L">Litro (L)</option>
-                    <option value="CX">Caixa (CX)</option>
-                    <option value="M">Metro (M)</option>
-                    <option value="PCT">Pacote (PCT)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="prodName">Nome do Produto / Insumo *</label>
-                <input
-                  id="prodName"
-                  type="text"
-                  placeholder="Ex: Luvas de Procedimento Nitrílicas"
-                  value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
-                  required
-                  disabled={isSaving}
-                />
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="prodPrice">Preço de Referência (R$)</label>
-                  <input
-                    id="prodPrice"
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={productPrice}
-                    onChange={(e) => setProductPrice(e.target.value)}
-                    disabled={isSaving}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="prodCategory">Categoria</label>
-                  <select
-                    id="prodCategory"
-                    value={productCategoryId}
-                    onChange={(e) => setProductCategoryId(e.target.value)}
-                    disabled={isSaving}
-                  >
-                    <option value="">Geral / Sem Categoria</option>
-                    {categories.map(cat => (
-                      <option key={cat.id} value={cat.id}>{cat.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="prodDesc">Descrição Detalhada</label>
-                <input
-                  id="prodDesc"
-                  type="text"
-                  placeholder="Especificações técnicas, modelo ou marca sugerida"
-                  value={productDesc}
-                  onChange={(e) => setProductDesc(e.target.value)}
-                  disabled={isSaving}
-                />
-              </div>
-            </>
-          )}
-
-          {/* CENTRO DE CUSTO */}
-          {activeMenu === 'centros-custo' && (
-            <>
-              <div className="form-group">
-                <label htmlFor="ccCode">Código Contábil *</label>
-                <input
-                  id="ccCode"
-                  type="text"
-                  placeholder="Ex: CC-101"
-                  value={costCenterCode}
-                  onChange={(e) => setCostCenterCode(e.target.value)}
-                  required
-                  autoFocus
-                  disabled={isSaving}
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="ccName">Nome da Unidade / Setor *</label>
-                <input
-                  id="ccName"
-                  type="text"
-                  placeholder="Ex: Farmácia Central / UTI"
-                  value={costCenterName}
-                  onChange={(e) => setCostCenterName(e.target.value)}
-                  required
-                  disabled={isSaving}
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="ccDesc">Descrição / Finalidade</label>
-                <input
-                  id="ccDesc"
-                  type="text"
-                  placeholder="Finalidade orçamentária"
-                  value={costCenterDesc}
-                  onChange={(e) => setCostCenterDesc(e.target.value)}
-                  disabled={isSaving}
-                />
-              </div>
-            </>
           )}
 
           {/* ORGANIZAÇÕES */}
@@ -1479,12 +925,12 @@ export const Cadastros: React.FC = () => {
 
             <div className="profile-card-header">
               <div className="avatar-xl">
-                {selectedUser.full_name.charAt(0).toUpperCase()}
+                {(selectedUser?.full_name || 'U').charAt(0).toUpperCase()}
               </div>
               <div className="info">
-                <h3>{selectedUser.full_name}</h3>
-                <span className="email">{selectedUser.email}</span>
-                <span className="created">Cadastrado em {new Date(selectedUser.created_at).toLocaleDateString('pt-BR')}</span>
+                <h3>{selectedUser?.full_name || 'Usuário'}</h3>
+                <span className="email">{selectedUser?.email || '-'}</span>
+                <span className="created">Cadastrado em {selectedUser?.created_at ? new Date(selectedUser.created_at).toLocaleDateString('pt-BR') : '-'}</span>
               </div>
             </div>
 

@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from controlb.modules.purchasing.models import (
     Supplier, CostCenter, ProductCategory, Product, 
     PurchaseRequest, PurchaseRequestItem, ApprovalEvent, 
-    PurchaseOrder, PurchaseOrderItem
+    PurchaseOrder, PurchaseOrderItem,
+    QuotationProcess, SupplierQuote, SupplierQuoteItem
 )
 from controlb.modules.purchasing.schemas import (
     SupplierCreate, SupplierUpdate,
@@ -27,7 +28,8 @@ from controlb.modules.purchasing.schemas import (
     ProductCategoryCreate, ProductCategoryUpdate,
     ProductCreate, ProductUpdate,
     PurchaseRequestCreate, PurchaseRequestUpdate,
-    PurchaseOrderCreate, PurchaseOrderUpdate
+    PurchaseOrderCreate, PurchaseOrderUpdate,
+    SupplierQuoteCreate, QuotationProcessCreate
 )
 
 
@@ -253,6 +255,15 @@ def create_product(db: Session, product_data: ProductCreate) -> Product:
         description=product_data.description,
         unit_of_measure=product_data.unit_of_measure,
         reference_price=product_data.reference_price,
+        brand=product_data.brand,
+        barcode=product_data.barcode,
+        ncm=product_data.ncm,
+        is_perishable=product_data.is_perishable,
+        requires_batch=product_data.requires_batch,
+        shelf_life_days=product_data.shelf_life_days,
+        min_stock=product_data.min_stock,
+        max_stock=product_data.max_stock,
+        storage_location=product_data.storage_location,
     )
     db.add(db_product)
     db.commit()
@@ -367,6 +378,26 @@ def update_purchase_request_status(
     return db_request
 
 
+def update_purchase_request(
+    db: Session,
+    db_request: PurchaseRequest,
+    request_data: PurchaseRequestUpdate
+) -> PurchaseRequest:
+    """Atualiza dados cadastrais da solicitação de compra."""
+    update_data = request_data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_request, field, value)
+    db.commit()
+    db.refresh(db_request)
+    return db_request
+
+
+def delete_purchase_request(db: Session, db_request: PurchaseRequest) -> None:
+    """Remove a solicitação de compra e itens em cascata."""
+    db.delete(db_request)
+    db.commit()
+
+
 # ==============================================================================
 # 6. CONSULTAS E OPERAÇÕES DE EVENTOS DE APROVAÇÃO (ApprovalEvent)
 # ==============================================================================
@@ -440,6 +471,7 @@ def create_purchase_order(
     db_order = PurchaseOrder(
         organization_id=order_data.organization_id,
         purchase_request_id=order_data.purchase_request_id,
+        supplier_quote_id=order_data.supplier_quote_id,
         supplier_id=order_data.supplier_id,
         buyer_id=order_data.buyer_id,
         cost_center_id=order_data.cost_center_id,
@@ -447,6 +479,8 @@ def create_purchase_order(
         status="issued",
         payment_terms=order_data.payment_terms,
         freight_type=order_data.freight_type,
+        freight_amount=order_data.freight_amount,
+        discount_amount=order_data.discount_amount,
         expected_delivery_date=order_data.expected_delivery_date,
         notes=order_data.notes,
         total_amount=total_amount
@@ -470,6 +504,40 @@ def create_purchase_order(
     return db_order
 
 
+def receive_purchase_order(
+    db: Session,
+    db_order: PurchaseOrder,
+    invoice_number: str,
+    received_by_id: uuid.UUID,
+    received_at: datetime | None = None,
+    notes: str | None = None
+) -> PurchaseOrder:
+    """Registra o recebimento físico e faturamento da ordem de compra."""
+    db_order.status = "received"
+    db_order.invoice_number = invoice_number
+    db_order.received_by_id = received_by_id
+    db_order.received_at = received_at or datetime.now(timezone.utc)
+    if notes:
+        db_order.notes = f"{db_order.notes or ''}\n[Recebimento]: {notes}".strip()
+
+    db.commit()
+    db.refresh(db_order)
+    return db_order
+
+
+def get_purchase_orders_by_request_id(
+    db: Session, 
+    request_id: uuid.UUID, 
+    organization_id: uuid.UUID
+) -> list[PurchaseOrder]:
+    """Retorna todas as ordens vinculadas a uma solicitação de compra."""
+    stmt = select(PurchaseOrder).where(
+        PurchaseOrder.purchase_request_id == request_id,
+        PurchaseOrder.organization_id == organization_id
+    )
+    return db.execute(stmt).scalars().all()
+
+
 def update_purchase_order_status(
     db: Session, 
     db_order: PurchaseOrder, 
@@ -480,3 +548,164 @@ def update_purchase_order_status(
     db.commit()
     db.refresh(db_order)
     return db_order
+
+
+# ==============================================================================
+# 8. PROCESSOS DE COTAÇÃO (RFQ) E PROPOSTAS DE FORNECEDORES
+# ==============================================================================
+
+def count_quotation_processes_in_year(db: Session, organization_id: uuid.UUID, year: int) -> int:
+    """Retorna o total de cotações abertas no ano para geração do número sequencial (COT-YYYY-XXXX)."""
+    stmt = select(func.count(QuotationProcess.id)).where(
+        QuotationProcess.organization_id == organization_id,
+        func.extract("year", QuotationProcess.created_at) == year
+    )
+    return db.execute(stmt).scalar() or 0
+
+
+def get_all_quotation_processes(
+    db: Session, 
+    organization_id: uuid.UUID,
+    status: str | None = None
+) -> list[QuotationProcess]:
+    """Retorna todos os processos de cotação da organização."""
+    stmt = select(QuotationProcess).where(QuotationProcess.organization_id == organization_id)
+    if status:
+        stmt = stmt.where(QuotationProcess.status == status)
+    stmt = stmt.order_by(QuotationProcess.created_at.desc())
+    return db.execute(stmt).scalars().all()
+
+
+def get_quotation_process_by_id(
+    db: Session, 
+    quotation_id: uuid.UUID, 
+    organization_id: uuid.UUID
+) -> QuotationProcess | None:
+    """Busca um processo de cotação pelo ID."""
+    stmt = select(QuotationProcess).where(
+        QuotationProcess.id == quotation_id,
+        QuotationProcess.organization_id == organization_id
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def get_quotation_process_by_request_id(
+    db: Session, 
+    request_id: uuid.UUID, 
+    organization_id: uuid.UUID
+) -> QuotationProcess | None:
+    """Busca o processo de cotação vinculado a uma solicitação de compra."""
+    stmt = select(QuotationProcess).where(
+        QuotationProcess.purchase_request_id == request_id,
+        QuotationProcess.organization_id == organization_id
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def create_quotation_process(
+    db: Session,
+    organization_id: uuid.UUID,
+    purchase_request_id: uuid.UUID,
+    quotation_number: str,
+    notes: str | None = None
+) -> QuotationProcess:
+    """Cria e abre um novo processo de cotação oficial para uma SC aprovada."""
+    db_process = QuotationProcess(
+        organization_id=organization_id,
+        purchase_request_id=purchase_request_id,
+        quotation_number=quotation_number,
+        status="open",
+        notes=notes
+    )
+    db.add(db_process)
+    db.commit()
+    db.refresh(db_process)
+    return db_process
+
+
+def create_supplier_quote(
+    db: Session,
+    organization_id: uuid.UUID,
+    quotation_process_id: uuid.UUID,
+    total_amount: Decimal,
+    quote_data: SupplierQuoteCreate
+) -> SupplierQuote:
+    """Registra uma proposta comercial de um fornecedor concorrente em uma cotação."""
+    db_quote = SupplierQuote(
+        organization_id=organization_id,
+        quotation_process_id=quotation_process_id,
+        supplier_id=quote_data.supplier_id,
+        quote_reference=quote_data.quote_reference,
+        status="pending",
+        payment_terms=quote_data.payment_terms,
+        freight_type=quote_data.freight_type,
+        freight_amount=quote_data.freight_amount,
+        discount_amount=quote_data.discount_amount,
+        lead_time_days=quote_data.lead_time_days,
+        valid_until=quote_data.valid_until,
+        total_amount=total_amount,
+        notes=quote_data.notes
+    )
+    db.add(db_quote)
+    db.flush()
+
+    for item in quote_data.items:
+        total_item = Decimal(str(item.quantity)) * Decimal(str(item.unit_price))
+        db_item = SupplierQuoteItem(
+            supplier_quote_id=db_quote.id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            unit_price=item.unit_price,
+            total_price=total_item,
+            brand_offered=item.brand_offered,
+            notes=item.notes
+        )
+        db.add(db_item)
+
+    db.commit()
+    db.refresh(db_quote)
+    return db_quote
+
+
+def get_supplier_quote_by_id(
+    db: Session,
+    quote_id: uuid.UUID,
+    organization_id: uuid.UUID
+) -> SupplierQuote | None:
+    """Busca uma proposta de fornecedor pelo ID."""
+    stmt = select(SupplierQuote).where(
+        SupplierQuote.id == quote_id,
+        SupplierQuote.organization_id == organization_id
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def update_supplier_quote_status(
+    db: Session,
+    db_quote: SupplierQuote,
+    new_status: str
+) -> SupplierQuote:
+    """Atualiza o status da proposta comercial (selected, rejected, pending)."""
+    db_quote.status = new_status
+    db.commit()
+    db.refresh(db_quote)
+    return db_quote
+
+
+def update_quotation_process_status(
+    db: Session,
+    db_process: QuotationProcess,
+    new_status: str
+) -> QuotationProcess:
+    """Atualiza o status do processo de cotação (analyzing, completed, cancelled)."""
+    db_process.status = new_status
+    db.commit()
+    db.refresh(db_process)
+    return db_process
+
+
+def delete_supplier_quote(db: Session, db_quote: SupplierQuote) -> None:
+    """Exclui permanentemente uma proposta comercial do fornecedor na cotação."""
+    db.delete(db_quote)
+    db.commit()
+

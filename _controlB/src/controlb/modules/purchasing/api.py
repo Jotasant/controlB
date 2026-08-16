@@ -112,6 +112,20 @@ def update_cost_center(
     )
 
 
+@router.delete("/cost-centers/{cost_center_id}", status_code=status.HTTP_200_OK)
+def delete_cost_center(
+    cost_center_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Remove o centro de custo do sistema."""
+    return service.delete_cost_center_record(
+        db, 
+        cost_center_id=cost_center_id, 
+        organization_id=current_user.organization_id
+    )
+
+
 # ==============================================================================
 # 3. ENDPOINTS DE CATEGORIAS E PRODUTOS (Product & Category)
 # ==============================================================================
@@ -172,6 +186,20 @@ def update_product(
     )
 
 
+@router.delete("/products/{product_id}", status_code=status.HTTP_200_OK)
+def delete_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Remove o produto do catálogo."""
+    return service.delete_product_record(
+        db, 
+        product_id=product_id, 
+        organization_id=current_user.organization_id
+    )
+
+
 # ==============================================================================
 # 4. ENDPOINTS DE SOLICITAÇÃO DE COMPRA (PurchaseRequest & Approval)
 # ==============================================================================
@@ -215,6 +243,50 @@ def get_purchase_request(
     )
 
 
+@router.put("/requests/{request_id}", response_model=schemas.PurchaseRequestResponse)
+def update_purchase_request(
+    request_id: uuid.UUID,
+    request_data: schemas.PurchaseRequestUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Atualiza dados de uma solicitação de compra em rascunho ou pendente."""
+    return service.update_purchase_request_data(
+        db,
+        request_id=request_id,
+        organization_id=current_user.organization_id,
+        request_data=request_data
+    )
+
+
+@router.delete("/requests/{request_id}", status_code=status.HTTP_200_OK)
+def delete_purchase_request(
+    request_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Cancela ou remove uma solicitação de compra."""
+    return service.delete_purchase_request_record(
+        db,
+        request_id=request_id,
+        organization_id=current_user.organization_id
+    )
+
+
+@router.post("/requests/{request_id}/cancel", response_model=schemas.PurchaseRequestResponse)
+def cancel_purchase_request(
+    request_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Cancela uma solicitação de compra e quaisquer cotações abertas vinculadas."""
+    return service.cancel_purchase_request(
+        db,
+        request_id=request_id,
+        organization_id=current_user.organization_id
+    )
+
+
 @router.post("/requests/{request_id}/approve", response_model=schemas.PurchaseRequestResponse)
 def approve_or_reject_request(
     request_id: uuid.UUID,
@@ -228,6 +300,22 @@ def approve_or_reject_request(
         request_id=request_id, 
         current_user=current_user, 
         action_data=action_data
+    )
+
+
+@router.post("/requests/{request_id}/generate-order", response_model=schemas.PurchaseOrderResponse, status_code=status.HTTP_201_CREATED)
+def generate_purchase_order_from_request(
+    request_id: uuid.UUID,
+    data: schemas.GeneratePOFromRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Gera uma Ordem de Compra oficial a partir de uma solicitação de compra aprovada."""
+    return service.generate_po_from_request(
+        db,
+        request_id=request_id,
+        current_user=current_user,
+        data=data
     )
 
 
@@ -275,6 +363,22 @@ def get_purchase_order(
     )
 
 
+@router.post("/orders/{order_id}/receive", response_model=schemas.PurchaseOrderResponse)
+def receive_purchase_order(
+    order_id: uuid.UUID,
+    data: schemas.PurchaseOrderReceive,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Registra a conferência física e faturamento/recebimento de mercadorias no almoxarifado."""
+    return service.receive_purchase_order_shipment(
+        db,
+        order_id=order_id,
+        current_user=current_user,
+        data=data
+    )
+
+
 @router.post("/orders/{order_id}/cancel", response_model=schemas.PurchaseOrderResponse)
 def cancel_purchase_order(
     order_id: uuid.UUID,
@@ -287,3 +391,146 @@ def cancel_purchase_order(
         order_id=order_id, 
         organization_id=current_user.organization_id
     )
+
+
+# ==============================================================================
+# 6. ENDPOINTS DE PROCESSOS DE COTAÇÃO (RFQ) E MAPA COMPARATIVO
+# ==============================================================================
+
+@router.post("/requests/{request_id}/quotations", response_model=schemas.QuotationProcessResponse, status_code=status.HTTP_201_CREATED)
+def open_quotation_for_request(
+    request_id: uuid.UUID,
+    data: schemas.QuotationProcessCreate | None = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Abre formalmente um Processo de Cotação de Fornecedores (RFQ) a partir de uma SC aprovada."""
+    notes = data.notes if data else None
+    return service.open_quotation_process(
+        db, 
+        current_user=current_user, 
+        request_id=request_id, 
+        notes=notes
+    )
+
+
+@router.get("/quotations", response_model=list[schemas.QuotationProcessResponse])
+def get_quotation_processes(
+    status: str | None = Query(None, description="Filtro opcional por status"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Lista todos os processos de cotação abertos na organização."""
+    return service.list_quotation_processes(
+        db, 
+        organization_id=current_user.organization_id, 
+        status_filter=status
+    )
+
+
+@router.get("/quotations/{quotation_id}", response_model=schemas.QuotationProcessResponse)
+def get_quotation_process(
+    quotation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Retorna os dados completos do processo de cotação com todas as propostas concorrentes."""
+    return service.get_quotation_process_details(
+        db, 
+        quotation_id=quotation_id, 
+        organization_id=current_user.organization_id
+    )
+
+
+@router.post("/quotations/{quotation_id}/quotes", response_model=schemas.SupplierQuoteResponse, status_code=status.HTTP_201_CREATED)
+def add_supplier_quote(
+    quotation_id: uuid.UUID,
+    quote_data: schemas.SupplierQuoteCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Registra uma proposta comercial de fornecedor concorrente em uma cotação aberta."""
+    return service.add_supplier_quote_to_process(
+        db, 
+        current_user=current_user, 
+        quotation_id=quotation_id, 
+        quote_data=quote_data
+    )
+
+
+@router.get("/quotations/{quotation_id}/comparison", response_model=schemas.QuotationComparisonMatrix)
+def get_quotation_comparison(
+    quotation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Gera o Mapa Comparativo de Cotações destacando menor preço por item, menor total e prazo de entrega."""
+    return service.get_quotation_comparison_matrix(
+        db, 
+        current_user=current_user, 
+        quotation_id=quotation_id
+    )
+
+
+@router.post("/quotations/{quotation_id}/select-winner/{quote_id}", response_model=schemas.PurchaseOrderResponse)
+def select_winner_and_generate_po(
+    quotation_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    data: schemas.SelectWinnerQuoteRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Homologa a proposta vencedora de um fornecedor e gera automaticamente a Ordem de Compra oficial."""
+    notes = data.notes if data else None
+    return service.select_winner_and_generate_order(
+        db,
+        current_user=current_user,
+        quotation_id=quotation_id,
+        quote_id=quote_id,
+        notes=notes
+    )
+
+
+@router.post("/quotations/{quotation_id}/cancel", response_model=schemas.QuotationProcessResponse)
+def cancel_quotation(
+    quotation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Cancela um processo de cotação e reverte a Solicitação de Compra vinculada para 'approved'."""
+    return service.cancel_quotation_process(
+        db,
+        current_user=current_user,
+        quotation_id=quotation_id
+    )
+
+
+@router.post("/quotations/{quotation_id}/reopen", response_model=schemas.QuotationProcessResponse)
+def reopen_quotation(
+    quotation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Reabre uma cotação homologada ou cancelada, desfazendo a homologação para nova análise."""
+    return service.reopen_quotation_process(
+        db,
+        current_user=current_user,
+        quotation_id=quotation_id
+    )
+
+
+@router.delete("/quotations/{quotation_id}/quotes/{quote_id}", status_code=status.HTTP_200_OK)
+def delete_supplier_quote(
+    quotation_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Remove uma proposta comercial de fornecedor lançada na cotação."""
+    return service.delete_supplier_quote(
+        db,
+        current_user=current_user,
+        quotation_id=quotation_id,
+        quote_id=quote_id
+    )
+

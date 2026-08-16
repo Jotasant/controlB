@@ -221,6 +221,16 @@ export const purchasingService = {
     return response.data;
   },
 
+  async updateCostCenter(costCenterId: string, data: Partial<CostCenter>): Promise<CostCenter> {
+    const response = await api.put<CostCenter>(`/purchasing/cost-centers/${costCenterId}`, data);
+    return response.data;
+  },
+
+  async deleteCostCenter(costCenterId: string): Promise<{ detail: string }> {
+    const response = await api.delete<{ detail: string }>(`/purchasing/cost-centers/${costCenterId}`);
+    return response.data;
+  },
+
   // --- CATEGORIAS & PRODUTOS ---
   async getCategories(): Promise<ProductCategory[]> {
     const response = await api.get<ProductCategory[]>('/purchasing/categories');
@@ -241,17 +251,36 @@ export const purchasingService = {
   },
 
   async createProduct(data: {
-    sku: string;
+    sku?: string;
     name: string;
     description?: string;
     unit_of_measure?: string;
     reference_price?: number;
     category_id?: string;
+    brand?: string;
+    barcode?: string;
+    ncm?: string;
+    is_perishable?: boolean;
+    requires_batch?: boolean;
+    shelf_life_days?: number | null;
+    min_stock?: number;
+    max_stock?: number | null;
+    storage_location?: string;
   }): Promise<Product> {
     const response = await api.post<Product>('/purchasing/products', {
       ...data,
       organization_id: '00000000-0000-0000-0000-000000000000'
     });
+    return response.data;
+  },
+
+  async updateProduct(productId: string, data: Partial<Product>): Promise<Product> {
+    const response = await api.put<Product>(`/purchasing/products/${productId}`, data);
+    return response.data;
+  },
+
+  async deleteProduct(productId: string): Promise<{ detail: string }> {
+    const response = await api.delete<{ detail: string }>(`/purchasing/products/${productId}`);
     return response.data;
   },
 
@@ -280,6 +309,20 @@ export const purchasingService = {
     return response.data;
   },
 
+  async updatePurchaseRequest(requestId: string, data: {
+    cost_center_id?: string | null;
+    justification?: string;
+    required_date?: string | null;
+  }): Promise<PurchaseRequest> {
+    const response = await api.put<PurchaseRequest>(`/purchasing/requests/${requestId}`, data);
+    return response.data;
+  },
+
+  async deletePurchaseRequest(requestId: string): Promise<{ detail: string }> {
+    const response = await api.delete<{ detail: string }>(`/purchasing/requests/${requestId}`);
+    return response.data;
+  },
+
   async approveOrRejectRequest(requestId: string, action: 'approved' | 'rejected', comments?: string): Promise<PurchaseRequest> {
     const response = await api.post<PurchaseRequest>(`/purchasing/requests/${requestId}/approve`, {
       action,
@@ -295,12 +338,19 @@ export const purchasingService = {
     return response.data;
   },
 
+  async getPurchaseOrder(orderId: string): Promise<PurchaseOrder> {
+    const response = await api.get<PurchaseOrder>(`/purchasing/orders/${orderId}`);
+    return response.data;
+  },
+
   async createPurchaseOrder(data: {
     supplier_id: string;
     cost_center_id?: string;
     purchase_request_id?: string;
     payment_terms?: string;
     freight_type?: string;
+    freight_amount?: number;
+    discount_amount?: number;
     expected_delivery_date?: string;
     notes?: string;
     items: {
@@ -316,8 +366,89 @@ export const purchasingService = {
     return response.data;
   },
 
+  async generatePurchaseOrderFromRequest(
+    requestId: string,
+    data: import('@/types').GeneratePOFromRequestPayload
+  ): Promise<PurchaseOrder> {
+    const response = await api.post<PurchaseOrder>(`/purchasing/requests/${requestId}/generate-order`, data);
+    return response.data;
+  },
+
+  async receivePurchaseOrder(
+    orderId: string,
+    data: import('@/types').PurchaseOrderReceivePayload
+  ): Promise<PurchaseOrder> {
+    const response = await api.post<PurchaseOrder>(`/purchasing/orders/${orderId}/receive`, data);
+    return response.data;
+  },
+
   async cancelPurchaseOrder(orderId: string): Promise<PurchaseOrder> {
     const response = await api.post<PurchaseOrder>(`/purchasing/orders/${orderId}/cancel`);
     return response.data;
+  },
+
+  // --- PROCESSOS DE COTAÇÃO (RFQ) E MAPA COMPARATIVO ---
+  async openQuotationProcess(requestId: string, notes?: string): Promise<import('@/types').QuotationProcess> {
+    const response = await api.post<import('@/types').QuotationProcess>(`/purchasing/requests/${requestId}/quotations`, {
+      purchase_request_id: requestId,
+      notes
+    });
+    return response.data;
+  },
+
+  async getQuotationProcesses(status?: string): Promise<import('@/types').QuotationProcess[]> {
+    const params = status ? { status } : {};
+    const response = await api.get<import('@/types').QuotationProcess[]>('/purchasing/quotations', { params });
+    return response.data;
+  },
+
+  async getQuotationProcess(quotationId: string): Promise<import('@/types').QuotationProcess> {
+    const response = await api.get<import('@/types').QuotationProcess>(`/purchasing/quotations/${quotationId}`);
+    return response.data;
+  },
+
+  async addSupplierQuote(
+    quotationId: string, 
+    data: import('@/types').SupplierQuotePayload
+  ): Promise<import('@/types').SupplierQuote> {
+    const response = await api.post<import('@/types').SupplierQuote>(`/purchasing/quotations/${quotationId}/quotes`, data);
+    return response.data;
+  },
+
+  async getQuotationComparison(quotationId: string): Promise<import('@/types').QuotationComparisonMatrix> {
+    const response = await api.get<import('@/types').QuotationComparisonMatrix>(`/purchasing/quotations/${quotationId}/comparison`);
+    return response.data;
+  },
+
+  async selectWinnerQuote(
+    quotationId: string, 
+    quoteId: string, 
+    notes?: string
+  ): Promise<PurchaseOrder> {
+    const response = await api.post<PurchaseOrder>(`/purchasing/quotations/${quotationId}/select-winner/${quoteId}`, {
+      notes
+    });
+    return response.data;
+  },
+
+  async cancelPurchaseRequest(requestId: string): Promise<PurchaseRequest> {
+    const response = await api.post<PurchaseRequest>(`/purchasing/requests/${requestId}/cancel`);
+    return response.data;
+  },
+
+  async cancelQuotation(quotationId: string): Promise<import('@/types').QuotationProcess> {
+    const response = await api.post<import('@/types').QuotationProcess>(`/purchasing/quotations/${quotationId}/cancel`);
+    return response.data;
+  },
+
+  async reopenQuotation(quotationId: string): Promise<import('@/types').QuotationProcess> {
+    const response = await api.post<import('@/types').QuotationProcess>(`/purchasing/quotations/${quotationId}/reopen`);
+    return response.data;
+  },
+
+  async deleteSupplierQuote(quotationId: string, quoteId: string): Promise<{ detail: string }> {
+    const response = await api.delete<{ detail: string }>(`/purchasing/quotations/${quotationId}/quotes/${quoteId}`);
+    return response.data;
   }
 };
+

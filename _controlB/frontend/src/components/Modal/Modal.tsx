@@ -7,10 +7,18 @@ interface ModalProps {
     onClose: () => void;
     title: string;
     subtitle?: string;
+    size?: 'sm' | 'md' | 'lg' | 'xl';
     children: React.ReactNode;
 }
 
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, subtitle, children }) => {
+export const Modal: React.FC<ModalProps> = ({ 
+    isOpen, 
+    onClose, 
+    title, 
+    subtitle, 
+    size = 'md',
+    children 
+}) => {
     // Fecha ao apertar a tecla ESC
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -30,7 +38,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, subtitle, 
 
     return (
         <div className="modal-backdrop" onClick={onClose}>
-            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className={`modal-card size-${size}`} onClick={(e) => e.stopPropagation()}>
                 {/* Cabeçalho do Modal */}
                 <header className="modal-header">
                     <div>
