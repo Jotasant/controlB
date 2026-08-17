@@ -2,23 +2,22 @@
  * pages/Cadastros/Cadastros.tsx - Central de Configurações, Organizações, Usuários e Perfis de Acesso (RBAC)
  * 
  * Permite gerenciar de forma integrada:
- * 1. 🏢 Organizações (Empresas e Filiais)
- * 2. 👥 Usuários (Perfis, Permissões, Status e Desvinculação)
- * 3. 🛡️ Cargos (Matriz de Permissões de Acesso)
+ * 1. 🏢 Organizações (Empresas e Filiais: Criação, Edição, Seleção em Lote e Exclusão)
+ * 2. 👥 Usuários (Perfis, Permissões, Status, Seleção em Lote e Desvinculação)
+ * 3. 🛡️ Cargos (Matriz de Permissões de Acesso, Seleção em Lote e Exclusão)
  */
 
 import React, { useEffect, useState } from 'react';
 import { 
   Building2, Users, Shield, ChevronRight, 
   Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail,
-  Loader2, AlertCircle, Trash2, Edit3, ShieldAlert, CheckSquare, Square
+  Loader2, AlertCircle, Trash2, Edit3, ShieldAlert
 } from 'lucide-react';
 import { identityService, authService, formatApiError } from '@/services/api';
 import { User, Role, Organization, Permission } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
 import { usePermissions } from '@/hooks/usePermissions';
 import './Cadastros.scss';
-
 
 type MenuOption = 'usuarios' | 'organizacoes' | 'cargos';
 
@@ -33,6 +32,11 @@ export const Cadastros: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
+
+  // Estados de Seleção Múltipla (Flags para Selecionar Tudo e Excluir em Lote)
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<string[]>([]);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
 
   // Estados de Carregamento
   const [loading, setLoading] = useState(true);
@@ -57,6 +61,14 @@ export const Cadastros: React.FC = () => {
   const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[]>([]);
 
   // =========================================================================
+  // ESTADOS DO MODAL DE EDIÇÃO DE ORGANIZAÇÃO
+  // =========================================================================
+  const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
+  const [isOrgModalOpen, setIsOrgModalOpen] = useState(false);
+  const [editOrgName, setEditOrgName] = useState('');
+  const [editOrgIsActive, setEditOrgIsActive] = useState(true);
+
+  // =========================================================================
   // ESTADOS DO MODAL DE PERFIL / EDIÇÃO DE USUÁRIO
   // =========================================================================
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -77,8 +89,14 @@ export const Cadastros: React.FC = () => {
   const [editRoleDescription, setEditRoleDescription] = useState('');
   const [editRolePermissionIds, setEditRolePermissionIds] = useState<string[]>([]);
 
-  // Estado do Modal de Confirmação de Exclusão
-  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: 'user' | 'org' | 'role' } | null>(null);
+  // =========================================================================
+  // ESTADO DO MODAL DE CONFIRMAÇÃO DE EXCLUSÃO (INDIVIDUAL OU EM LOTE)
+  // =========================================================================
+  const [itemToDelete, setItemToDelete] = useState<{ 
+    ids: string[]; 
+    names: string[]; 
+    type: 'user' | 'org' | 'role' 
+  } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const currentUserEmail = authService.getUserEmail();
@@ -117,6 +135,9 @@ export const Cadastros: React.FC = () => {
   const handleSelectMenu = (menu: MenuOption) => {
     setActiveMenu(menu);
     setSearchTerm('');
+    setSelectedUserIds([]);
+    setSelectedOrgIds([]);
+    setSelectedRoleIds([]);
   };
 
   // Abre modal de criação e limpa os campos
@@ -132,6 +153,15 @@ export const Cadastros: React.FC = () => {
     setRoleDescription('');
     setSelectedPermissionIds([]);
     setIsModalOpen(true);
+  };
+
+  // Abre o modal de Edição de Organização
+  const handleOpenOrgEdit = (org: Organization) => {
+    setSelectedOrg(org);
+    setEditOrgName(org.name);
+    setEditOrgIsActive(org.is_active);
+    setModalError(null);
+    setIsOrgModalOpen(true);
   };
 
   // Abre o modal de Perfil do Usuário
@@ -209,7 +239,31 @@ export const Cadastros: React.FC = () => {
     }
   };
 
-  // 3. Salvar Edição de Perfil do Usuário
+  // 3. Salvar Edição de Organização
+  const handleSaveOrg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrg || isSaving) return;
+
+    setIsSaving(true);
+    setModalError(null);
+
+    try {
+      if (!editOrgName.trim()) throw new Error('O nome da organização é obrigatório.');
+      await identityService.updateOrganization(selectedOrg.id, {
+        name: editOrgName.trim(),
+        is_active: editOrgIsActive
+      });
+
+      setIsOrgModalOpen(false);
+      await loadData();
+    } catch (err: any) {
+      setModalError(formatApiError(err, 'Erro ao atualizar os dados da organização.'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // 4. Salvar Edição de Perfil do Usuário
   const handleSaveUserProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser || isSaving) return;
@@ -234,10 +288,9 @@ export const Cadastros: React.FC = () => {
     } finally {
       setIsSaving(false);
     }
-
   };
 
-  // 4. Salvar Edição de Cargo & Permissões
+  // 5. Salvar Edição de Cargo & Permissões
   const handleSaveRole = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRole || isSaving) return;
@@ -263,27 +316,48 @@ export const Cadastros: React.FC = () => {
     }
   };
 
-  // 5. Executar Exclusão Confirmada
+  // 6. Executar Exclusão Confirmada (Individual ou em Lote)
   const handleConfirmDelete = async () => {
     if (!itemToDelete || isDeleting) return;
 
     setIsDeleting(true);
     try {
       if (itemToDelete.type === 'user') {
-        await identityService.deleteUser(itemToDelete.id);
-        if (selectedUser?.id === itemToDelete.id) {
+        if (itemToDelete.ids.length === 1) {
+          await identityService.deleteUser(itemToDelete.ids[0]);
+        } else {
+          await identityService.bulkDeleteUsers(itemToDelete.ids);
+        }
+        setSelectedUserIds([]);
+        if (selectedUser && itemToDelete.ids.includes(selectedUser.id)) {
           setIsProfileModalOpen(false);
         }
       } else if (itemToDelete.type === 'org') {
-        await identityService.deleteOrganization(itemToDelete.id);
+        if (itemToDelete.ids.length === 1) {
+          await identityService.deleteOrganization(itemToDelete.ids[0]);
+        } else {
+          await identityService.bulkDeleteOrganizations(itemToDelete.ids);
+        }
+        setSelectedOrgIds([]);
+        if (selectedOrg && itemToDelete.ids.includes(selectedOrg.id)) {
+          setIsOrgModalOpen(false);
+        }
       } else if (itemToDelete.type === 'role') {
-        await identityService.deleteRole(itemToDelete.id);
+        if (itemToDelete.ids.length === 1) {
+          await identityService.deleteRole(itemToDelete.ids[0]);
+        } else {
+          await identityService.bulkDeleteRoles(itemToDelete.ids);
+        }
+        setSelectedRoleIds([]);
+        if (selectedRole && itemToDelete.ids.includes(selectedRole.id)) {
+          setIsRoleModalOpen(false);
+        }
       }
 
       setItemToDelete(null);
       await loadData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Erro ao excluir o registro.');
+      alert(err.response?.data?.detail || 'Erro ao excluir o(s) registro(s).');
     } finally {
       setIsDeleting(false);
     }
@@ -318,7 +392,71 @@ export const Cadastros: React.FC = () => {
     ((r?.description || '').toLowerCase().includes(term))
   );
 
-  // Helpers determinísticos de UI para evitar nós booleanos no DOM (reconciliation segura)
+  // =========================================================================
+  // LÓGICA DE SELEÇÃO MÚLTIPLA E BOTÃO "SELECIONAR TUDO"
+  // =========================================================================
+
+  // 👥 Usuários
+  const selectableUsers = filteredUsers.filter(u => u.email !== currentUserEmail);
+  const isAllUsersSelected = selectableUsers.length > 0 && selectableUsers.every(u => selectedUserIds.includes(u.id));
+  const toggleSelectAllUsers = () => {
+    if (isAllUsersSelected) {
+      setSelectedUserIds([]);
+    } else {
+      setSelectedUserIds(selectableUsers.map(u => u.id));
+    }
+  };
+  const toggleSelectUser = (userId: string) => {
+    setSelectedUserIds(prev => 
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+    );
+  };
+
+  // 🏢 Organizações
+  const isAllOrgsSelected = filteredOrgs.length > 0 && filteredOrgs.every(o => selectedOrgIds.includes(o.id));
+  const toggleSelectAllOrgs = () => {
+    if (isAllOrgsSelected) {
+      setSelectedOrgIds([]);
+    } else {
+      setSelectedOrgIds(filteredOrgs.map(o => o.id));
+    }
+  };
+  const toggleSelectOrg = (orgId: string) => {
+    setSelectedOrgIds(prev => 
+      prev.includes(orgId) ? prev.filter(id => id !== orgId) : [...prev, orgId]
+    );
+  };
+
+  // 🛡️ Cargos
+  const isAllRolesSelected = filteredRoles.length > 0 && filteredRoles.every(r => selectedRoleIds.includes(r.id));
+  const toggleSelectAllRoles = () => {
+    if (isAllRolesSelected) {
+      setSelectedRoleIds([]);
+    } else {
+      setSelectedRoleIds(filteredRoles.map(r => r.id));
+    }
+  };
+  const toggleSelectRole = (roleId: string) => {
+    setSelectedRoleIds(prev => 
+      prev.includes(roleId) ? prev.filter(id => id !== roleId) : [...prev, roleId]
+    );
+  };
+
+  // Disparo de Exclusão em Lote
+  const handleOpenBulkDelete = () => {
+    if (activeMenu === 'usuarios' && selectedUserIds.length > 0) {
+      const names = users.filter(u => selectedUserIds.includes(u.id)).map(u => u.full_name);
+      setItemToDelete({ ids: selectedUserIds, names, type: 'user' });
+    } else if (activeMenu === 'organizacoes' && selectedOrgIds.length > 0) {
+      const names = organizations.filter(o => selectedOrgIds.includes(o.id)).map(o => o.name);
+      setItemToDelete({ ids: selectedOrgIds, names, type: 'org' });
+    } else if (activeMenu === 'cargos' && selectedRoleIds.length > 0) {
+      const names = roles.filter(r => selectedRoleIds.includes(r.id)).map(r => r.name);
+      setItemToDelete({ ids: selectedRoleIds, names, type: 'role' });
+    }
+  };
+
+  // Helpers de Rótulos de UI
   const getMenuTitle = () => {
     switch (activeMenu) {
       case 'usuarios': return 'Gestão de Usuários & Perfis';
@@ -359,10 +497,14 @@ export const Cadastros: React.FC = () => {
     }
   };
 
+  const currentSelectedCount = 
+    activeMenu === 'usuarios' ? selectedUserIds.length :
+    activeMenu === 'organizacoes' ? selectedOrgIds.length :
+    selectedRoleIds.length;
+
   return (
     <div className="cadastros-page">
       <div className="cadastros-layout">
-
         
         {/* ========================================================= */}
         {/* 1. BARRA LATERAL ESQUERDA (Sidebar Protegida por RBAC)    */}
@@ -373,7 +515,6 @@ export const Cadastros: React.FC = () => {
           </div>
 
           <nav className="sidebar-menu-list">
-
             {/* 1. Usuários */}
             {hasPermission('users:view') && (
               <button
@@ -427,7 +568,6 @@ export const Cadastros: React.FC = () => {
                 </div>
               </button>
             )}
-
           </nav>
         </aside>
 
@@ -457,7 +597,7 @@ export const Cadastros: React.FC = () => {
 
           {error && <div className="alert-error">{error}</div>}
 
-          {/* Painel com Toolbar de Busca */}
+          {/* Painel com Toolbar de Busca e Ações em Lote */}
           <div className="table-card">
             <div className="table-toolbar">
               <div className="search-wrap">
@@ -470,7 +610,26 @@ export const Cadastros: React.FC = () => {
                 />
               </div>
 
-              <span className="results-count">{getCountLabel()}</span>
+              <div className="toolbar-right-actions">
+                {currentSelectedCount > 0 && (
+                  <div className="bulk-actions-wrap">
+                    <span className="selected-count-badge">
+                      {currentSelectedCount} selecionado(s)
+                    </span>
+                    <button 
+                      type="button" 
+                      className="btn-bulk-delete" 
+                      onClick={handleOpenBulkDelete}
+                      title="Excluir todos os itens selecionados"
+                    >
+                      <Trash2 size={13} />
+                      <span>Excluir Selecionados</span>
+                    </button>
+                  </div>
+                )}
+
+                <span className="results-count">{getCountLabel()}</span>
+              </div>
             </div>
 
             {/* TABELA: USUÁRIOS */}
@@ -484,6 +643,16 @@ export const Cadastros: React.FC = () => {
                   <table className="enterprise-table">
                     <thead>
                       <tr>
+                        <th className="th-checkbox">
+                          <input 
+                            type="checkbox" 
+                            className="table-checkbox"
+                            checked={isAllUsersSelected} 
+                            onChange={toggleSelectAllUsers}
+                            disabled={selectableUsers.length === 0}
+                            title="Selecionar Todos os Usuários"
+                          />
+                        </th>
                         <th>Colaborador</th>
                         <th>E-mail Corporativo</th>
                         <th>Status</th>
@@ -494,8 +663,19 @@ export const Cadastros: React.FC = () => {
                     <tbody>
                       {filteredUsers.map(user => {
                         const isSelf = user.email === currentUserEmail;
+                        const isSelected = selectedUserIds.includes(user.id);
                         return (
-                          <tr key={user.id}>
+                          <tr key={user.id} className={isSelected ? 'selected-row' : ''}>
+                            <td className="td-checkbox">
+                              <input 
+                                type="checkbox" 
+                                className="table-checkbox"
+                                checked={isSelected} 
+                                onChange={() => toggleSelectUser(user.id)}
+                                disabled={isSelf}
+                                title={isSelf ? 'Você não pode selecionar sua própria conta para exclusão' : 'Selecionar usuário'}
+                              />
+                            </td>
                             <td>
                               <div 
                                 className="cell-with-icon clickable" 
@@ -539,7 +719,7 @@ export const Cadastros: React.FC = () => {
                                 {hasPermission('users:delete') && (
                                   <button
                                     className="btn-action-icon delete"
-                                    onClick={() => setItemToDelete({ id: user.id, name: user.full_name, type: 'user' })}
+                                    onClick={() => setItemToDelete({ ids: [user.id], names: [user.full_name], type: 'user' })}
                                     disabled={isSelf}
                                     title={isSelf ? 'Você não pode excluir sua própria conta' : 'Desvincular / Excluir Usuário'}
                                   >
@@ -568,6 +748,15 @@ export const Cadastros: React.FC = () => {
                   <table className="enterprise-table">
                     <thead>
                       <tr>
+                        <th className="th-checkbox">
+                          <input 
+                            type="checkbox" 
+                            className="table-checkbox"
+                            checked={isAllOrgsSelected} 
+                            onChange={toggleSelectAllOrgs}
+                            title="Selecionar Todas as Organizações"
+                          />
+                        </th>
                         <th>Nome da Organização</th>
                         <th>Status</th>
                         <th>Data de Cadastro</th>
@@ -575,36 +764,62 @@ export const Cadastros: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredOrgs.map(org => (
-                        <tr key={org.id}>
-                          <td>
-                            <div className="cell-with-icon">
-                              <div className="icon-badge brand-bg">
-                                <Building2 size={14} />
-                              </div>
-                              <strong>{org.name}</strong>
-                            </div>
-                          </td>
-                          <td>
-                            <span className={`badge-pill ${org.is_active ? 'active' : 'inactive'}`}>
-                              {org.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                              {org.is_active ? 'Ativa' : 'Inativa'}
-                            </span>
-                          </td>
-                          <td>{org?.created_at ? new Date(org.created_at).toLocaleDateString('pt-BR') : '-'}</td>
-                          <td style={{ textAlign: 'right' }}>
-                            {hasPermission('organizations:manage') && (
-                              <button
-                                className="btn-action-icon delete"
-                                onClick={() => setItemToDelete({ id: org.id, name: org.name, type: 'org' })}
-                                title="Excluir Organização"
+                      {filteredOrgs.map(org => {
+                        const isSelected = selectedOrgIds.includes(org.id);
+                        return (
+                          <tr key={org.id} className={isSelected ? 'selected-row' : ''}>
+                            <td className="td-checkbox">
+                              <input 
+                                type="checkbox" 
+                                className="table-checkbox"
+                                checked={isSelected} 
+                                onChange={() => toggleSelectOrg(org.id)}
+                                title="Selecionar organização"
+                              />
+                            </td>
+                            <td>
+                              <div 
+                                className={`cell-with-icon ${hasPermission('organizations:manage') ? 'clickable' : ''}`}
+                                onClick={() => hasPermission('organizations:manage') && handleOpenOrgEdit(org)}
+                                title="Clique para editar a organização"
                               >
-                                <Trash2 size={14} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                                <div className="icon-badge brand-bg">
+                                  <Building2 size={14} />
+                                </div>
+                                <strong>{org.name}</strong>
+                              </div>
+                            </td>
+                            <td>
+                              <span className={`badge-pill ${org.is_active ? 'active' : 'inactive'}`}>
+                                {org.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                {org.is_active ? 'Ativa' : 'Inativa'}
+                              </span>
+                            </td>
+                            <td>{org?.created_at ? new Date(org.created_at).toLocaleDateString('pt-BR') : '-'}</td>
+                            <td style={{ textAlign: 'right' }}>
+                              {hasPermission('organizations:manage') && (
+                                <div className="row-actions">
+                                  <button
+                                    className="btn-action-icon edit"
+                                    onClick={() => handleOpenOrgEdit(org)}
+                                    title="Editar Organização"
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
+
+                                  <button
+                                    className="btn-action-icon delete"
+                                    onClick={() => setItemToDelete({ ids: [org.id], names: [org.name], type: 'org' })}
+                                    title="Excluir Organização"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -622,6 +837,15 @@ export const Cadastros: React.FC = () => {
                   <table className="enterprise-table">
                     <thead>
                       <tr>
+                        <th className="th-checkbox">
+                          <input 
+                            type="checkbox" 
+                            className="table-checkbox"
+                            checked={isAllRolesSelected} 
+                            onChange={toggleSelectAllRoles}
+                            title="Selecionar Todos os Cargos"
+                          />
+                        </th>
                         <th>Nome do Cargo</th>
                         <th>Descrição da Função</th>
                         <th>Permissões Atribuídas</th>
@@ -630,65 +854,77 @@ export const Cadastros: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredRoles.map(role => (
-                        <tr key={role.id}>
-                          <td>
-                            <div 
-                              className={`cell-with-icon ${hasPermission('roles:manage') ? 'clickable' : ''}`}
-                              onClick={() => hasPermission('roles:manage') && handleOpenRoleEdit(role)}
-                            >
-                              <div className="icon-badge purple-bg">
-                                <Shield size={14} />
+                      {filteredRoles.map(role => {
+                        const isSelected = selectedRoleIds.includes(role.id);
+                        return (
+                          <tr key={role.id} className={isSelected ? 'selected-row' : ''}>
+                            <td className="td-checkbox">
+                              <input 
+                                type="checkbox" 
+                                className="table-checkbox"
+                                checked={isSelected} 
+                                onChange={() => toggleSelectRole(role.id)}
+                                title="Selecionar cargo"
+                              />
+                            </td>
+                            <td>
+                              <div 
+                                className={`cell-with-icon ${hasPermission('roles:manage') ? 'clickable' : ''}`}
+                                onClick={() => hasPermission('roles:manage') && handleOpenRoleEdit(role)}
+                              >
+                                <div className="icon-badge purple-bg">
+                                  <Shield size={14} />
+                                </div>
+                                <strong>{role.name}</strong>
                               </div>
-                              <strong>{role.name}</strong>
-                            </div>
-                          </td>
-                          <td>
-                            <span className="role-desc-text">
-                              {role.description || 'Sem descrição cadastrada'}
-                            </span>
-                          </td>
-                          <td>
-                            <button 
-                              type="button"
-                              className="badge-permissions-btn"
-                              onClick={() => hasPermission('roles:manage') && handleOpenRoleEdit(role)}
-                              disabled={!hasPermission('roles:manage')}
-                              title="Configurar matriz de permissões"
-                            >
-                              <Shield size={12} />
-                              <span>{role.permissions?.length || 0} permissões</span>
-                            </button>
-                          </td>
-                          <td>
-                            <span className={`badge-pill ${role.is_active ? 'active' : 'inactive'}`}>
-                              {role.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                              {role.is_active ? 'Ativo' : 'Inativo'}
-                            </span>
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            {hasPermission('roles:manage') && (
-                              <div className="row-actions">
-                                <button
-                                  className="btn-action-icon edit"
-                                  onClick={() => handleOpenRoleEdit(role)}
-                                  title="Editar Cargo e Permissões"
-                                >
-                                  <Edit3 size={14} />
-                                </button>
+                            </td>
+                            <td>
+                              <span className="role-desc-text">
+                                {role.description || 'Sem descrição cadastrada'}
+                              </span>
+                            </td>
+                            <td>
+                              <button 
+                                type="button" 
+                                className="badge-permissions-btn"
+                                onClick={() => hasPermission('roles:manage') && handleOpenRoleEdit(role)}
+                                disabled={!hasPermission('roles:manage')}
+                                title="Configurar matriz de permissões"
+                              >
+                                <Shield size={12} />
+                                <span>{role.permissions?.length || 0} permissões</span>
+                              </button>
+                            </td>
+                            <td>
+                              <span className={`badge-pill ${role.is_active ? 'active' : 'inactive'}`}>
+                                {role.is_active ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                {role.is_active ? 'Ativo' : 'Inativo'}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              {hasPermission('roles:manage') && (
+                                <div className="row-actions">
+                                  <button
+                                    className="btn-action-icon edit"
+                                    onClick={() => handleOpenRoleEdit(role)}
+                                    title="Editar Cargo e Permissões"
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
 
-                                <button
-                                  className="btn-action-icon delete"
-                                  onClick={() => setItemToDelete({ id: role.id, name: role.name, type: 'role' })}
-                                  title="Excluir Cargo"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                                  <button
+                                    className="btn-action-icon delete"
+                                    onClick={() => setItemToDelete({ ids: [role.id], names: [role.name], type: 'role' })}
+                                    title="Excluir Cargo"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -697,11 +933,10 @@ export const Cadastros: React.FC = () => {
 
           </div>
         </main>
-
       </div>
 
       {/* ============================================================= */}
-      {/* 3. MODAL DE CRIAÇÃO (WIZARD DE CONFIGURAÇÃO)                  */}
+      {/* 3. MODAL DE CRIAÇÃO (WIZARD DE NOVO CADASTRO)                 */}
       {/* ============================================================= */}
       <Modal
         isOpen={isModalOpen}
@@ -863,7 +1098,12 @@ export const Cadastros: React.FC = () => {
                               className={`perm-checkbox-item ${isChecked ? 'checked' : ''}`}
                               onClick={() => togglePermission(perm.id, selectedPermissionIds, setSelectedPermissionIds)}
                             >
-                              {isChecked ? <CheckSquare size={16} className="icon-checked" /> : <Square size={16} className="icon-square" />}
+                              <input 
+                                type="checkbox" 
+                                className="table-checkbox" 
+                                checked={isChecked} 
+                                onChange={() => {}} 
+                              />
                               <div className="perm-labels">
                                 <span className="perm-name">{perm.name}</span>
                                 <span className="perm-code">{perm.code}</span>
@@ -886,7 +1126,7 @@ export const Cadastros: React.FC = () => {
               onClick={() => setIsModalOpen(false)}
               disabled={isSaving}
             >
-              Cancelar
+              Cancelar (ESC)
             </button>
 
             <button type="submit" className="btn-save" disabled={isSaving}>
@@ -903,7 +1143,93 @@ export const Cadastros: React.FC = () => {
         </form>
       </Modal>
 
-      {/* MODAL DE PERFIL / EDIÇÃO DE USUÁRIO */}
+      {/* ============================================================= */}
+      {/* 4. MODAL DE EDIÇÃO DE ORGANIZAÇÃO                             */}
+      {/* ============================================================= */}
+      <Modal
+        isOpen={isOrgModalOpen}
+        onClose={() => !isSaving && setIsOrgModalOpen(false)}
+        title="Editar Organização"
+        subtitle="Atualize os dados cadastrais da empresa ou filial"
+      >
+        {selectedOrg && (
+          <form onSubmit={handleSaveOrg} className="wizard-form">
+            {modalError && (
+              <div className="modal-alert-error">
+                <AlertCircle size={14} />
+                <span>{modalError}</span>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label htmlFor="editOrgName">Nome da Organização *</label>
+              <input
+                id="editOrgName"
+                type="text"
+                value={editOrgName}
+                onChange={(e) => setEditOrgName(e.target.value)}
+                required
+                autoFocus
+                disabled={isSaving}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="editOrgStatus">Status da Unidade</label>
+              <select
+                id="editOrgStatus"
+                value={editOrgIsActive ? 'active' : 'inactive'}
+                onChange={(e) => setEditOrgIsActive(e.target.value === 'active')}
+                disabled={isSaving}
+              >
+                <option value="active">Ativa (Operacional)</option>
+                <option value="inactive">Inativa (Bloqueada)</option>
+              </select>
+            </div>
+
+            <footer className="modal-footer space-between">
+              <button
+                type="button"
+                className="btn-danger-unlink"
+                onClick={() => {
+                  setIsOrgModalOpen(false);
+                  setItemToDelete({ ids: [selectedOrg.id], names: [selectedOrg.name], type: 'org' });
+                }}
+                disabled={isSaving}
+              >
+                <Trash2 size={14} />
+                <span>Excluir Organização</span>
+              </button>
+
+              <div className="right-actions">
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={() => setIsOrgModalOpen(false)}
+                  disabled={isSaving}
+                >
+                  Cancelar (ESC)
+                </button>
+
+                <button type="submit" className="btn-save" disabled={isSaving}>
+                  {isSaving ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <span>Salvar Alterações</span>
+                  )}
+                </button>
+              </div>
+            </footer>
+          </form>
+        )}
+      </Modal>
+
+      {/* ============================================================= */}
+      {/* 5. MODAL DE PERFIL / EDIÇÃO DE USUÁRIO                        */}
+      {/* ============================================================= */}
       <Modal
         isOpen={isProfileModalOpen}
         onClose={() => !isSaving && setIsProfileModalOpen(false)}
@@ -1018,7 +1344,10 @@ export const Cadastros: React.FC = () => {
                 <button
                   type="button"
                   className="btn-danger-unlink"
-                  onClick={() => setItemToDelete({ id: selectedUser.id, name: selectedUser.full_name, type: 'user' })}
+                  onClick={() => {
+                    setIsProfileModalOpen(false);
+                    setItemToDelete({ ids: [selectedUser.id], names: [selectedUser.full_name], type: 'user' });
+                  }}
                   disabled={isSaving || selectedUser.email === currentUserEmail}
                   title={selectedUser.email === currentUserEmail ? 'Você não pode excluir sua própria conta' : 'Desvincular e Excluir Usuário'}
                 >
@@ -1034,7 +1363,7 @@ export const Cadastros: React.FC = () => {
                   onClick={() => setIsProfileModalOpen(false)}
                   disabled={isSaving}
                 >
-                  Cancelar
+                  Cancelar (ESC)
                 </button>
 
                 <button type="submit" className="btn-save" disabled={isSaving}>
@@ -1053,7 +1382,9 @@ export const Cadastros: React.FC = () => {
         )}
       </Modal>
 
-      {/* MODAL DE EDIÇÃO DE CARGO & MATRIZ DE PERMISSÕES */}
+      {/* ============================================================= */}
+      {/* 6. MODAL DE EDIÇÃO DE CARGO & MATRIZ DE PERMISSÕES             */}
+      {/* ============================================================= */}
       <Modal
         isOpen={isRoleModalOpen}
         onClose={() => !isSaving && setIsRoleModalOpen(false)}
@@ -1107,7 +1438,12 @@ export const Cadastros: React.FC = () => {
                             className={`perm-checkbox-item ${isChecked ? 'checked' : ''}`}
                             onClick={() => togglePermission(perm.id, editRolePermissionIds, setEditRolePermissionIds)}
                           >
-                            {isChecked ? <CheckSquare size={16} className="icon-checked" /> : <Square size={16} className="icon-square" />}
+                            <input 
+                              type="checkbox" 
+                              className="table-checkbox" 
+                              checked={isChecked} 
+                              onChange={() => {}} 
+                            />
                             <div className="perm-labels">
                               <span className="perm-name">{perm.name}</span>
                               <span className="perm-code">{perm.code}</span>
@@ -1121,32 +1457,49 @@ export const Cadastros: React.FC = () => {
               </div>
             </div>
 
-            <footer className="modal-footer">
+            <footer className="modal-footer space-between">
               <button
                 type="button"
-                className="btn-cancel"
-                onClick={() => setIsRoleModalOpen(false)}
+                className="btn-danger-unlink"
+                onClick={() => {
+                  setIsRoleModalOpen(false);
+                  setItemToDelete({ ids: [selectedRole.id], names: [selectedRole.name], type: 'role' });
+                }}
                 disabled={isSaving}
               >
-                Cancelar
+                <Trash2 size={14} />
+                <span>Excluir Cargo</span>
               </button>
 
-              <button type="submit" className="btn-save" disabled={isSaving}>
-                {isSaving ? (
-                  <>
-                    <Loader2 size={14} className="spin" />
-                    <span>Salvando...</span>
-                  </>
-                ) : (
-                  <span>Salvar Permissões</span>
-                )}
-              </button>
+              <div className="right-actions">
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={() => setIsRoleModalOpen(false)}
+                  disabled={isSaving}
+                >
+                  Cancelar (ESC)
+                </button>
+
+                <button type="submit" className="btn-save" disabled={isSaving}>
+                  {isSaving ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <span>Salvar Permissões</span>
+                  )}
+                </button>
+              </div>
             </footer>
           </form>
         )}
       </Modal>
 
-      {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO */}
+      {/* ============================================================= */}
+      {/* 7. MODAL DE CONFIRMAÇÃO DE EXCLUSÃO (INDIVIDUAL OU EM LOTE)    */}
+      {/* ============================================================= */}
       <Modal
         isOpen={!!itemToDelete}
         onClose={() => !isDeleting && setItemToDelete(null)}
@@ -1159,8 +1512,15 @@ export const Cadastros: React.FC = () => {
             </div>
 
             <p className="confirm-text">
-              Tem certeza que deseja excluir permanentemente{' '}
-              <strong>"{itemToDelete.name}"</strong>?
+              {itemToDelete.ids.length === 1 ? (
+                <>
+                  Tem certeza que deseja excluir permanentemente <strong>"{itemToDelete.names[0]}"</strong>?
+                </>
+              ) : (
+                <>
+                  Tem certeza que deseja excluir permanentemente os <strong>{itemToDelete.ids.length} itens selecionados</strong>?
+                </>
+              )}
             </p>
             <p className="subtext">
               Esta ação removerá todos os vínculos associados e não poderá ser desfeita.
@@ -1172,7 +1532,7 @@ export const Cadastros: React.FC = () => {
                 onClick={() => setItemToDelete(null)}
                 disabled={isDeleting}
               >
-                Voltar
+                Cancelar (ESC)
               </button>
 
               <button
@@ -1200,3 +1560,5 @@ export const Cadastros: React.FC = () => {
     </div>
   );
 };
+
+export default Cadastros;

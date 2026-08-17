@@ -149,10 +149,61 @@ def create_organization(db: Session, organization_data: OrganizationCreate) -> O
     return db_organization
 
 
+def update_organization(db: Session, db_org: Organization, org_data: OrganizationUpdate) -> Organization:
+    """Atualiza os campos de uma organização existente."""
+    if org_data.name is not None:
+        db_org.name = org_data.name
+    if org_data.is_active is not None:
+        db_org.is_active = org_data.is_active
+    db.commit()
+    db.refresh(db_org)
+    return db_org
+
+
 def delete_organization(db: Session, db_org: Organization) -> None:
-    """Exclui a organização do banco de dados."""
+    """Exclui a organização do banco de dados e limpa vínculos com segurança via CASCADE."""
     db.delete(db_org)
     db.commit()
+
+
+def bulk_delete_organizations(db: Session, org_ids: list[uuid.UUID]) -> int:
+    """Exclui múltiplas organizações em lote via CASCADE."""
+    deleted_count = 0
+    for org_id in org_ids:
+        org = get_organization_by_id(db, id=org_id)
+        if org:
+            db.delete(org)
+            deleted_count += 1
+    db.commit()
+    return deleted_count
+
+
+def bulk_delete_users(db: Session, user_ids: list[uuid.UUID], current_user_id: uuid.UUID) -> int:
+    """Exclui múltiplos usuários em lote, ignorando autoexclusão do usuário logado."""
+    deleted_count = 0
+    for user_id in user_ids:
+        if user_id == current_user_id:
+            continue
+        user = get_user_by_id(db, id=user_id)
+        if user:
+            db.delete(user)
+            deleted_count += 1
+    db.commit()
+    return deleted_count
+
+
+def bulk_delete_roles(db: Session, role_ids: list[uuid.UUID]) -> int:
+    """Exclui múltiplos cargos em lote."""
+    deleted_count = 0
+    for role_id in role_ids:
+        role = get_role_by_id(db, id=role_id)
+        if role:
+            for u in list(role.users):
+                u.role_id = None
+            db.delete(role)
+            deleted_count += 1
+    db.commit()
+    return deleted_count
 
 
 # ==============================================================================
@@ -211,4 +262,85 @@ def update_role(db: Session, db_role: Role, role_data: RoleUpdate, permissions: 
 def delete_role(db: Session, db_role: Role) -> None:
     """Exclui o cargo do banco de dados."""
     db.delete(db_role)
+    db.commit()
+
+
+# ==============================================================================
+# 5. CONSULTAS E OPERAÇÕES DE CONTATO INSTITUCIONAL (Contact)
+# ==============================================================================
+
+from controlb.modules.identity.models import Contact
+from controlb.modules.identity.schemas import ContactCreate, ContactUpdate
+
+
+def list_contacts(db: Session, organization_id: uuid.UUID, search: str | None = None) -> list[Contact]:
+    """Lista os contatos de uma organização, com filtro de busca opcional."""
+    stmt = select(Contact).where(Contact.organization_id == organization_id)
+    if search:
+        term = f"%{search.strip()}%"
+        stmt = stmt.where(
+            (Contact.full_name.ilike(term)) |
+            (Contact.email.ilike(term)) |
+            (Contact.document.ilike(term)) |
+            (Contact.phone.ilike(term))
+        )
+    stmt = stmt.order_by(Contact.full_name)
+    return db.execute(stmt).scalars().all()
+
+
+def get_contact_by_id(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID) -> Contact | None:
+    """Busca um contato por ID dentro de uma organização."""
+    stmt = select(Contact).where(
+        Contact.id == contact_id,
+        Contact.organization_id == organization_id
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate) -> Contact:
+    """Cria e persiste um novo contato."""
+    contact = Contact(
+        organization_id=organization_id,
+        full_name=data.full_name,
+        email=data.email,
+        phone=data.phone,
+        mobile=data.mobile,
+        document=data.document,
+        position=data.position,
+        notes=data.notes,
+        is_active=data.is_active
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+
+def update_contact(db: Session, contact: Contact, data: ContactUpdate) -> Contact:
+    """Atualiza dados cadastrais de um contato."""
+    if data.full_name is not None:
+        contact.full_name = data.full_name
+    if data.email is not None:
+        contact.email = data.email
+    if data.phone is not None:
+        contact.phone = data.phone
+    if data.mobile is not None:
+        contact.mobile = data.mobile
+    if data.document is not None:
+        contact.document = data.document
+    if data.position is not None:
+        contact.position = data.position
+    if data.notes is not None:
+        contact.notes = data.notes
+    if data.is_active is not None:
+        contact.is_active = data.is_active
+
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+
+def delete_contact(db: Session, contact: Contact) -> None:
+    """Remove um contato do banco."""
+    db.delete(contact)
     db.commit()

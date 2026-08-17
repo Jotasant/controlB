@@ -279,38 +279,106 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
+        gap: 0.75rem;
         background: var(--bg-surface);
         border: 1px solid var(--border-subtle);
         border-radius: 8px 8px 0 0;
         padding: 0.75rem 1.25rem;
         border-bottom: 1px solid var(--border-subtle);
 
-        .search-box {
-          position: relative;
+        .search-composite {
           display: flex;
           align-items: center;
+          gap: 0.5rem;
+          flex: 1;
+          min-width: 280px;
+          max-width: 520px;
 
-          .search-icon {
-            position: absolute;
-            left: 0.75rem;
-            color: var(--text-muted);
-          }
-
-          input {
+          .search-field-select {
             background: var(--bg-app);
             border: 1px solid var(--border-subtle);
             border-radius: 6px;
-            padding: 0.45rem 0.85rem 0.45rem 2.2rem;
+            padding: 0.45rem 0.65rem;
             color: var(--text-primary);
-            font-size: 0.825rem;
+            font-size: 0.8rem;
+            font-weight: 600;
             outline: none;
-            width: 320px;
-            transition: all 0.15s ease;
+            cursor: pointer;
+            min-width: 140px;
 
             &:focus {
               border-color: var(--border-focus);
-              box-shadow: 0 0 0 2px var(--accent-brand-subtle);
-              width: 360px;
+            }
+          }
+
+          .search-box {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex: 1;
+
+            .search-icon {
+              position: absolute;
+              left: 0.75rem;
+              color: var(--text-muted);
+            }
+
+            .btn-clear-search {
+              position: absolute;
+              right: 0.6rem;
+              top: 50%;
+              transform: translateY(-50%);
+              background: none;
+              border: none;
+              color: var(--text-muted);
+              cursor: pointer;
+              padding: 0.2rem;
+              display: flex;
+              align-items: center;
+
+              &:hover {
+                color: var(--text-primary);
+              }
+            }
+
+            input {
+              background: var(--bg-app);
+              border: 1px solid var(--border-subtle);
+              border-radius: 6px;
+              padding: 0.45rem 2rem 0.45rem 2.2rem;
+              color: var(--text-primary);
+              font-size: 0.825rem;
+              outline: none;
+              width: 100%;
+              transition: all 0.15s ease;
+
+              &:focus {
+                border-color: var(--border-focus);
+                box-shadow: 0 0 0 2px var(--accent-brand-subtle);
+              }
+            }
+          }
+        }
+
+        .filter-group {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+
+          .filter-select {
+            background: var(--bg-app);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 0.45rem 0.75rem;
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            font-weight: 500;
+            outline: none;
+            cursor: pointer;
+
+            &:focus {
+              border-color: var(--border-focus);
             }
           }
         }
@@ -319,6 +387,7 @@
           font-size: 0.775rem;
           color: var(--text-muted);
           font-weight: 500;
+          white-space: nowrap;
         }
       }
 
@@ -349,6 +418,32 @@
             padding: 0.75rem 1.2rem;
             border-bottom: 1px solid var(--border-subtle);
             background: var(--bg-surface-hover);
+
+            &.th-sortable {
+              cursor: pointer;
+              user-select: none;
+              transition: background 0.15s ease;
+
+              &:hover {
+                background: var(--bg-surface-active, rgba(255, 255, 255, 0.04));
+                color: var(--text-primary);
+              }
+
+              .th-content {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+
+                .th-sort-idle {
+                  opacity: 0.35;
+                  transition: opacity 0.15s ease;
+                }
+              }
+
+              &:hover .th-sort-idle {
+                opacity: 0.85;
+              }
+            }
           }
 
           td {

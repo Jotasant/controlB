@@ -58,8 +58,11 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     unit_of_measure: Mapped[str] = mapped_column(String(50), default="UN")  # UN, KG, L, CX, AMP, etc.
     reference_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0.0000"))
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0.0000"))
+    sale_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0.0000"))
 
-    # Rastreabilidade & Validade
+    # Rastreabilidade, Integrações & Validade
+    external_code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     brand: Mapped[str | None] = mapped_column(String(200), nullable=True)
     barcode: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     ncm: Mapped[str | None] = mapped_column(String(50), nullable=True)

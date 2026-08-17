@@ -1,21 +1,12 @@
 /**
  * pages/Finance/Finance.tsx - Central de Gestão Financeira (ControlB)
- * 
- * Abas:
- * 1. Contas a Pagar (Payables & Despesas Avulsas com CAPEX/OPEX e Baixas)
- * 2. Contas a Receber (Receivables & Recebimentos)
- * 3. Tesouraria & Caixas (Saldos de Contas e Extrato Bancário)
- * 4. Conciliação Bancária (Auditoria entre Extrato e Baixas)
- * 5. Documentos Fiscais (NF-e, NFS-e, CT-e)
- * 6. Categorias & Contas (Plano de Contas Financeiro)
- * 7. Fluxo de Caixa & Relatórios (DRE, CAPEX x OPEX, Projeção)
  */
 
 import React, { useState, useEffect } from 'react';
 import {
   Landmark, ArrowUpRight, ArrowDownLeft, DollarSign, Plus,
   RefreshCw, CheckCircle2, Calendar, Search,
-  FileText, Tag, X,
+  FileText, Tag,
   Building2, Wallet, ArrowRightLeft, TrendingUp, BarChart3
 } from 'lucide-react';
 import { financeService, purchasingService } from '@/services/api';
@@ -23,6 +14,7 @@ import {
   Payable, Receivable, BankAccount, BankTransaction,
   FiscalDocument, FinancialCategory, FinanceDashboardSummary, CostCenter
 } from '@/types';
+import { Modal } from '@/components/Modal/Modal';
 import './Finance.scss';
 
 export const Finance: React.FC = () => {
@@ -45,6 +37,7 @@ export const Finance: React.FC = () => {
   // Filtros
   const [payableStatusFilter, setPayableStatusFilter] = useState<string>('ALL');
   const [payableNatureFilter, setPayableNatureFilter] = useState<string>('ALL');
+  const [receivableStatusFilter, setReceivableStatusFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
   // Modais
@@ -78,13 +71,13 @@ export const Finance: React.FC = () => {
     notes: ''
   });
 
-  // Forms de Baixa de Pagamento
+  // Form Baixa de Pagamento
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
     discount_amount: '0.00',
     interest_amount: '0.00',
     payment_date: new Date().toISOString().split('T')[0],
-    payment_method: 'PIX',
+    payment_method: 'BOLETO',
     bank_account_id: '',
     reference: '',
     notes: '',
@@ -92,7 +85,7 @@ export const Finance: React.FC = () => {
     file_url: ''
   });
 
-  // Forms de Novo Título a Receber
+  // Form Novo Recebível
   const [receivableForm, setReceivableForm] = useState({
     customer_name: '',
     customer_document: '',
@@ -101,10 +94,12 @@ export const Finance: React.FC = () => {
     issue_date: new Date().toISOString().split('T')[0],
     due_date: new Date().toISOString().split('T')[0],
     payment_method_expected: 'PIX',
+    financial_category_id: '',
+    cost_center_id: '',
     notes: ''
   });
 
-  // Forms de Baixa de Recebimento
+  // Form Baixa de Recebimento
   const [receiptForm, setReceiptForm] = useState({
     amount: '',
     receipt_date: new Date().toISOString().split('T')[0],
@@ -114,25 +109,25 @@ export const Finance: React.FC = () => {
     notes: ''
   });
 
-  // Forms de Nova Conta Bancária
+  // Form Nova Conta Bancária
   const [accountForm, setAccountForm] = useState({
     bank_name: '',
     bank_code: '',
     agency: '',
     account_number: '',
-    account_type: 'CHECKING',
+    account_type: 'CHECKING' as 'CHECKING' | 'SAVINGS' | 'CASH' | 'DIGITAL_WALLET',
     opening_balance: '0.00'
   });
 
-  // Forms de Nova Categoria Financeira
+  // Form Nova Categoria
   const [categoryForm, setCategoryForm] = useState({
     name: '',
     code: '',
-    category_type: 'EXPENSE',
+    category_type: 'EXPENSE' as 'EXPENSE' | 'REVENUE',
     description: ''
   });
 
-  // Forms de Movimentação Manual
+  // Form Lançamento Manual no Extrato
   const [txForm, setTxForm] = useState({
     bank_account_id: '',
     transaction_date: new Date().toISOString().split('T')[0],
@@ -142,21 +137,19 @@ export const Finance: React.FC = () => {
     document_number: ''
   });
 
-  // ============================================================================
-  // CARREGAMENTO DE DADOS
-  // ============================================================================
+  // Carregar Dados do Módulo Financeiro
   const loadAllFinanceData = async () => {
     setLoading(true);
     try {
       const [
         dashRes,
-        payRes,
-        recRes,
-        accRes,
+        payablesRes,
+        receivablesRes,
+        accountsRes,
         txRes,
-        docRes,
-        catRes,
-        ccRes
+        fiscalRes,
+        categoriesRes,
+        costCentersRes
       ] = await Promise.all([
         financeService.getDashboard().catch(() => null),
         financeService.getPayables().catch(() => []),
@@ -168,14 +161,14 @@ export const Finance: React.FC = () => {
         purchasingService.getCostCenters().catch(() => [])
       ]);
 
-      if (dashRes) setDashboard(dashRes);
-      setPayables(payRes);
-      setReceivables(recRes);
-      setBankAccounts(accRes);
+      setDashboard(dashRes);
+      setPayables(payablesRes);
+      setReceivables(receivablesRes);
+      setBankAccounts(accountsRes);
       setTransactions(txRes);
-      setFiscalDocs(docRes);
-      setCategories(catRes);
-      setCostCenters(ccRes);
+      setFiscalDocs(fiscalRes);
+      setCategories(categoriesRes);
+      setCostCenters(costCentersRes);
     } catch (err) {
       console.error("Erro ao carregar dados financeiros:", err);
     } finally {
@@ -207,25 +200,21 @@ export const Finance: React.FC = () => {
   // Status Badge Helper
   const renderStatusBadge = (status: string) => {
     const map: Record<string, { label: string; cls: string }> = {
-      DRAFT: { label: 'Rascunho', cls: 'badge-draft' },
-      PENDING_APPROVAL: { label: 'Pendente Aprovação', cls: 'badge-pending' },
-      APPROVED: { label: 'Aprovado', cls: 'badge-approved' },
-      SCHEDULED: { label: 'Agendado', cls: 'badge-scheduled' },
-      PARTIALLY_PAID: { label: 'Parcialmente Pago', cls: 'badge-partial' },
-      PAID: { label: 'Pago', cls: 'badge-paid' },
-      OVERDUE: { label: 'Vencido', cls: 'badge-overdue' },
-      CANCELLED: { label: 'Cancelado', cls: 'badge-cancelled' },
-      PENDING: { label: 'Pendente', cls: 'badge-pending' },
-      PARTIALLY_RECEIVED: { label: 'Parcial Recebido', cls: 'badge-partial' },
-      RECEIVED: { label: 'Recebido', cls: 'badge-paid' }
+      PENDING_APPROVAL: { label: 'Pendente Aprovação', cls: 'pending_approval' },
+      APPROVED: { label: 'Aprovado', cls: 'approved' },
+      PARTIALLY_PAID: { label: 'Parcialmente Pago', cls: 'partially_paid' },
+      PAID: { label: 'Pago', cls: 'paid' },
+      OVERDUE: { label: 'Vencido', cls: 'overdue' },
+      CANCELLED: { label: 'Cancelado', cls: 'cancelled' },
+      PENDING: { label: 'Pendente', cls: 'pending_approval' },
+      PARTIALLY_RECEIVED: { label: 'Parcialmente Recebido', cls: 'partially_received' },
+      RECEIVED: { label: 'Recebido', cls: 'received' }
     };
-    const s = map[status] || { label: status, cls: 'badge-default' };
+    const s = map[status] || { label: status, cls: 'pending_approval' };
     return <span className={`status-badge ${s.cls}`}>{s.label}</span>;
   };
 
-  // ============================================================================
-  // HANDLERS DE AÇÕES
-  // ============================================================================
+  // Handlers de Ações
   const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -236,14 +225,14 @@ export const Finance: React.FC = () => {
         issue_date: expenseForm.issue_date,
         due_date: expenseForm.due_date,
         expense_nature: expenseForm.expense_nature,
-        payment_method_expected: expenseForm.payment_method_expected,
+        payment_method_expected: expenseForm.payment_method_expected || undefined,
         financial_category_id: expenseForm.financial_category_id || undefined,
         cost_center_id: expenseForm.cost_center_id || undefined,
         installments_count: Number(expenseForm.installments_count) || 1,
         installment_frequency_days: Number(expenseForm.installment_frequency_days) || 30,
-        instrument: expenseForm.digitable_line || expenseForm.pix_code ? {
-          instrument_type: expenseForm.payment_method_expected || 'BOLETO',
-          digitable_line: expenseForm.digitable_line || undefined,
+        instrument: expenseForm.digitable_line ? {
+          instrument_type: 'BOLETO',
+          digitable_line: expenseForm.digitable_line,
           pix_code: expenseForm.pix_code || undefined
         } : undefined,
         notes: expenseForm.notes || undefined
@@ -322,7 +311,7 @@ export const Finance: React.FC = () => {
         original_amount: parseFloat(receivableForm.original_amount),
         issue_date: receivableForm.issue_date,
         due_date: receivableForm.due_date,
-        payment_method_expected: receivableForm.payment_method_expected,
+        payment_method_expected: receivableForm.payment_method_expected || undefined,
         notes: receivableForm.notes || undefined
       });
       setIsReceivableModalOpen(false);
@@ -334,20 +323,22 @@ export const Finance: React.FC = () => {
         issue_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
         payment_method_expected: 'PIX',
+        financial_category_id: '',
+        cost_center_id: '',
         notes: ''
       });
       loadAllFinanceData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao cadastrar recebível.");
+      alert(err.response?.data?.detail || "Erro ao criar título a receber.");
     }
   };
 
-  const handleOpenReceiptModal = (rec: Receivable) => {
-    setSelectedReceivable(rec);
+  const handleOpenReceiptModal = (receivable: Receivable) => {
+    setSelectedReceivable(receivable);
     setReceiptForm({
-      amount: rec.outstanding_amount.toString(),
+      amount: receivable.outstanding_amount.toString(),
       receipt_date: new Date().toISOString().split('T')[0],
-      payment_method: rec.payment_method_expected || 'PIX',
+      payment_method: receivable.payment_method_expected || 'PIX',
       bank_account_id: bankAccounts[0]?.id || '',
       reference: '',
       notes: ''
@@ -375,7 +366,7 @@ export const Finance: React.FC = () => {
     }
   };
 
-  const handleCreateBankAccount = async (e: React.FormEvent) => {
+  const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       await financeService.createBankAccount({
@@ -449,7 +440,7 @@ export const Finance: React.FC = () => {
     }
   };
 
-  // Filtragem de Contas a Pagar
+  // Filtragem
   const filteredPayables = payables.filter(p => {
     const matchesStatus = payableStatusFilter === 'ALL' || p.status === payableStatusFilter;
     const matchesNature = payableNatureFilter === 'ALL' || p.expense_nature === payableNatureFilter;
@@ -457,6 +448,14 @@ export const Finance: React.FC = () => {
       p.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       p.favored_name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesStatus && matchesNature && matchesSearch;
+  });
+
+  const filteredReceivables = receivables.filter(r => {
+    const matchesStatus = receivableStatusFilter === 'ALL' || r.status === receivableStatusFilter;
+    const matchesSearch = searchTerm === '' ||
+      r.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      r.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesStatus && matchesSearch;
   });
 
   return (
@@ -659,1090 +658,1074 @@ export const Finance: React.FC = () => {
           {activeTab === 'payables' && (
             <div className="tab-pane">
               <div className="pane-toolbar">
-              <div className="search-box">
-                <Search size={15} />
-                <input
-                  type="text"
-                  placeholder="Buscar por favorecido ou descrição..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
+                <div className="search-box">
+                  <Search size={15} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por favorecido ou descrição..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+
+                <div className="filter-group">
+                  <select
+                    value={payableStatusFilter}
+                    onChange={(e) => setPayableStatusFilter(e.target.value)}
+                  >
+                    <option value="ALL">Todos os Status</option>
+                    <option value="PENDING_APPROVAL">Pendente Aprovação</option>
+                    <option value="APPROVED">Aprovados</option>
+                    <option value="PARTIALLY_PAID">Parcialmente Pago</option>
+                    <option value="PAID">Pagos</option>
+                    <option value="OVERDUE">Vencidos</option>
+                  </select>
+
+                  <select
+                    value={payableNatureFilter}
+                    onChange={(e) => setPayableNatureFilter(e.target.value)}
+                  >
+                    <option value="ALL">Todas as Naturezas</option>
+                    <option value="OPEX">OPEX (Operacional)</option>
+                    <option value="CAPEX">CAPEX (Investimento)</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="filter-group">
-                <select
-                  value={payableStatusFilter}
-                  onChange={(e) => setPayableStatusFilter(e.target.value)}
-                >
-                  <option value="ALL">Todos os Status</option>
-                  <option value="PENDING_APPROVAL">Pendente Aprovação</option>
-                  <option value="APPROVED">Aprovados</option>
-                  <option value="PARTIALLY_PAID">Parcialmente Pago</option>
-                  <option value="PAID">Pagos</option>
-                  <option value="OVERDUE">Vencidos</option>
-                </select>
-
-                <select
-                  value={payableNatureFilter}
-                  onChange={(e) => setPayableNatureFilter(e.target.value)}
-                >
-                  <option value="ALL">Todas as Naturezas</option>
-                  <option value="OPEX">OPEX (Operacional)</option>
-                  <option value="CAPEX">CAPEX (Investimento)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="table-responsive">
-              <table className="finance-table">
-                <thead>
-                  <tr>
-                    <th>Favorecido / Descrição</th>
-                    <th>Vencimento</th>
-                    <th>Classificação</th>
-                    <th>Parcela</th>
-                    <th>Valor Original</th>
-                    <th>Saldo Devedor</th>
-                    <th>Status</th>
-                    <th className="th-actions">Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPayables.length === 0 ? (
+              <div className="table-responsive">
+                <table className="finance-table">
+                  <thead>
                     <tr>
-                      <td colSpan={8} className="empty-state">
-                        Nenhuma conta a pagar encontrada com os filtros selecionados.
-                      </td>
+                      <th>Favorecido / Descrição</th>
+                      <th>Vencimento</th>
+                      <th>Classificação</th>
+                      <th>Parcela</th>
+                      <th>Valor Original</th>
+                      <th>Saldo Devedor</th>
+                      <th>Status</th>
+                      <th className="th-actions">Ações</th>
                     </tr>
-                  ) : (
-                    filteredPayables.map((p) => (
-                      <tr key={p.id} className={p.status === 'OVERDUE' ? 'row-overdue' : ''}>
-                        <td>
-                          <div className="favored-cell">
-                            <span className="favored-name">{p.favored_name}</span>
-                            <span className="desc-text">{p.description}</span>
-                          </div>
+                  </thead>
+                  <tbody>
+                    {filteredPayables.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="empty-state">
+                          Nenhuma conta a pagar encontrada com os filtros selecionados.
                         </td>
-                        <td>
-                          <span className="date-cell">
-                            <Calendar size={12} />
-                            {fmtDate(p.due_date)}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="classification-pill">
-                            <span className={`nature-badge ${p.expense_nature.toLowerCase()}`}>
-                              {p.expense_nature}
+                      </tr>
+                    ) : (
+                      filteredPayables.map((p) => (
+                        <tr key={p.id} className={p.status === 'OVERDUE' ? 'row-overdue' : ''}>
+                          <td>
+                            <div className="favored-cell">
+                              <span className="favored-name">{p.favored_name}</span>
+                              <span className="desc-text">{p.description}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="date-cell">
+                              <Calendar size={12} />
+                              {fmtDate(p.due_date)}
                             </span>
-                            {p.financial_category && (
-                              <span className="cat-badge">{p.financial_category.name}</span>
+                          </td>
+                          <td>
+                            <div className="classification-pill">
+                              <span className={`nature-badge ${p.expense_nature.toLowerCase()}`}>
+                                {p.expense_nature}
+                              </span>
+                              {p.financial_category && (
+                                <span className="cat-badge">{p.financial_category.name}</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <span className="parcel-tag">
+                              {p.installment_number}/{p.total_installments}
+                            </span>
+                          </td>
+                          <td>{fmtCurrency(p.original_amount)}</td>
+                          <td className="outstanding-val">{fmtCurrency(p.outstanding_amount)}</td>
+                          <td>{renderStatusBadge(p.status)}</td>
+                          <td className="td-actions">
+                            {p.status !== 'PAID' && p.status !== 'CANCELLED' ? (
+                              <button
+                                className="btn-action-pay"
+                                onClick={() => handleOpenPaymentModal(p)}
+                                title="Efetuar Baixa / Pagamento"
+                              >
+                                <DollarSign size={13} />
+                                <span>Pagar</span>
+                              </button>
+                            ) : (
+                              <span className="paid-icon" title="Conta Liquidada">
+                                <CheckCircle2 size={16} />
+                              </span>
                             )}
-                          </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ABA 2: CONTAS A RECEBER */}
+          {activeTab === 'receivables' && (
+            <div className="tab-pane">
+              <div className="pane-toolbar">
+                <div className="search-box">
+                  <Search size={15} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por cliente ou descrição..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+
+                <div className="filter-group">
+                  <select
+                    value={receivableStatusFilter}
+                    onChange={(e) => setReceivableStatusFilter(e.target.value)}
+                  >
+                    <option value="ALL">Todos os Status</option>
+                    <option value="PENDING">Pendente</option>
+                    <option value="PARTIALLY_RECEIVED">Parcialmente Recebido</option>
+                    <option value="RECEIVED">Recebido</option>
+                    <option value="OVERDUE">Vencido</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-responsive">
+                <table className="finance-table">
+                  <thead>
+                    <tr>
+                      <th>Cliente / Devedor</th>
+                      <th>Descrição</th>
+                      <th>Vencimento</th>
+                      <th>Valor Original</th>
+                      <th>Saldo a Receber</th>
+                      <th>Status</th>
+                      <th className="th-actions">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredReceivables.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="empty-state">
+                          Nenhum título a receber registrado.
                         </td>
-                        <td>
-                          <span className="parcel-tag">
-                            {p.installment_number}/{p.total_installments}
-                          </span>
-                        </td>
-                        <td>{fmtCurrency(p.original_amount)}</td>
-                        <td className="outstanding-val">{fmtCurrency(p.outstanding_amount)}</td>
-                        <td>{renderStatusBadge(p.status)}</td>
-                        <td className="td-actions">
-                          {p.status !== 'PAID' && p.status !== 'CANCELLED' ? (
-                            <button
-                              className="btn-action-pay"
-                              onClick={() => handleOpenPaymentModal(p)}
-                              title="Efetuar Baixa / Pagamento"
-                            >
-                              <DollarSign size={13} />
-                              <span>Pagar</span>
-                            </button>
-                          ) : (
-                            <span className="paid-icon" title="Conta Liquidada">
-                              <CheckCircle2 size={16} />
+                      </tr>
+                    ) : (
+                      filteredReceivables.map((r) => (
+                        <tr key={r.id}>
+                          <td>
+                            <strong>{r.customer_name}</strong>
+                            {r.customer_document && <span className="doc-sub"> ({r.customer_document})</span>}
+                          </td>
+                          <td>{r.description}</td>
+                          <td>
+                            <span className="date-cell">
+                              <Calendar size={12} />
+                              {fmtDate(r.due_date)}
                             </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ABA 2: CONTAS A RECEBER */}
-        {activeTab === 'receivables' && (
-          <div className="tab-pane">
-            <div className="pane-toolbar">
-              <button className="btn-primary" onClick={() => setIsReceivableModalOpen(true)}>
-                <Plus size={15} />
-                <span>Novo Título a Receber</span>
-              </button>
-            </div>
-
-            <div className="table-responsive">
-              <table className="finance-table">
-                <thead>
-                  <tr>
-                    <th>Cliente / Devedor</th>
-                    <th>Descrição</th>
-                    <th>Vencimento</th>
-                    <th>Valor Original</th>
-                    <th>Saldo a Receber</th>
-                    <th>Status</th>
-                    <th className="th-actions">Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {receivables.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="empty-state">
-                        Nenhum título a receber registrado.
-                      </td>
-                    </tr>
-                  ) : (
-                    receivables.map((r) => (
-                      <tr key={r.id}>
-                        <td>
-                          <strong>{r.customer_name}</strong>
-                          {r.customer_document && <span className="doc-sub"> ({r.customer_document})</span>}
-                        </td>
-                        <td>{r.description}</td>
-                        <td>{fmtDate(r.due_date)}</td>
-                        <td>{fmtCurrency(r.original_amount)}</td>
-                        <td className="in-amount">{fmtCurrency(r.outstanding_amount)}</td>
-                        <td>{renderStatusBadge(r.status)}</td>
-                        <td className="td-actions">
-                          {r.status !== 'RECEIVED' && r.status !== 'CANCELLED' && (
-                            <button
-                              className="btn-action-receive"
-                              onClick={() => handleOpenReceiptModal(r)}
-                              title="Registrar Recebimento"
-                            >
-                              <CheckCircle2 size={13} />
-                              <span>Receber</span>
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ABA 3: TESOURARIA & EXTRATOS */}
-        {activeTab === 'treasury' && (
-          <div className="tab-pane">
-            <div className="treasury-cards-row">
-              {bankAccounts.map((acc) => (
-                <div key={acc.id} className="bank-account-card">
-                  <div className="acc-header">
-                    <Building2 size={16} />
-                    <span className="acc-type">{acc.account_type}</span>
-                  </div>
-                  <h3 className="acc-name">{acc.bank_name}</h3>
-                  <div className="acc-details">
-                    {acc.agency && <span>Ag: {acc.agency}</span>}
-                    {acc.account_number && <span>CC: {acc.account_number}</span>}
-                  </div>
-                  <div className="acc-balance">
-                    <span className="label">Saldo Atual</span>
-                    <span className="val">{fmtCurrency(acc.current_balance)}</span>
-                  </div>
-                </div>
-              ))}
-
-              <div className="bank-account-card add-account-card" onClick={() => setIsAccountModalOpen(true)}>
-                <Plus size={24} />
-                <span>Adicionar Conta Bancária / Caixa</span>
+                          </td>
+                          <td>{fmtCurrency(r.original_amount)}</td>
+                          <td className="in-amount">{fmtCurrency(r.outstanding_amount)}</td>
+                          <td>{renderStatusBadge(r.status)}</td>
+                          <td className="td-actions">
+                            {r.status !== 'RECEIVED' && r.status !== 'CANCELLED' && (
+                              <button
+                                className="btn-action-receive"
+                                onClick={() => handleOpenReceiptModal(r)}
+                                title="Registrar Recebimento"
+                              >
+                                <CheckCircle2 size={13} />
+                                <span>Receber</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
+          )}
 
-            <div className="pane-section-header">
-              <h3>Extrato de Movimentações Bancárias</h3>
-              <button className="btn-secondary" onClick={() => setIsTxModalOpen(true)}>
-                <Plus size={14} />
-                <span>Lançar Movimentação Manual</span>
-              </button>
-            </div>
+          {/* ABA 3: TESOURARIA & EXTRATOS */}
+          {activeTab === 'treasury' && (
+            <div className="tab-pane">
+              <div className="treasury-cards-row">
+                {bankAccounts.map((acc) => (
+                  <div key={acc.id} className="bank-account-card">
+                    <div className="acc-header">
+                      <Building2 size={16} />
+                      <span className="acc-type">{acc.account_type}</span>
+                    </div>
+                    <h3 className="acc-name">{acc.bank_name}</h3>
+                    <div className="acc-details">
+                      {acc.agency && <span>Ag: {acc.agency}</span>}
+                      {acc.account_number && <span>CC: {acc.account_number}</span>}
+                    </div>
+                    <div className="acc-balance">
+                      <span className="label">Saldo Atual</span>
+                      <span className="val">{fmtCurrency(acc.current_balance)}</span>
+                    </div>
+                  </div>
+                ))}
 
-            <div className="table-responsive">
-              <table className="finance-table">
-                <thead>
-                  <tr>
-                    <th>Data</th>
-                    <th>Conta</th>
-                    <th>Descrição</th>
-                    <th>Documento</th>
-                    <th>Tipo</th>
-                    <th>Valor</th>
-                    <th>Saldo Após</th>
-                    <th>Status Conciliação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transactions.length === 0 ? (
+                <div className="bank-account-card add-account-card" onClick={() => setIsAccountModalOpen(true)}>
+                  <Plus size={24} />
+                  <span>Adicionar Conta Bancária / Caixa</span>
+                </div>
+              </div>
+
+              <div className="pane-section-header">
+                <h3>Extrato de Movimentações Bancárias</h3>
+                <button onClick={() => setIsTxModalOpen(true)}>
+                  <Plus size={14} />
+                  <span>Lançar Movimentação Manual</span>
+                </button>
+              </div>
+
+              <div className="table-responsive">
+                <table className="finance-table">
+                  <thead>
                     <tr>
-                      <td colSpan={8} className="empty-state">
-                        Nenhuma movimentação bancária registrada.
-                      </td>
+                      <th>Data</th>
+                      <th>Conta</th>
+                      <th>Descrição</th>
+                      <th>Documento</th>
+                      <th>Tipo</th>
+                      <th>Valor</th>
+                      <th>Saldo Após</th>
+                      <th>Status Conciliação</th>
                     </tr>
-                  ) : (
-                    transactions.map((tx) => (
-                      <tr key={tx.id}>
-                        <td>{fmtDate(tx.transaction_date)}</td>
-                        <td>{bankAccounts.find(b => b.id === tx.bank_account_id)?.bank_name || '-'}</td>
-                        <td>{tx.description}</td>
-                        <td>{tx.document_number || '-'}</td>
-                        <td>
-                          <span className={`tx-pill ${tx.transaction_type.toLowerCase()}`}>
-                            {tx.transaction_type === 'CREDIT' ? 'Crédito (+)' : 'Débito (-)'}
-                          </span>
-                        </td>
-                        <td className={tx.transaction_type === 'CREDIT' ? 'in-amount' : 'out-amount'}>
-                          {fmtCurrency(tx.amount)}
-                        </td>
-                        <td>{tx.balance_after ? fmtCurrency(tx.balance_after) : '-'}</td>
-                        <td>
-                          <span className={`reconcile-badge ${tx.status}`}>
-                            {tx.status === 'reconciled' ? 'Conciliado' : 'Pendente'}
-                          </span>
+                  </thead>
+                  <tbody>
+                    {transactions.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="empty-state">
+                          Nenhuma movimentação bancária registrada.
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      transactions.map((tx) => (
+                        <tr key={tx.id}>
+                          <td>{fmtDate(tx.transaction_date)}</td>
+                          <td>{bankAccounts.find(b => b.id === tx.bank_account_id)?.bank_name || '-'}</td>
+                          <td>{tx.description}</td>
+                          <td>{tx.document_number || '-'}</td>
+                          <td>
+                            <span className={`tx-pill ${tx.transaction_type.toLowerCase()}`}>
+                              {tx.transaction_type === 'CREDIT' ? 'Crédito (+)' : 'Débito (-)'}
+                            </span>
+                          </td>
+                          <td className={tx.transaction_type === 'CREDIT' ? 'in-amount' : 'out-amount'}>
+                            {fmtCurrency(tx.amount)}
+                          </td>
+                          <td>{tx.balance_after ? fmtCurrency(tx.balance_after) : '-'}</td>
+                          <td>
+                            <span className={`reconcile-badge ${tx.status}`}>
+                              {tx.status === 'reconciled' ? 'Conciliado' : 'Pendente'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* ABA 4: CONCILIAÇÃO BANCÁRIA */}
-        {activeTab === 'reconciliation' && (
-          <div className="tab-pane">
-            <div className="reconciliation-split-view">
-              <div className="split-column">
-                <h3>Movimentações do Extrato (Pendentes)</h3>
-                <div className="item-cards-list">
-                  {transactions.filter(t => t.status === 'pending').length === 0 ? (
-                    <p className="all-clear">🎉 Todas as movimentações bancárias estão conciliadas!</p>
-                  ) : (
-                    transactions.filter(t => t.status === 'pending').map(tx => (
-                      <div key={tx.id} className="reconcile-card">
-                        <div className="r-header">
-                          <span className="date">{fmtDate(tx.transaction_date)}</span>
-                          <span className={`amount ${tx.transaction_type.toLowerCase()}`}>
-                            {tx.transaction_type === 'CREDIT' ? '+' : '-'}{fmtCurrency(tx.amount)}
-                          </span>
+          {/* ABA 4: CONCILIAÇÃO BANCÁRIA */}
+          {activeTab === 'reconciliation' && (
+            <div className="tab-pane">
+              <div className="reconciliation-split-view">
+                <div className="split-column">
+                  <h3>Movimentações do Extrato (Pendentes)</h3>
+                  <div className="item-cards-list">
+                    {transactions.filter(t => t.status === 'pending').length === 0 ? (
+                      <p className="all-clear">🎉 Todas as movimentações bancárias estão conciliadas!</p>
+                    ) : (
+                      transactions.filter(t => t.status === 'pending').map(tx => (
+                        <div key={tx.id} className="reconcile-card">
+                          <div className="r-header">
+                            <span className="date">{fmtDate(tx.transaction_date)}</span>
+                            <span className={`amount ${tx.transaction_type.toLowerCase()}`}>
+                              {tx.transaction_type === 'CREDIT' ? '+' : '-'}{fmtCurrency(tx.amount)}
+                            </span>
+                          </div>
+                          <div className="r-desc">{tx.description}</div>
                         </div>
-                        <div className="r-desc">{tx.description}</div>
-                      </div>
-                    ))
-                  )}
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="split-column">
+                  <h3>Pagamentos & Recebimentos do Sistema</h3>
+                  <div className="item-cards-list">
+                    <p className="hint-text">
+                      Os pagamentos e recebimentos baixados com conta bancária são auto-conciliados no ato da baixa.
+                    </p>
+                  </div>
                 </div>
               </div>
+            </div>
+          )}
 
-              <div className="split-column">
-                <h3>Pagamentos & Recebimentos do Sistema</h3>
-                <div className="item-cards-list">
-                  <p className="hint-text">
-                    Os pagamentos e recebimentos baixados com conta bancária são auto-conciliados no ato da baixa.
-                  </p>
+          {/* ABA 5: DOCUMENTOS FISCAIS */}
+          {activeTab === 'fiscal-documents' && (
+            <div className="tab-pane">
+              <div className="table-responsive">
+                <table className="finance-table">
+                  <thead>
+                    <tr>
+                      <th>Direção</th>
+                      <th>Tipo</th>
+                      <th>Número / Série</th>
+                      <th>Emissor</th>
+                      <th>Data Emissão</th>
+                      <th>Valor Total</th>
+                      <th>Impostos</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fiscalDocs.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="empty-state">
+                          Nenhum documento fiscal registrado.
+                        </td>
+                      </tr>
+                    ) : (
+                      fiscalDocs.map((doc) => (
+                        <tr key={doc.id}>
+                          <td>
+                            <span className={`direction-badge ${doc.direction.toLowerCase()}`}>
+                              {doc.direction === 'INBOUND' ? 'Entrada' : 'Saída'}
+                            </span>
+                          </td>
+                          <td>{doc.document_type}</td>
+                          <td><strong>{doc.document_number}</strong> {doc.series && `(Série ${doc.series})`}</td>
+                          <td>{doc.issuer_name}</td>
+                          <td>{fmtDate(doc.issue_date)}</td>
+                          <td>{fmtCurrency(doc.total_amount)}</td>
+                          <td>{fmtCurrency(doc.tax_amount)}</td>
+                          <td><span className="badge-approved">{doc.status}</span></td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ABA 6: CATEGORIAS & CONTAS */}
+          {activeTab === 'categories' && (
+            <div className="tab-pane">
+              <div className="table-responsive">
+                <table className="finance-table">
+                  <thead>
+                    <tr>
+                      <th>Código</th>
+                      <th>Nome da Categoria</th>
+                      <th>Tipo</th>
+                      <th>Descrição</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categories.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="empty-state">
+                          Nenhuma categoria cadastrada.
+                        </td>
+                      </tr>
+                    ) : (
+                      categories.map((c) => (
+                        <tr key={c.id}>
+                          <td><code>{c.code || '-'}</code></td>
+                          <td><strong>{c.name}</strong></td>
+                          <td>
+                            <span className={`nature-badge ${c.category_type === 'EXPENSE' ? 'opex' : 'capex'}`}>
+                              {c.category_type === 'EXPENSE' ? 'Despesa' : 'Receita'}
+                            </span>
+                          </td>
+                          <td>{c.description || '-'}</td>
+                          <td><span className="badge-approved">{c.is_active ? 'Ativa' : 'Inativa'}</span></td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ABA 7: FLUXO DE CAIXA & DRE */}
+          {activeTab === 'reports' && (
+            <div className="tab-pane">
+              <div className="dre-card">
+                <h3>Demonstrativo de Resultado & Fluxo de Caixa (DRE Simplificado)</h3>
+                <div className="dre-row">
+                  <span>(+) Receitas Previstas (Mês)</span>
+                  <span className="in-amount">{fmtCurrency(dashboard?.receivables_month)}</span>
+                </div>
+                <div className="dre-row">
+                  <span>(-) Despesas Operacionais (OPEX)</span>
+                  <span className="out-amount">{fmtCurrency(dashboard?.opex_month)}</span>
+                </div>
+                <div className="dre-row">
+                  <span>(-) Investimentos em Ativos (CAPEX)</span>
+                  <span className="out-amount">{fmtCurrency(dashboard?.capex_month)}</span>
+                </div>
+                <div className="dre-row total-row">
+                  <span>(=) Resultado Projetado do Exercício</span>
+                  <span className={((dashboard?.receivables_month || 0) - (dashboard?.payables_month || 0)) >= 0 ? 'in-amount' : 'out-amount'}>
+                    {fmtCurrency((dashboard?.receivables_month || 0) - (dashboard?.payables_month || 0))}
+                  </span>
                 </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* ABA 5: DOCUMENTOS FISCAIS */}
-        {activeTab === 'fiscal-documents' && (
-          <div className="tab-pane">
-            <div className="table-responsive">
-              <table className="finance-table">
-                <thead>
-                  <tr>
-                    <th>Direção</th>
-                    <th>Tipo</th>
-                    <th>Número / Série</th>
-                    <th>Emissor</th>
-                    <th>Data Emissão</th>
-                    <th>Valor Total</th>
-                    <th>Impostos</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fiscalDocs.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="empty-state">
-                        Nenhum documento fiscal registrado.
-                      </td>
-                    </tr>
-                  ) : (
-                    fiscalDocs.map((doc) => (
-                      <tr key={doc.id}>
-                        <td>
-                          <span className={`direction-badge ${doc.direction.toLowerCase()}`}>
-                            {doc.direction === 'INBOUND' ? 'Entrada' : 'Saída'}
-                          </span>
-                        </td>
-                        <td>{doc.document_type}</td>
-                        <td><strong>{doc.document_number}</strong> {doc.series && `(Série ${doc.series})`}</td>
-                        <td>{doc.issuer_name}</td>
-                        <td>{fmtDate(doc.issue_date)}</td>
-                        <td>{fmtCurrency(doc.total_amount)}</td>
-                        <td>{fmtCurrency(doc.tax_amount)}</td>
-                        <td><span className="badge-approved">{doc.status}</span></td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ABA 6: CATEGORIAS & CONTAS */}
-        {activeTab === 'categories' && (
-          <div className="tab-pane">
-            <div className="pane-toolbar">
-              <button className="btn-primary" onClick={() => setIsCategoryModalOpen(true)}>
-                <Plus size={15} />
-                <span>Nova Categoria Financeira</span>
-              </button>
-            </div>
-
-            <div className="table-responsive">
-              <table className="finance-table">
-                <thead>
-                  <tr>
-                    <th>Código</th>
-                    <th>Nome da Categoria</th>
-                    <th>Tipo</th>
-                    <th>Descrição</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {categories.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="empty-state">
-                        Nenhuma categoria cadastrada.
-                      </td>
-                    </tr>
-                  ) : (
-                    categories.map((c) => (
-                      <tr key={c.id}>
-                        <td><code>{c.code || '-'}</code></td>
-                        <td><strong>{c.name}</strong></td>
-                        <td>
-                          <span className={`nature-badge ${c.category_type === 'EXPENSE' ? 'opex' : 'capex'}`}>
-                            {c.category_type === 'EXPENSE' ? 'Despesa' : 'Receita'}
-                          </span>
-                        </td>
-                        <td>{c.description || '-'}</td>
-                        <td><span className="badge-approved">{c.is_active ? 'Ativa' : 'Inativa'}</span></td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ABA 7: FLUXO DE CAIXA & DRE */}
-        {activeTab === 'reports' && (
-          <div className="tab-pane">
-            <div className="dre-card">
-              <h3>Demonstrativo de Resultado & Fluxo de Caixa (DRE Simplificado)</h3>
-              <div className="dre-row">
-                <span>(+) Receitas Previstas (Mês)</span>
-                <span className="in-amount">{fmtCurrency(dashboard?.receivables_month)}</span>
-              </div>
-              <div className="dre-row">
-                <span>(-) Despesas Operacionais (OPEX)</span>
-                <span className="out-amount">{fmtCurrency(dashboard?.opex_month)}</span>
-              </div>
-              <div className="dre-row">
-                <span>(-) Investimentos em Ativos (CAPEX)</span>
-                <span className="out-amount">{fmtCurrency(dashboard?.capex_month)}</span>
-              </div>
-              <div className="dre-row total-row">
-                <span>(=) Resultado Projetado do Exercício</span>
-                <span className={((dashboard?.receivables_month || 0) - (dashboard?.payables_month || 0)) >= 0 ? 'in-amount' : 'out-amount'}>
-                  {fmtCurrency((dashboard?.receivables_month || 0) - (dashboard?.payables_month || 0))}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
         </main>
       </div>
 
       {/* =====================================================================
-          MODAIS DO SISTEMA FINANCEIRO
+          MODAIS DO SISTEMA FINANCEIRO (COM SUPORTE A ESC KEY)
           ===================================================================== */}
 
       {/* MODAL 1: NOVA DESPESA AVULSA */}
-      {isExpenseModalOpen && (
-        <div className="modal-backdrop">
-          <div className="finance-modal modal-large">
-            <div className="modal-header">
-              <h2>Lançar Nova Despesa Avulsa (Contas a Pagar)</h2>
-              <button className="btn-close" onClick={() => setIsExpenseModalOpen(false)}>
-                <X size={18} />
-              </button>
+      <Modal
+        isOpen={isExpenseModalOpen}
+        onClose={() => setIsExpenseModalOpen(false)}
+        title="Lançar Nova Despesa Avulsa"
+        subtitle="Registro de contas a pagar com classificação orçamentária"
+        size="lg"
+      >
+        <form onSubmit={handleCreateExpense} className="wizard-form">
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Favorecido / Fornecedor *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: Copel Energia, Imobiliária Central, AWS"
+                value={expenseForm.favored_name}
+                onChange={(e) => setExpenseForm({ ...expenseForm, favored_name: e.target.value })}
+              />
             </div>
-            <form onSubmit={handleCreateExpense}>
-              <div className="modal-body">
-                <div className="form-row">
-                  <div className="form-group flex-2">
-                    <label>Favorecido / Fornecedor *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ex: Copel Energia, Imobiliária Central, AWS"
-                      value={expenseForm.favored_name}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, favored_name: e.target.value })}
-                    />
-                  </div>
 
-                  <div className="form-group flex-1">
-                    <label>Valor Total (R$) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      required
-                      placeholder="0,00"
-                      value={expenseForm.original_amount}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, original_amount: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Descrição da Despesa *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Conta de Luz referente ao mês de Agosto/2026"
-                    value={expenseForm.description}
-                    onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Data de Emissão *</label>
-                    <input
-                      type="date"
-                      required
-                      value={expenseForm.issue_date}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, issue_date: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label>Data de Vencimento *</label>
-                    <input
-                      type="date"
-                      required
-                      value={expenseForm.due_date}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, due_date: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label>Classificação *</label>
-                    <select
-                      value={expenseForm.expense_nature}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, expense_nature: e.target.value as any })}
-                    >
-                      <option value="OPEX">OPEX (Despesa Operacional)</option>
-                      <option value="CAPEX">CAPEX (Investimento em Ativos)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Categoria Financeira</label>
-                    <select
-                      value={expenseForm.financial_category_id}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, financial_category_id: e.target.value })}
-                    >
-                      <option value="">Selecione uma categoria...</option>
-                      {categories.filter(c => c.category_type === 'EXPENSE').map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Centro de Custo</label>
-                    <select
-                      value={expenseForm.cost_center_id}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, cost_center_id: e.target.value })}
-                    >
-                      <option value="">Selecione um centro de custo...</option>
-                      {costCenters.map(cc => (
-                        <option key={cc.id} value={cc.id}>{cc.name} ({cc.code})</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Parcelamento</label>
-                    <select
-                      value={expenseForm.installments_count}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, installments_count: Number(e.target.value) })}
-                    >
-                      <option value={1}>À vista (1x)</option>
-                      <option value={2}>2 Parcelas</option>
-                      <option value={3}>3 Parcelas</option>
-                      <option value={6}>6 Parcelas</option>
-                      <option value={12}>12 Parcelas</option>
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Forma de Pagamento Prevista</label>
-                    <select
-                      value={expenseForm.payment_method_expected}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, payment_method_expected: e.target.value })}
-                    >
-                      <option value="BOLETO">Boleto Bancário</option>
-                      <option value="PIX">PIX</option>
-                      <option value="TRANSFERENCIA">Transferência Bancária (TED)</option>
-                      <option value="CARTAO">Cartão de Crédito</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Linha Digitável do Boleto / Código de Barras (Opcional)</label>
-                  <input
-                    type="text"
-                    placeholder="34191.79001 01043.510047..."
-                    value={expenseForm.digitable_line}
-                    onChange={(e) => setExpenseForm({ ...expenseForm, digitable_line: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsExpenseModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Confirmar Lançamento
-                </button>
-              </div>
-            </form>
+            <div className="form-group flex-1">
+              <label>Valor Total (R$) *</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                required
+                placeholder="0,00"
+                value={expenseForm.original_amount}
+                onChange={(e) => setExpenseForm({ ...expenseForm, original_amount: e.target.value })}
+              />
+            </div>
           </div>
-        </div>
-      )}
+
+          <div className="form-group">
+            <label>Descrição da Despesa *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Conta de Luz referente ao mês de Agosto/2026"
+              value={expenseForm.description}
+              onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
+            />
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Data de Emissão *</label>
+              <input
+                type="date"
+                required
+                value={expenseForm.issue_date}
+                onChange={(e) => setExpenseForm({ ...expenseForm, issue_date: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Data de Vencimento *</label>
+              <input
+                type="date"
+                required
+                value={expenseForm.due_date}
+                onChange={(e) => setExpenseForm({ ...expenseForm, due_date: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Classificação *</label>
+              <select
+                value={expenseForm.expense_nature}
+                onChange={(e) => setExpenseForm({ ...expenseForm, expense_nature: e.target.value as any })}
+              >
+                <option value="OPEX">OPEX (Despesa Operacional)</option>
+                <option value="CAPEX">CAPEX (Investimento em Ativos)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Categoria Financeira</label>
+              <select
+                value={expenseForm.financial_category_id}
+                onChange={(e) => setExpenseForm({ ...expenseForm, financial_category_id: e.target.value })}
+              >
+                <option value="">Selecione uma categoria...</option>
+                {categories.filter(c => c.category_type === 'EXPENSE').map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Centro de Custo</label>
+              <select
+                value={expenseForm.cost_center_id}
+                onChange={(e) => setExpenseForm({ ...expenseForm, cost_center_id: e.target.value })}
+              >
+                <option value="">Selecione um centro de custo...</option>
+                {costCenters.map(cc => (
+                  <option key={cc.id} value={cc.id}>{cc.name} ({cc.code})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Parcelamento</label>
+              <select
+                value={expenseForm.installments_count}
+                onChange={(e) => setExpenseForm({ ...expenseForm, installments_count: Number(e.target.value) })}
+              >
+                <option value={1}>À vista (1x)</option>
+                <option value={2}>2 Parcelas</option>
+                <option value={3}>3 Parcelas</option>
+                <option value={6}>6 Parcelas</option>
+                <option value={12}>12 Parcelas</option>
+              </select>
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Forma de Pagamento Prevista</label>
+              <select
+                value={expenseForm.payment_method_expected}
+                onChange={(e) => setExpenseForm({ ...expenseForm, payment_method_expected: e.target.value })}
+              >
+                <option value="BOLETO">Boleto Bancário</option>
+                <option value="PIX">PIX</option>
+                <option value="TRANSFERENCIA">Transferência Bancária (TED)</option>
+                <option value="CARTAO">Cartão de Crédito</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Linha Digitável do Boleto / Código de Barras (Opcional)</label>
+            <input
+              type="text"
+              placeholder="34191.79001 01043.510047..."
+              value={expenseForm.digitable_line}
+              onChange={(e) => setExpenseForm({ ...expenseForm, digitable_line: e.target.value })}
+            />
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsExpenseModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              Confirmar Lançamento
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* MODAL 2: BAIXA DE PAGAMENTO */}
-      {isPaymentModalOpen && selectedPayable && (
-        <div className="modal-backdrop">
-          <div className="finance-modal">
-            <div className="modal-header">
-              <h2>Efetuar Pagamento / Baixa</h2>
-              <button className="btn-close" onClick={() => setIsPaymentModalOpen(false)}>
-                <X size={18} />
+      <Modal
+        isOpen={isPaymentModalOpen && !!selectedPayable}
+        onClose={() => setIsPaymentModalOpen(false)}
+        title="Efetuar Pagamento / Baixa"
+        subtitle="Registro de liquidação de conta a pagar"
+        size="md"
+      >
+        {selectedPayable && (
+          <form onSubmit={handleRegisterPayment} className="wizard-form">
+            <div className="payable-summary-banner">
+              <div>
+                <strong>{selectedPayable.favored_name}</strong>
+                <span>{selectedPayable.description}</span>
+              </div>
+              <div className="banner-val">
+                Saldo Devedor: {fmtCurrency(selectedPayable.outstanding_amount)}
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Valor a Pagar (R$) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max={selectedPayable.outstanding_amount}
+                  required
+                  value={paymentForm.amount}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Data do Pagamento *</label>
+                <input
+                  type="date"
+                  required
+                  value={paymentForm.payment_date}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Conta de Débito (Bancária / Caixa)</label>
+                <select
+                  value={paymentForm.bank_account_id}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, bank_account_id: e.target.value })}
+                >
+                  <option value="">Nenhuma (Não debitar no extrato)</option>
+                  {bankAccounts.map(b => (
+                    <option key={b.id} value={b.id}>{b.bank_name} - Saldo: {fmtCurrency(b.current_balance)}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Forma de Pagamento *</label>
+                <select
+                  value={paymentForm.payment_method}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, payment_method: e.target.value })}
+                >
+                  <option value="BOLETO">Boleto Bancário</option>
+                  <option value="PIX">PIX</option>
+                  <option value="TRANSFERENCIA">Transferência</option>
+                  <option value="DEBIT_CARD">Cartão Débito</option>
+                  <option value="CREDIT_CARD">Cartão Crédito</option>
+                  <option value="CASH">Dinheiro em Espécie</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => setIsPaymentModalOpen(false)}>
+                Cancelar (ESC)
+              </button>
+              <button type="submit" className="btn-primary">
+                Confirmar Pagamento
               </button>
             </div>
-            <form onSubmit={handleRegisterPayment}>
-              <div className="modal-body">
-                <div className="payable-summary-banner">
-                  <div>
-                    <strong>{selectedPayable.favored_name}</strong>
-                    <span>{selectedPayable.description}</span>
-                  </div>
-                  <div className="banner-val">
-                    Saldo Devedor: {fmtCurrency(selectedPayable.outstanding_amount)}
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Valor a Pagar (R$) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      max={selectedPayable.outstanding_amount}
-                      required
-                      value={paymentForm.amount}
-                      onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Data do Pagamento *</label>
-                    <input
-                      type="date"
-                      required
-                      value={paymentForm.payment_date}
-                      onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Conta de Débito (Bancária / Caixa)</label>
-                    <select
-                      value={paymentForm.bank_account_id}
-                      onChange={(e) => setPaymentForm({ ...paymentForm, bank_account_id: e.target.value })}
-                    >
-                      <option value="">Nenhuma (Não debitar no extrato)</option>
-                      {bankAccounts.map(b => (
-                        <option key={b.id} value={b.id}>{b.bank_name} - Saldo: {fmtCurrency(b.current_balance)}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Forma de Pagamento *</label>
-                    <select
-                      value={paymentForm.payment_method}
-                      onChange={(e) => setPaymentForm({ ...paymentForm, payment_method: e.target.value })}
-                    >
-                      <option value="PIX">PIX</option>
-                      <option value="BOLETO">Boleto Bancário</option>
-                      <option value="TRANSFERENCIA">Transferência (TED)</option>
-                      <option value="DEBITO">Débito em Conta</option>
-                      <option value="DINHEIRO">Dinheiro</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Autenticação / Número de Transação</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: E2E123456789 ou Autenticação Itaú"
-                    value={paymentForm.reference}
-                    onChange={(e) => setPaymentForm({ ...paymentForm, reference: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsPaymentModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Confirmar Baixa Financeira
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+          </form>
+        )}
+      </Modal>
 
       {/* MODAL 3: NOVO TÍTULO A RECEBER */}
-      {isReceivableModalOpen && (
-        <div className="modal-backdrop">
-          <div className="finance-modal">
-            <div className="modal-header">
-              <h2>Novo Título a Receber</h2>
-              <button className="btn-close" onClick={() => setIsReceivableModalOpen(false)}>
-                <X size={18} />
-              </button>
+      <Modal
+        isOpen={isReceivableModalOpen}
+        onClose={() => setIsReceivableModalOpen(false)}
+        title="Novo Título a Receber"
+        subtitle="Registro de previsão de receita comercial ou financeira"
+        size="lg"
+      >
+        <form onSubmit={handleCreateReceivable} className="wizard-form">
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Cliente / Sacado *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: Farmácia Central Ltda"
+                value={receivableForm.customer_name}
+                onChange={(e) => setReceivableForm({ ...receivableForm, customer_name: e.target.value })}
+              />
             </div>
-            <form onSubmit={handleCreateReceivable}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label>Cliente / Sacado *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Hospital das Clínicas, Cliente Balcão"
-                    value={receivableForm.customer_name}
-                    onChange={(e) => setReceivableForm({ ...receivableForm, customer_name: e.target.value })}
-                  />
-                </div>
 
-                <div className="form-group">
-                  <label>Descrição do Recebível *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Fatura referente à venda de medicamentos"
-                    value={receivableForm.description}
-                    onChange={(e) => setReceivableForm({ ...receivableForm, description: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Valor Total (R$) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      required
-                      value={receivableForm.original_amount}
-                      onChange={(e) => setReceivableForm({ ...receivableForm, original_amount: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Vencimento *</label>
-                    <input
-                      type="date"
-                      required
-                      value={receivableForm.due_date}
-                      onChange={(e) => setReceivableForm({ ...receivableForm, due_date: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsReceivableModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Cadastrar Recebível
-                </button>
-              </div>
-            </form>
+            <div className="form-group flex-1">
+              <label>CNPJ / CPF</label>
+              <input
+                type="text"
+                placeholder="00.000.000/0001-00"
+                value={receivableForm.customer_document}
+                onChange={(e) => setReceivableForm({ ...receivableForm, customer_document: e.target.value })}
+              />
+            </div>
           </div>
-        </div>
-      )}
+
+          <div className="form-group">
+            <label>Descrição do Recebível *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Prestação de Serviços de Consultoria Farmacêutica"
+              value={receivableForm.description}
+              onChange={(e) => setReceivableForm({ ...receivableForm, description: e.target.value })}
+            />
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Valor Original (R$) *</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                required
+                placeholder="0,00"
+                value={receivableForm.original_amount}
+                onChange={(e) => setReceivableForm({ ...receivableForm, original_amount: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Data de Emissão *</label>
+              <input
+                type="date"
+                required
+                value={receivableForm.issue_date}
+                onChange={(e) => setReceivableForm({ ...receivableForm, issue_date: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Data de Vencimento *</label>
+              <input
+                type="date"
+                required
+                value={receivableForm.due_date}
+                onChange={(e) => setReceivableForm({ ...receivableForm, due_date: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsReceivableModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              Salvar Título a Receber
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* MODAL 4: BAIXA DE RECEBIMENTO */}
-      {isReceiptModalOpen && selectedReceivable && (
-        <div className="modal-backdrop">
-          <div className="finance-modal">
-            <div className="modal-header">
-              <h2>Registrar Recebimento</h2>
-              <button className="btn-close" onClick={() => setIsReceiptModalOpen(false)}>
-                <X size={18} />
+      <Modal
+        isOpen={isReceiptModalOpen && !!selectedReceivable}
+        onClose={() => setIsReceiptModalOpen(false)}
+        title="Registrar Recebimento"
+        subtitle="Entrada de recursos no caixa ou conta bancária"
+        size="md"
+      >
+        {selectedReceivable && (
+          <form onSubmit={handleRegisterReceipt} className="wizard-form">
+            <div className="payable-summary-banner">
+              <div>
+                <strong>{selectedReceivable.customer_name}</strong>
+                <span>{selectedReceivable.description}</span>
+              </div>
+              <div className="banner-val" style={{ color: '#10b981' }}>
+                Saldo a Receber: {fmtCurrency(selectedReceivable.outstanding_amount)}
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Valor Recebido (R$) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max={selectedReceivable.outstanding_amount}
+                  required
+                  value={receiptForm.amount}
+                  onChange={(e) => setReceiptForm({ ...receiptForm, amount: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Data do Recebimento *</label>
+                <input
+                  type="date"
+                  required
+                  value={receiptForm.receipt_date}
+                  onChange={(e) => setReceiptForm({ ...receiptForm, receipt_date: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Conta de Crédito (Bancária / Caixa)</label>
+                <select
+                  value={receiptForm.bank_account_id}
+                  onChange={(e) => setReceiptForm({ ...receiptForm, bank_account_id: e.target.value })}
+                >
+                  <option value="">Nenhuma (Não creditar no extrato)</option>
+                  {bankAccounts.map(b => (
+                    <option key={b.id} value={b.id}>{b.bank_name} - Saldo: {fmtCurrency(b.current_balance)}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Forma de Recebimento *</label>
+                <select
+                  value={receiptForm.payment_method}
+                  onChange={(e) => setReceiptForm({ ...receiptForm, payment_method: e.target.value })}
+                >
+                  <option value="PIX">PIX</option>
+                  <option value="BOLETO">Boleto Bancário</option>
+                  <option value="TRANSFERENCIA">TED / Transferência</option>
+                  <option value="DEBIT_CARD">Cartão Débito</option>
+                  <option value="CREDIT_CARD">Cartão Crédito</option>
+                  <option value="CASH">Dinheiro em Espécie</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => setIsReceiptModalOpen(false)}>
+                Cancelar (ESC)
+              </button>
+              <button type="submit" className="btn-primary">
+                Confirmar Recebimento
               </button>
             </div>
-            <form onSubmit={handleRegisterReceipt}>
-              <div className="modal-body">
-                <div className="payable-summary-banner">
-                  <div>
-                    <strong>{selectedReceivable.customer_name}</strong>
-                    <span>{selectedReceivable.description}</span>
-                  </div>
-                  <div className="banner-val in-amount">
-                    Saldo a Receber: {fmtCurrency(selectedReceivable.outstanding_amount)}
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Valor Recebido (R$) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      max={selectedReceivable.outstanding_amount}
-                      required
-                      value={receiptForm.amount}
-                      onChange={(e) => setReceiptForm({ ...receiptForm, amount: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Data de Crédito *</label>
-                    <input
-                      type="date"
-                      required
-                      value={receiptForm.receipt_date}
-                      onChange={(e) => setReceiptForm({ ...receiptForm, receipt_date: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Conta de Destino</label>
-                    <select
-                      value={receiptForm.bank_account_id}
-                      onChange={(e) => setReceiptForm({ ...receiptForm, bank_account_id: e.target.value })}
-                    >
-                      <option value="">Nenhuma (Não creditar no extrato)</option>
-                      {bankAccounts.map(b => (
-                        <option key={b.id} value={b.id}>{b.bank_name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Forma de Pagamento</label>
-                    <select
-                      value={receiptForm.payment_method}
-                      onChange={(e) => setReceiptForm({ ...receiptForm, payment_method: e.target.value })}
-                    >
-                      <option value="PIX">PIX</option>
-                      <option value="TRANSFERENCIA">Transferência (TED)</option>
-                      <option value="CARTAO_DEBITO">Cartão de Débito</option>
-                      <option value="CARTAO_CREDITO">Cartão de Crédito</option>
-                      <option value="DINHEIRO">Dinheiro</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsReceiptModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Confirmar Entrada
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+          </form>
+        )}
+      </Modal>
 
       {/* MODAL 5: NOVA CONTA BANCÁRIA */}
-      {isAccountModalOpen && (
-        <div className="modal-backdrop">
-          <div className="finance-modal">
-            <div className="modal-header">
-              <h2>Cadastrar Nova Conta Bancária / Caixa</h2>
-              <button className="btn-close" onClick={() => setIsAccountModalOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleCreateBankAccount}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label>Nome da Instituição / Caixa *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Banco Itaú, Caixa Geral Farmácia"
-                    value={accountForm.bank_name}
-                    onChange={(e) => setAccountForm({ ...accountForm, bank_name: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Tipo de Conta *</label>
-                    <select
-                      value={accountForm.account_type}
-                      onChange={(e) => setAccountForm({ ...accountForm, account_type: e.target.value })}
-                    >
-                      <option value="CHECKING">Conta Corrente</option>
-                      <option value="SAVINGS">Poupança / Aplicação</option>
-                      <option value="CASH">Caixa Físico</option>
-                      <option value="DIGITAL_WALLET">Carteira Digital</option>
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Saldo Inicial de Implantação (R$)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={accountForm.opening_balance}
-                      onChange={(e) => setAccountForm({ ...accountForm, opening_balance: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Agência</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: 1234"
-                      value={accountForm.agency}
-                      onChange={(e) => setAccountForm({ ...accountForm, agency: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Número da Conta</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: 56789-0"
-                      value={accountForm.account_number}
-                      onChange={(e) => setAccountForm({ ...accountForm, account_number: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsAccountModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Salvar Conta
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        title="Cadastrar Nova Conta Bancária / Caixa"
+        subtitle="Gerenciamento de contas e tesouraria"
+        size="md"
+      >
+        <form onSubmit={handleCreateAccount} className="wizard-form">
+          <div className="form-group">
+            <label>Nome da Instituição / Descrição da Conta *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Banco Itaú - Conta Operacional"
+              value={accountForm.bank_name}
+              onChange={(e) => setAccountForm({ ...accountForm, bank_name: e.target.value })}
+            />
           </div>
-        </div>
-      )}
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Tipo de Conta *</label>
+              <select
+                value={accountForm.account_type}
+                onChange={(e) => setAccountForm({ ...accountForm, account_type: e.target.value as any })}
+              >
+                <option value="CHECKING">Conta Corrente</option>
+                <option value="SAVINGS">Conta Poupança</option>
+                <option value="CASH">Caixa Físico / Gaveta</option>
+                <option value="DIGITAL_WALLET">Carteira Digital</option>
+              </select>
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Saldo Inicial (R$)</label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="0,00"
+                value={accountForm.opening_balance}
+                onChange={(e) => setAccountForm({ ...accountForm, opening_balance: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Agência</label>
+              <input
+                type="text"
+                placeholder="0001"
+                value={accountForm.agency}
+                onChange={(e) => setAccountForm({ ...accountForm, agency: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Número da Conta</label>
+              <input
+                type="text"
+                placeholder="12345-6"
+                value={accountForm.account_number}
+                onChange={(e) => setAccountForm({ ...accountForm, account_number: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsAccountModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              Salvar Conta
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* MODAL 6: NOVA CATEGORIA FINANCEIRA */}
-      {isCategoryModalOpen && (
-        <div className="modal-backdrop">
-          <div className="finance-modal">
-            <div className="modal-header">
-              <h2>Nova Categoria Financeira (Plano de Contas)</h2>
-              <button className="btn-close" onClick={() => setIsCategoryModalOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleCreateCategory}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label>Nome da Categoria *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Medicamentos & Insumos, Aluguel, Energia"
-                    value={categoryForm.name}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Tipo de Categoria *</label>
-                    <select
-                      value={categoryForm.category_type}
-                      onChange={(e) => setCategoryForm({ ...categoryForm, category_type: e.target.value })}
-                    >
-                      <option value="EXPENSE">Despesa</option>
-                      <option value="REVENUE">Receita</option>
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Código Estrutural (Opcional)</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: 1.01.01"
-                      value={categoryForm.code}
-                      onChange={(e) => setCategoryForm({ ...categoryForm, code: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Descrição</label>
-                  <input
-                    type="text"
-                    placeholder="Breve descrição da aplicação desta categoria"
-                    value={categoryForm.description}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsCategoryModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Salvar Categoria
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={isCategoryModalOpen}
+        onClose={() => setIsCategoryModalOpen(false)}
+        title="Nova Categoria no Plano de Contas"
+        subtitle="Estruturação contábil de receitas e despesas"
+        size="md"
+      >
+        <form onSubmit={handleCreateCategory} className="wizard-form">
+          <div className="form-group">
+            <label>Nome da Categoria *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Energia Elétrica, Aluguel, Venda de Mercadorias"
+              value={categoryForm.name}
+              onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+            />
           </div>
-        </div>
-      )}
 
-      {/* MODAL 7: MOVIMENTAÇÃO MANUAL */}
-      {isTxModalOpen && (
-        <div className="modal-backdrop">
-          <div className="finance-modal">
-            <div className="modal-header">
-              <h2>Lançar Movimentação Manual no Extrato</h2>
-              <button className="btn-close" onClick={() => setIsTxModalOpen(false)}>
-                <X size={18} />
-              </button>
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Tipo de Categoria *</label>
+              <select
+                value={categoryForm.category_type}
+                onChange={(e) => setCategoryForm({ ...categoryForm, category_type: e.target.value as any })}
+              >
+                <option value="EXPENSE">Despesa (-)</option>
+                <option value="REVENUE">Receita (+)</option>
+              </select>
             </div>
-            <form onSubmit={handleCreateTx}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label>Conta Bancária / Caixa *</label>
-                  <select
-                    required
-                    value={txForm.bank_account_id}
-                    onChange={(e) => setTxForm({ ...txForm, bank_account_id: e.target.value })}
-                  >
-                    <option value="">Selecione a conta...</option>
-                    {bankAccounts.map(b => (
-                      <option key={b.id} value={b.id}>{b.bank_name}</option>
-                    ))}
-                  </select>
-                </div>
 
-                <div className="form-group">
-                  <label>Descrição do Lançamento *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Rendimento de Aplicação, Tarifa de Manutenção"
-                    value={txForm.description}
-                    onChange={(e) => setTxForm({ ...txForm, description: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Tipo *</label>
-                    <select
-                      value={txForm.transaction_type}
-                      onChange={(e) => setTxForm({ ...txForm, transaction_type: e.target.value })}
-                    >
-                      <option value="DEBIT">Débito (-) Saída de Caixa</option>
-                      <option value="CREDIT">Crédito (+) Entrada em Conta</option>
-                    </select>
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Valor (R$) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      required
-                      value={txForm.amount}
-                      onChange={(e) => setTxForm({ ...txForm, amount: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setIsTxModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary">
-                  Registrar Movimentação
-                </button>
-              </div>
-            </form>
+            <div className="form-group flex-1">
+              <label>Código Contábil (Opcional)</label>
+              <input
+                type="text"
+                placeholder="Ex: 3.1.01.05"
+                value={categoryForm.code}
+                onChange={(e) => setCategoryForm({ ...categoryForm, code: e.target.value })}
+              />
+            </div>
           </div>
-        </div>
-      )}
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsCategoryModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              Salvar Categoria
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL 7: MOVIMENTAÇÃO MANUAL NO EXTRATO */}
+      <Modal
+        isOpen={isTxModalOpen}
+        onClose={() => setIsTxModalOpen(false)}
+        title="Lançar Movimentação Manual no Extrato"
+        subtitle="Ajuste direto de saldo ou tarifas bancárias"
+        size="md"
+      >
+        <form onSubmit={handleCreateTx} className="wizard-form">
+          <div className="form-group">
+            <label>Conta Bancária / Caixa *</label>
+            <select
+              required
+              value={txForm.bank_account_id}
+              onChange={(e) => setTxForm({ ...txForm, bank_account_id: e.target.value })}
+            >
+              <option value="">Selecione a conta...</option>
+              {bankAccounts.map(b => (
+                <option key={b.id} value={b.id}>{b.bank_name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Descrição do Lançamento *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Rendimento de Aplicação, Tarifa de Manutenção"
+              value={txForm.description}
+              onChange={(e) => setTxForm({ ...txForm, description: e.target.value })}
+            />
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Tipo *</label>
+              <select
+                value={txForm.transaction_type}
+                onChange={(e) => setTxForm({ ...txForm, transaction_type: e.target.value })}
+              >
+                <option value="DEBIT">Débito (-) Saída de Caixa</option>
+                <option value="CREDIT">Crédito (+) Entrada em Conta</option>
+              </select>
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Valor (R$) *</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                required
+                value={txForm.amount}
+                onChange={(e) => setTxForm({ ...txForm, amount: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsTxModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              Registrar Movimentação
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };

@@ -43,9 +43,23 @@ class LeadResponse(LeadBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OpportunityQuoteSummaryResponse(BaseModel):
+    id: uuid.UUID
+    quote_number: str
+    total_amount: Decimal
+    net_amount: Decimal
+    status: str
+    valid_until: date
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class OpportunityBase(BaseModel):
     title: str = Field(..., max_length=255)
     customer_name: str = Field(..., max_length=255)
+    customer_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
     estimated_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
     probability_percent: int = Field(default=50, ge=0, le=100)
     expected_closing_date: date | None = None
@@ -62,6 +76,8 @@ class OpportunityCreate(OpportunityBase):
 class OpportunityUpdate(BaseModel):
     title: str | None = None
     customer_name: str | None = None
+    customer_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
     estimated_amount: Decimal | None = None
     probability_percent: int | None = None
     expected_closing_date: date | None = None
@@ -76,6 +92,7 @@ class OpportunityResponse(OpportunityBase):
     created_at: datetime
     updated_at: datetime
     lead: LeadResponse | None = None
+    quotes: list[OpportunityQuoteSummaryResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
 

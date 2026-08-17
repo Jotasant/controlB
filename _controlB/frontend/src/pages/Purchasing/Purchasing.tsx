@@ -19,9 +19,9 @@ import {
   Loader2, AlertCircle, Trash2, ShieldCheck, Box, Check, BarChart2, Award, Edit,
   Tags, Users, Sparkles, Building, X, DollarSign, Zap, SlidersHorizontal,
   CheckSquare, Square, ArrowUpRight, ArrowDownRight, AlertTriangle,
-  UploadCloud, Paperclip
+  UploadCloud, Paperclip, ArrowUpDown, ArrowUp, ArrowDown
 } from 'lucide-react';
-import { purchasingService, inventoryService, formatApiError } from '@/services/api';
+import { purchasingService, inventoryService, cacheManager, formatApiError } from '@/services/api';
 import {
   Supplier, Product, ProductCategory, CostCenter,
   PurchaseRequest, PurchaseOrder, QuotationProcess,
@@ -29,6 +29,7 @@ import {
   PurchaseSuggestionsSummary,
   StockMovement
 } from '@/types';
+import { formatCurrency, formatQuantity, formatPriceInput, formatQuantityInput } from '@/utils/formatters';
 
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
@@ -61,6 +62,38 @@ const PRESET_SEGMENTS = [
 export const Purchasing: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<PurchasingMenuOption>('solicitacoes');
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchField, setSearchField] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [urgencyFilter, setUrgencyFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('');
+
+  // Ordenação Dinâmica (order_by) por Tabela
+  const [reqSortField, setReqSortField] = useState<string>('created_at');
+  const [reqSortDir, setReqSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const [quotSortField, setQuotSortField] = useState<string>('created_at');
+  const [quotSortDir, setQuotSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const [orderSortField, setOrderSortField] = useState<string>('created_at');
+  const [orderSortDir, setOrderSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const [suggSortField, setSuggSortField] = useState<string>('urgency');
+  const [suggSortDir, setSuggSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [supSortField, setSupSortField] = useState<string>('name');
+  const [supSortDir, setSupSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [prodSortField, setProdSortField] = useState<string>('name');
+  const [prodSortDir, setProdSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [catSortField, setCatSortField] = useState<string>('name');
+  const [catSortDir, setCatSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [costSortField, setCostSortField] = useState<string>('code');
+  const [costSortDir, setCostSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [movSortField, setMovSortField] = useState<string>('created_at');
+  const [movSortDir, setMovSortDir] = useState<'asc' | 'desc'>('desc');
 
   // Estados dos Dados carregados da API
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
@@ -269,19 +302,25 @@ export const Purchasing: React.FC = () => {
     loadAllPurchasingData();
   }, []);
 
-  const loadAllPurchasingData = async () => {
-    setLoading(true);
+  const loadAllPurchasingData = async (forceRefresh = false) => {
+    const cachedRequests = cacheManager.get<PurchaseRequest[]>('purchasing:requests');
+    if (!cachedRequests && !requests.length) {
+      setLoading(true);
+    } else if (forceRefresh) {
+      setLoading(true);
+    }
+
     try {
       const [reqData, quotData, poData, supData, prodData, catData, ccData, suggData, movData] = await Promise.all([
-        purchasingService.getPurchaseRequests(),
-        purchasingService.getQuotationProcesses(),
-        purchasingService.getPurchaseOrders(),
-        purchasingService.getSuppliers(),
-        inventoryService.getProducts(),
-        inventoryService.getCategories(),
-        purchasingService.getCostCenters(),
-        purchasingService.getReplenishmentSuggestions(),
-        inventoryService.getInventoryMovements()
+        purchasingService.getPurchaseRequests(forceRefresh),
+        purchasingService.getQuotationProcesses(undefined, forceRefresh),
+        purchasingService.getPurchaseOrders(undefined, forceRefresh),
+        purchasingService.getSuppliers(forceRefresh),
+        inventoryService.getProducts(undefined, forceRefresh),
+        inventoryService.getCategories(forceRefresh),
+        purchasingService.getCostCenters(forceRefresh),
+        purchasingService.getReplenishmentSuggestions(forceRefresh),
+        inventoryService.getInventoryMovements(undefined, undefined, forceRefresh)
       ]);
 
       setRequests(reqData);
@@ -640,7 +679,7 @@ export const Purchasing: React.FC = () => {
     setProductSku(prod.sku);
     setProductDesc(prod.description || '');
     setProductUnit(prod.unit_of_measure);
-    setProductPrice(String(prod.reference_price));
+    setProductPrice(formatPriceInput(prod.reference_price));
     setProductCategoryId(prod.category_id || '');
     setProductBrand(prod.brand || '');
     setProductBarcode(prod.barcode || '');
@@ -648,9 +687,9 @@ export const Purchasing: React.FC = () => {
     setProductIsPerishable(Boolean(prod.is_perishable));
     setProductRequiresBatch(Boolean(prod.requires_batch));
     setProductShelfLifeDays(prod.shelf_life_days ? String(prod.shelf_life_days) : '');
-    setProductCurrentStock(String(prod.current_stock || 0));
-    setProductMinStock(String(prod.min_stock || 0));
-    setProductMaxStock(prod.max_stock ? String(prod.max_stock) : '');
+    setProductCurrentStock(formatQuantityInput(prod.current_stock));
+    setProductMinStock(formatQuantityInput(prod.min_stock));
+    setProductMaxStock(prod.max_stock ? formatQuantityInput(prod.max_stock) : '');
     setProductStorageLocation(prod.storage_location || '');
     setModalError(null);
     setIsModalOpen(true);
@@ -1256,23 +1295,6 @@ export const Purchasing: React.FC = () => {
     }
   };
 
-  const handleSelectAllSuggestions = (selectAll: boolean) => {
-    if (!suggestionsSummary) return;
-    if (selectAll) {
-      setSelectedSuggestionProductIds(suggestionsSummary.items.map(it => it.product_id));
-    } else {
-      setSelectedSuggestionProductIds([]);
-    }
-  };
-
-  const handleSelectCriticalOnly = () => {
-    if (!suggestionsSummary) return;
-    const criticalIds = suggestionsSummary.items
-      .filter(it => it.urgency_level === 'critical' || it.urgency_level === 'high')
-      .map(it => it.product_id);
-    setSelectedSuggestionProductIds(criticalIds);
-  };
-
   const handleOpenQuickOrderModal = () => {
     if (!suggestionsSummary) return;
     const selectedItems = suggestionsSummary.items.filter(it =>
@@ -1373,11 +1395,444 @@ export const Purchasing: React.FC = () => {
 
 
 
-  // Formatação de Moeda
-  const formatCurrency = (val: number | string | undefined) => {
-    const num = typeof val === 'string' ? parseFloat(val) : (val || 0);
-    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(num);
+
+
+  // Handlers de Ordenação Dinâmica
+  const handleReqSort = (field: string) => {
+    if (reqSortField === field) setReqSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setReqSortField(field); setReqSortDir('asc'); }
   };
+  const handleQuotSort = (field: string) => {
+    if (quotSortField === field) setQuotSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setQuotSortField(field); setQuotSortDir('asc'); }
+  };
+  const handleOrderSort = (field: string) => {
+    if (orderSortField === field) setOrderSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setOrderSortField(field); setOrderSortDir('asc'); }
+  };
+  const handleSuggSort = (field: string) => {
+    if (suggSortField === field) setSuggSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setSuggSortField(field); setSuggSortDir('asc'); }
+  };
+  const handleSupSort = (field: string) => {
+    if (supSortField === field) setSupSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setSupSortField(field); setSupSortDir('asc'); }
+  };
+  const handleProdSort = (field: string) => {
+    if (prodSortField === field) setProdSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setProdSortField(field); setProdSortDir('asc'); }
+  };
+  const handleCatSort = (field: string) => {
+    if (catSortField === field) setCatSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setCatSortField(field); setCatSortDir('asc'); }
+  };
+  const handleCostSort = (field: string) => {
+    if (costSortField === field) setCostSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setCostSortField(field); setCostSortDir('asc'); }
+  };
+  const handleMovSort = (field: string) => {
+    if (movSortField === field) setMovSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    else { setMovSortField(field); setMovSortDir('asc'); }
+  };
+
+  // --- FILTROS E ORDENAÇÃO POR MÓDULO ---
+
+  // 1. Sugestões de Reposição
+  const filteredSuggestions = (suggestionsSummary?.items || []).filter(item => {
+    const term = searchTerm.trim().toLowerCase();
+    let matchesSearch = true;
+    if (term) {
+      if (searchField === 'all') {
+        matchesSearch = (
+          item.product_name.toLowerCase().includes(term) ||
+          item.sku.toLowerCase().includes(term) ||
+          Boolean(item.category_name && item.category_name.toLowerCase().includes(term)) ||
+          Boolean(item.brand && item.brand.toLowerCase().includes(term)) ||
+          Boolean(item.storage_location && item.storage_location.toLowerCase().includes(term))
+        );
+      } else if (searchField === 'name') {
+        matchesSearch = item.product_name.toLowerCase().includes(term);
+      } else if (searchField === 'sku') {
+        matchesSearch = item.sku.toLowerCase().includes(term);
+      } else if (searchField === 'brand') {
+        matchesSearch = Boolean(item.brand && item.brand.toLowerCase().includes(term));
+      } else if (searchField === 'location') {
+        matchesSearch = Boolean(item.storage_location && item.storage_location.toLowerCase().includes(term));
+      }
+    }
+
+    let matchesUrgency = true;
+    if (urgencyFilter === 'criticos') {
+      matchesUrgency = item.urgency_level === 'critical' || item.urgency_level === 'high';
+    } else if (urgencyFilter === 'zerados') {
+      matchesUrgency = item.urgency_level === 'critical';
+    } else if (urgencyFilter === 'ponto_pedido') {
+      matchesUrgency = item.urgency_level === 'medium';
+    }
+
+    let matchesCat = true;
+    if (categoryFilter) {
+      matchesCat = item.category_name === categoryFilter;
+    }
+
+    return matchesSearch && matchesUrgency && matchesCat;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+
+    if (suggSortField === 'urgency') {
+      const priority = { critical: 1, high: 2, medium: 3, low: 4 };
+      valA = priority[a.urgency_level as keyof typeof priority] || 99;
+      valB = priority[b.urgency_level as keyof typeof priority] || 99;
+    } else if (suggSortField === 'name') {
+      valA = a.product_name.toLowerCase();
+      valB = b.product_name.toLowerCase();
+    } else if (suggSortField === 'sku') {
+      valA = a.sku.toLowerCase();
+      valB = b.sku.toLowerCase();
+    } else if (suggSortField === 'category') {
+      valA = (a.category_name || '').toLowerCase();
+      valB = (b.category_name || '').toLowerCase();
+    } else if (suggSortField === 'current_stock') {
+      valA = Number(a.current_stock || 0);
+      valB = Number(b.current_stock || 0);
+    } else if (suggSortField === 'suggested_qty') {
+      valA = Number(a.suggested_quantity || 0);
+      valB = Number(b.suggested_quantity || 0);
+    } else if (suggSortField === 'price') {
+      valA = Number(a.reference_price || 0);
+      valB = Number(b.reference_price || 0);
+    } else if (suggSortField === 'subtotal') {
+      valA = Number(a.suggested_quantity || 0) * Number(a.reference_price || 0);
+      valB = Number(b.suggested_quantity || 0) * Number(b.reference_price || 0);
+    }
+
+    if (valA < valB) return suggSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return suggSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 2. Solicitações de Compra (PR)
+  const filteredRequests = (requests || []).filter(req => {
+    const term = searchTerm.trim().toLowerCase();
+    let matchesSearch = true;
+    if (term) {
+      if (searchField === 'all') {
+        matchesSearch = (
+          req.request_number.toLowerCase().includes(term) ||
+          Boolean(req.justification && req.justification.toLowerCase().includes(term))
+        );
+      } else if (searchField === 'number') {
+        matchesSearch = req.request_number.toLowerCase().includes(term);
+      } else if (searchField === 'justification') {
+        matchesSearch = Boolean(req.justification && req.justification.toLowerCase().includes(term));
+      }
+    }
+
+    let matchesStatus = true;
+    if (statusFilter !== 'all') {
+      matchesStatus = req.status === statusFilter;
+    }
+
+    return matchesSearch && matchesStatus;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (reqSortField === 'number') {
+      valA = a.request_number.toLowerCase();
+      valB = b.request_number.toLowerCase();
+    } else if (reqSortField === 'justification') {
+      valA = (a.justification || '').toLowerCase();
+      valB = (b.justification || '').toLowerCase();
+    } else if (reqSortField === 'amount') {
+      valA = Number(a.total_estimated_amount || 0);
+      valB = Number(b.total_estimated_amount || 0);
+    } else if (reqSortField === 'status') {
+      valA = a.status;
+      valB = b.status;
+    } else if (reqSortField === 'date') {
+      valA = a.required_date ? new Date(a.required_date).getTime() : 0;
+      valB = b.required_date ? new Date(b.required_date).getTime() : 0;
+    } else if (reqSortField === 'created_at') {
+      valA = new Date(a.created_at).getTime();
+      valB = new Date(b.created_at).getTime();
+    }
+    if (valA < valB) return reqSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return reqSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 3. Cotações (RFQ)
+  const filteredQuotations = (quotations || []).filter(quot => {
+    const term = searchTerm.trim().toLowerCase();
+    let matchesSearch = true;
+    if (term) {
+      if (searchField === 'all') {
+        matchesSearch = (
+          quot.quotation_number.toLowerCase().includes(term) ||
+          Boolean(quot.notes && quot.notes.toLowerCase().includes(term)) ||
+          Boolean(quot.purchase_request?.request_number && quot.purchase_request.request_number.toLowerCase().includes(term))
+        );
+      } else if (searchField === 'number') {
+        matchesSearch = quot.quotation_number.toLowerCase().includes(term);
+      } else if (searchField === 'notes') {
+        matchesSearch = Boolean(quot.notes && quot.notes.toLowerCase().includes(term));
+      } else if (searchField === 'request') {
+        matchesSearch = Boolean(quot.purchase_request?.request_number && quot.purchase_request.request_number.toLowerCase().includes(term));
+      }
+    }
+
+    let matchesStatus = true;
+    if (statusFilter !== 'all') {
+      matchesStatus = quot.status === statusFilter;
+    }
+
+    return matchesSearch && matchesStatus;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (quotSortField === 'number') {
+      valA = a.quotation_number.toLowerCase();
+      valB = b.quotation_number.toLowerCase();
+    } else if (quotSortField === 'request') {
+      valA = (a.purchase_request?.request_number || '').toLowerCase();
+      valB = (b.purchase_request?.request_number || '').toLowerCase();
+    } else if (quotSortField === 'proposals') {
+      valA = a.quotes.length;
+      valB = b.quotes.length;
+    } else if (quotSortField === 'status') {
+      valA = a.status;
+      valB = b.status;
+    } else if (quotSortField === 'created_at') {
+      valA = new Date(a.created_at).getTime();
+      valB = new Date(b.created_at).getTime();
+    }
+    if (valA < valB) return quotSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return quotSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 4. Ordens de Compra (PO)
+  const filteredOrders = (orders || []).filter(ord => {
+    const term = searchTerm.trim().toLowerCase();
+    let matchesSearch = true;
+    if (term) {
+      if (searchField === 'all') {
+        matchesSearch = (
+          ord.order_number.toLowerCase().includes(term) ||
+          Boolean(ord.supplier?.name && ord.supplier.name.toLowerCase().includes(term)) ||
+          Boolean(ord.supplier?.cnpj_cpf && ord.supplier.cnpj_cpf.toLowerCase().includes(term)) ||
+          Boolean(ord.invoice_number && ord.invoice_number.toLowerCase().includes(term)) ||
+          Boolean(ord.purchase_request?.request_number && ord.purchase_request.request_number.toLowerCase().includes(term))
+        );
+      } else if (searchField === 'number') {
+        matchesSearch = ord.order_number.toLowerCase().includes(term);
+      } else if (searchField === 'supplier') {
+        matchesSearch = Boolean(ord.supplier?.name && ord.supplier.name.toLowerCase().includes(term));
+      } else if (searchField === 'cnpj') {
+        matchesSearch = Boolean(ord.supplier?.cnpj_cpf && ord.supplier.cnpj_cpf.toLowerCase().includes(term));
+      } else if (searchField === 'invoice') {
+        matchesSearch = Boolean(ord.invoice_number && ord.invoice_number.toLowerCase().includes(term));
+      }
+    }
+
+    let matchesStatus = true;
+    if (statusFilter !== 'all') {
+      matchesStatus = ord.status === statusFilter;
+    }
+
+    return matchesSearch && matchesStatus;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (orderSortField === 'number') {
+      valA = a.order_number.toLowerCase();
+      valB = b.order_number.toLowerCase();
+    } else if (orderSortField === 'supplier') {
+      valA = (a.supplier?.name || '').toLowerCase();
+      valB = (b.supplier?.name || '').toLowerCase();
+    } else if (orderSortField === 'request') {
+      valA = (a.purchase_request?.request_number || '').toLowerCase();
+      valB = (b.purchase_request?.request_number || '').toLowerCase();
+    } else if (orderSortField === 'amount') {
+      valA = Number(a.total_amount || 0);
+      valB = Number(b.total_amount || 0);
+    } else if (orderSortField === 'status') {
+      valA = a.status;
+      valB = b.status;
+    } else if (orderSortField === 'created_at') {
+      valA = new Date(a.created_at).getTime();
+      valB = new Date(b.created_at).getTime();
+    }
+    if (valA < valB) return orderSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return orderSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 5. Fornecedores
+  const filteredSuppliers = (suppliers || []).filter(sup => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    if (searchField === 'all') {
+      return (
+        sup.name.toLowerCase().includes(term) ||
+        Boolean(sup.trade_name && sup.trade_name.toLowerCase().includes(term)) ||
+        Boolean(sup.cnpj_cpf && sup.cnpj_cpf.toLowerCase().includes(term)) ||
+        Boolean(sup.segments && sup.segments.toLowerCase().includes(term)) ||
+        Boolean(sup.city && sup.city.toLowerCase().includes(term))
+      );
+    } else if (searchField === 'name') {
+      return sup.name.toLowerCase().includes(term) || Boolean(sup.trade_name && sup.trade_name.toLowerCase().includes(term));
+    } else if (searchField === 'cnpj') {
+      return Boolean(sup.cnpj_cpf && sup.cnpj_cpf.toLowerCase().includes(term));
+    } else if (searchField === 'segments') {
+      return Boolean(sup.segments && sup.segments.toLowerCase().includes(term));
+    } else if (searchField === 'city') {
+      return Boolean(sup.city && sup.city.toLowerCase().includes(term));
+    }
+    return true;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (supSortField === 'name') {
+      valA = a.name.toLowerCase();
+      valB = b.name.toLowerCase();
+    } else if (supSortField === 'cnpj') {
+      valA = a.cnpj_cpf || '';
+      valB = b.cnpj_cpf || '';
+    } else if (supSortField === 'payment_terms') {
+      valA = (a.payment_terms || '').toLowerCase();
+      valB = (b.payment_terms || '').toLowerCase();
+    } else if (supSortField === 'city') {
+      valA = a.city?.toLowerCase() || '';
+      valB = b.city?.toLowerCase() || '';
+    }
+    if (valA < valB) return supSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return supSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 6. Produtos
+  const filteredProducts = (products || []).filter(prod => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    if (searchField === 'all') {
+      return (
+        prod.name.toLowerCase().includes(term) ||
+        prod.sku.toLowerCase().includes(term) ||
+        Boolean(prod.category?.name && prod.category.name.toLowerCase().includes(term)) ||
+        Boolean(prod.brand && prod.brand.toLowerCase().includes(term))
+      );
+    } else if (searchField === 'name') {
+      return prod.name.toLowerCase().includes(term);
+    } else if (searchField === 'sku') {
+      return prod.sku.toLowerCase().includes(term);
+    } else if (searchField === 'brand') {
+      return Boolean(prod.brand && prod.brand.toLowerCase().includes(term));
+    }
+    return true;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (prodSortField === 'name') {
+      valA = a.name.toLowerCase();
+      valB = b.name.toLowerCase();
+    } else if (prodSortField === 'sku') {
+      valA = a.sku.toLowerCase();
+      valB = b.sku.toLowerCase();
+    } else if (prodSortField === 'category') {
+      valA = (a.category?.name || '').toLowerCase();
+      valB = (b.category?.name || '').toLowerCase();
+    } else if (prodSortField === 'brand') {
+      valA = (a.brand || '').toLowerCase();
+      valB = (b.brand || '').toLowerCase();
+    } else if (prodSortField === 'stock') {
+      valA = Number(a.current_stock || 0);
+      valB = Number(b.current_stock || 0);
+    } else if (prodSortField === 'price') {
+      valA = Number(a.reference_price || 0);
+      valB = Number(b.reference_price || 0);
+    }
+    if (valA < valB) return prodSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return prodSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 7. Categorias
+  const filteredCategories = (categories || []).filter(cat => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    return cat.name.toLowerCase().includes(term) || (cat.code && cat.code.toLowerCase().includes(term));
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (catSortField === 'code') {
+      valA = (a.code || '').toLowerCase();
+      valB = (b.code || '').toLowerCase();
+    } else if (catSortField === 'name') {
+      valA = a.name.toLowerCase();
+      valB = b.name.toLowerCase();
+    }
+    if (valA < valB) return catSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return catSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 8. Centros de Custo
+  const filteredCostCenters = (costCenters || []).filter(cc => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    return cc.name.toLowerCase().includes(term) || cc.code.toLowerCase().includes(term);
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (costSortField === 'code') {
+      valA = a.code.toLowerCase();
+      valB = b.code.toLowerCase();
+    } else if (costSortField === 'name') {
+      valA = a.name.toLowerCase();
+      valB = b.name.toLowerCase();
+    }
+    if (valA < valB) return costSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return costSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // 9. Movimentações
+  const filteredMovements = (stockMovements || []).filter(mov => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    return (
+      (mov.product_name && mov.product_name.toLowerCase().includes(term)) ||
+      (mov.sku && mov.sku.toLowerCase().includes(term)) ||
+      (mov.reference_doc && mov.reference_doc.toLowerCase().includes(term))
+    );
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (movSortField === 'created_at') {
+      valA = new Date(a.created_at).getTime();
+      valB = new Date(b.created_at).getTime();
+    } else if (movSortField === 'product') {
+      valA = (a.product_name || '').toLowerCase();
+      valB = (b.product_name || '').toLowerCase();
+    } else if (movSortField === 'quantity') {
+      valA = Number(a.quantity || 0);
+      valB = Number(b.quantity || 0);
+    } else if (movSortField === 'unit_cost') {
+      valA = Number(a.unit_cost || 0);
+      valB = Number(b.unit_cost || 0);
+    } else if (movSortField === 'balance_after') {
+      valA = Number(a.balance_after || 0);
+      valB = Number(b.balance_after || 0);
+    } else if (movSortField === 'type') {
+      valA = a.movement_type;
+      valB = b.movement_type;
+    }
+    if (valA < valB) return movSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return movSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   // Totalizadores
   const totalQuoteSum = quoteItems.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
@@ -1508,7 +1963,7 @@ export const Purchasing: React.FC = () => {
             </div>
 
             <div className="header-actions">
-              <button className="btn-refresh" onClick={loadAllPurchasingData} title="Recarregar Dados">
+              <button className="btn-refresh" onClick={() => loadAllPurchasingData(true)} title="Recarregar Dados">
                 <RefreshCw size={15} className={loading ? 'spinning' : ''} />
               </button>
 
@@ -1573,24 +2028,176 @@ export const Purchasing: React.FC = () => {
             </div>
           </div>
 
-          {/* Barra de Pesquisa */}
+          {/* Barra de Pesquisa & Filtros Avançados */}
           <div className="search-toolbar">
-            <div className="search-box">
-              <Search className="search-icon" size={16} />
-              <input
-                type="text"
-                placeholder="Pesquisar por código, descrição ou fornecedor..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-              />
+            <div className="search-composite">
+              <select
+                className="search-field-select"
+                value={searchField}
+                onChange={(e) => setSearchField(e.target.value)}
+                title="Filtrar por campo específico"
+              >
+                <option value="all">Todos os Campos</option>
+                {activeMenu === 'sugestoes' && (
+                  <>
+                    <option value="name">Nome do Produto</option>
+                    <option value="sku">SKU</option>
+                    <option value="brand">Marca / Fabricante</option>
+                    <option value="location">Localização</option>
+                  </>
+                )}
+                {activeMenu === 'solicitacoes' && (
+                  <>
+                    <option value="number">Número (SC)</option>
+                    <option value="justification">Justificativa</option>
+                    <option value="department">Departamento</option>
+                  </>
+                )}
+                {activeMenu === 'cotacoes' && (
+                  <>
+                    <option value="number">Número (RFQ)</option>
+                    <option value="notes">Notas / Título</option>
+                    <option value="request">Solicitação de Origem</option>
+                  </>
+                )}
+                {activeMenu === 'ordens' && (
+                  <>
+                    <option value="number">Número (PO)</option>
+                    <option value="supplier">Fornecedor</option>
+                    <option value="cnpj">CNPJ / CPF</option>
+                    <option value="invoice">Nota Fiscal</option>
+                  </>
+                )}
+                {activeMenu === 'fornecedores' && (
+                  <>
+                    <option value="name">Razão / Nome</option>
+                    <option value="cnpj">CNPJ / CPF</option>
+                    <option value="segments">Segmento</option>
+                    <option value="city">Cidade / UF</option>
+                  </>
+                )}
+                {activeMenu === 'produtos' && (
+                  <>
+                    <option value="name">Produto</option>
+                    <option value="sku">SKU</option>
+                    <option value="brand">Marca</option>
+                  </>
+                )}
+              </select>
+
+              <div className="search-box">
+                <Search className="search-icon" size={16} />
+                <input
+                  type="text"
+                  placeholder={
+                    activeMenu === 'sugestoes' ? 'Pesquisar produto ou SKU para reposição...' :
+                    activeMenu === 'solicitacoes' ? 'Pesquisar em solicitações...' :
+                    activeMenu === 'cotacoes' ? 'Pesquisar em cotações e RFQ...' :
+                    activeMenu === 'ordens' ? 'Pesquisar ordens de compra...' :
+                    activeMenu === 'fornecedores' ? 'Pesquisar fornecedores...' :
+                    activeMenu === 'produtos' ? 'Pesquisar produtos e insumos...' :
+                    'Pesquisar...'
+                  }
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                />
+                {searchTerm && (
+                  <button type="button" className="btn-clear-search" onClick={() => setSearchTerm('')} title="Limpar busca">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
             </div>
+
+            {/* Filtros Específicos por Módulo */}
+            <div className="filter-group">
+              {activeMenu === 'sugestoes' && (
+                <>
+                  <select
+                    className="filter-select"
+                    value={urgencyFilter}
+                    onChange={e => setUrgencyFilter(e.target.value)}
+                    title="Filtrar por nível de criticidade"
+                  >
+                    <option value="all">Todas as Urgências</option>
+                    <option value="criticos">🔴 Críticos (Zerados + Abaixo do Mín)</option>
+                    <option value="zerados">🔴 Somente Zerados (Esgotados)</option>
+                    <option value="ponto_pedido">🟡 Ponto de Pedido</option>
+                  </select>
+
+                  <select
+                    className="filter-select"
+                    value={categoryFilter}
+                    onChange={e => setCategoryFilter(e.target.value)}
+                    title="Filtrar por categoria"
+                  >
+                    <option value="">Todas as Categorias</option>
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.name}>{cat.name}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+
+              {activeMenu === 'solicitacoes' && (
+                <select
+                  className="filter-select"
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value)}
+                  title="Filtrar por status da solicitação"
+                >
+                  <option value="all">Todos os Status</option>
+                  <option value="draft">Rascunho</option>
+                  <option value="pending_approval">Pendente Aprovação</option>
+                  <option value="approved">Aprovada</option>
+                  <option value="ordered">Convertida em PO</option>
+                  <option value="rejected">Rejeitada</option>
+                  <option value="cancelled">Cancelada</option>
+                </select>
+              )}
+
+              {activeMenu === 'cotacoes' && (
+                <select
+                  className="filter-select"
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value)}
+                  title="Filtrar por status da cotação"
+                >
+                  <option value="all">Todos os Status</option>
+                  <option value="open">Aberta</option>
+                  <option value="analyzing">Em Análise</option>
+                  <option value="completed">Homologada / PO Emitida</option>
+                  <option value="cancelled">Cancelada</option>
+                </select>
+              )}
+
+              {activeMenu === 'ordens' && (
+                <select
+                  className="filter-select"
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value)}
+                  title="Filtrar por status da ordem de compra"
+                >
+                  <option value="all">Todos os Status</option>
+                  <option value="draft">Rascunho</option>
+                  <option value="issued">Emitida</option>
+                  <option value="partially_received">Recebimento Parcial</option>
+                  <option value="received">Recebida Total</option>
+                  <option value="cancelled">Cancelada</option>
+                </select>
+              )}
+            </div>
+
             <div className="results-count">
-              {activeMenu === 'solicitacoes' && `${requests.length} solicitações`}
-              {activeMenu === 'cotacoes' && `${quotations.length} processos de cotação`}
-              {activeMenu === 'ordens' && `${orders.length} ordens de compra`}
-              {activeMenu === 'fornecedores' && `${suppliers.length} fornecedores`}
-              {activeMenu === 'produtos' && `${products.length} produtos`}
-              {activeMenu === 'centros-custo' && `${costCenters.length} centros de custo`}
+              {activeMenu === 'sugestoes' && `${filteredSuggestions.length} sugestões listadas`}
+              {activeMenu === 'solicitacoes' && `${filteredRequests.length} solicitações`}
+              {activeMenu === 'cotacoes' && `${filteredQuotations.length} processos de cotação`}
+              {activeMenu === 'ordens' && `${filteredOrders.length} ordens de compra`}
+              {activeMenu === 'fornecedores' && `${filteredSuppliers.length} fornecedores`}
+              {activeMenu === 'produtos' && `${filteredProducts.length} produtos`}
+              {activeMenu === 'categorias' && `${filteredCategories.length} categorias`}
+              {activeMenu === 'centros-custo' && `${filteredCostCenters.length} centros de custo`}
+              {activeMenu === 'movimentacoes' && `${filteredMovements.length} movimentações`}
             </div>
           </div>
 
@@ -1653,19 +2260,30 @@ export const Purchasing: React.FC = () => {
                     <button
                       type="button"
                       className="btn-select-preset"
-                      onClick={() => handleSelectAllSuggestions(selectedSuggestionProductIds.length !== (suggestionsSummary?.items.length || 0))}
+                      onClick={() => {
+                        if (selectedSuggestionProductIds.length === filteredSuggestions.length && filteredSuggestions.length > 0) {
+                          setSelectedSuggestionProductIds([]);
+                        } else {
+                          setSelectedSuggestionProductIds(filteredSuggestions.map(it => it.product_id));
+                        }
+                      }}
                     >
-                      {selectedSuggestionProductIds.length === (suggestionsSummary?.items.length || 0) && (suggestionsSummary?.items.length || 0) > 0 ? (
+                      {selectedSuggestionProductIds.length === filteredSuggestions.length && filteredSuggestions.length > 0 ? (
                         <><CheckSquare size={15} /> <span>Desmarcar Todos</span></>
                       ) : (
-                        <><Square size={15} /> <span>Selecionar Todos ({suggestionsSummary?.items.length || 0})</span></>
+                        <><Square size={15} /> <span>Selecionar Todos ({filteredSuggestions.length})</span></>
                       )}
                     </button>
 
                     <button
                       type="button"
                       className="btn-select-preset critical"
-                      onClick={handleSelectCriticalOnly}
+                      onClick={() => {
+                        const criticalIds = filteredSuggestions
+                          .filter(it => it.urgency_level === 'critical' || it.urgency_level === 'high')
+                          .map(it => it.product_id);
+                        setSelectedSuggestionProductIds(criticalIds);
+                      }}
                     >
                       <AlertTriangle size={14} />
                       <span>Marcar Somente Críticos</span>
@@ -1691,31 +2309,72 @@ export const Purchasing: React.FC = () => {
                         <th style={{ width: '40px' }}>
                           <input
                             type="checkbox"
-                            checked={Boolean(suggestionsSummary?.items.length && selectedSuggestionProductIds.length === suggestionsSummary.items.length)}
-                            onChange={e => handleSelectAllSuggestions(e.target.checked)}
+                            checked={Boolean(filteredSuggestions.length && selectedSuggestionProductIds.length === filteredSuggestions.length)}
+                            onChange={e => {
+                              if (e.target.checked) {
+                                setSelectedSuggestionProductIds(filteredSuggestions.map(it => it.product_id));
+                              } else {
+                                setSelectedSuggestionProductIds([]);
+                              }
+                            }}
                           />
                         </th>
-                        <th>Produto / SKU</th>
-                        <th>Categoria / Marca</th>
-                        <th>Urgência</th>
-                        <th>Estoque Físico (Atual / Mín / Alvo)</th>
-                        <th>Qtd. Sugerida (Editável)</th>
-                        <th>Preço Unit. Ref.</th>
-                        <th>Subtotal Estimado</th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('name')}>
+                          <div className="th-content">
+                            <span>Produto / SKU</span>
+                            {suggSortField === 'name' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('category')}>
+                          <div className="th-content">
+                            <span>Categoria / Marca</span>
+                            {suggSortField === 'category' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('urgency')}>
+                          <div className="th-content">
+                            <span>Urgência</span>
+                            {suggSortField === 'urgency' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('current_stock')}>
+                          <div className="th-content">
+                            <span>Estoque Físico (Atual / Mín / Alvo)</span>
+                            {suggSortField === 'current_stock' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('suggested_qty')}>
+                          <div className="th-content">
+                            <span>Qtd. Sugerida (Editável)</span>
+                            {suggSortField === 'suggested_qty' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('price')}>
+                          <div className="th-content">
+                            <span>Preço Unit. Ref.</span>
+                            {suggSortField === 'price' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleSuggSort('subtotal')}>
+                          <div className="th-content">
+                            <span>Subtotal Estimado</span>
+                            {suggSortField === 'subtotal' ? (suggSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
                         <th style={{ textAlign: 'right' }}>Ações</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {!suggestionsSummary || suggestionsSummary.items.length === 0 ? (
+                      {filteredSuggestions.length === 0 ? (
                         <tr>
                           <td colSpan={9} className="state-empty success-state">
                             <CheckCircle2 size={28} style={{ color: '#10b981', marginBottom: '0.5rem', display: 'inline-block' }} />
-                            <div><strong>Estoque 100% Regularizado!</strong></div>
-                            <small>Nenhum produto está abaixo do ponto de ressuprimento no momento.</small>
+                            <div><strong>Estoque 100% Regularizado ou Nenhum Item Atende aos Filtros!</strong></div>
+                            <small>Verifique os filtros de pesquisa e criticidade acima.</small>
                           </td>
                         </tr>
                       ) : (
-                        suggestionsSummary.items.map(item => {
+                        filteredSuggestions.map(item => {
                           const isSelected = selectedSuggestionProductIds.includes(item.product_id);
                           const currentQty = customSuggestionQtys[item.product_id] !== undefined
                             ? customSuggestionQtys[item.product_id]
@@ -1733,7 +2392,7 @@ export const Purchasing: React.FC = () => {
                               </td>
                               <td>
                                 <div className="cell-with-icon">
-                                  <div className={`icon-badge ${item.urgency_level === 'critical' ? 'red-bg' : 'brand-bg'}`}>
+                                  <div className={`icon-badge ${item.urgency_level === 'critical' || item.urgency_level === 'high' ? 'red-bg' : 'brand-bg'}`}>
                                     <Package size={15} />
                                   </div>
                                   <div>
@@ -1753,16 +2412,16 @@ export const Purchasing: React.FC = () => {
                               </td>
                               <td>
                                 {item.urgency_level === 'critical' && <span className="urgency-pill critical">🔴 Crítico (Zerado)</span>}
-                                {item.urgency_level === 'high' && <span className="urgency-pill high">🟠 Alto (≤ 50% mín)</span>}
+                                {item.urgency_level === 'high' && <span className="urgency-pill high">🔴 Crítico (Abaixo do Mín)</span>}
                                 {item.urgency_level === 'medium' && <span className="urgency-pill medium">🟡 Ponto de Pedido</span>}
                               </td>
                               <td>
                                 <div className="stock-balance-cell">
                                   <span className={`stock-now ${Number(item.current_stock) <= 0 ? 'zero' : ''}`}>
-                                    Atual: <strong>{Number(item.current_stock)} {item.unit_of_measure}</strong>
+                                    Atual: <strong>{formatQuantity(item.current_stock)} {item.unit_of_measure}</strong>
                                   </span>
                                   <span className="stock-limits">
-                                    Mín: {Number(item.min_stock)} | Alvo: {Number(item.max_stock || Number(item.min_stock) * 2)}
+                                    Mín: {formatQuantity(item.min_stock)} | Alvo: {formatQuantity(item.max_stock || Number(item.min_stock) * 2)}
                                   </span>
                                 </div>
                               </td>
@@ -1815,19 +2474,44 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Número</th>
-                      <th>Justificativa</th>
-                      <th>Valor Estimado</th>
-                      <th>Status</th>
-                      <th>Data Limite</th>
+                      <th className="th-sortable" onClick={() => handleReqSort('number')}>
+                        <div className="th-content">
+                          <span>Número</span>
+                          {reqSortField === 'number' ? (reqSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleReqSort('justification')}>
+                        <div className="th-content">
+                          <span>Justificativa</span>
+                          {reqSortField === 'justification' ? (reqSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleReqSort('amount')}>
+                        <div className="th-content">
+                          <span>Valor Estimado</span>
+                          {reqSortField === 'amount' ? (reqSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleReqSort('status')}>
+                        <div className="th-content">
+                          <span>Status</span>
+                          {reqSortField === 'status' ? (reqSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleReqSort('date')}>
+                        <div className="th-content">
+                          <span>Data Limite</span>
+                          {reqSortField === 'date' ? (reqSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {requests.length === 0 ? (
-                      <tr><td colSpan={6} className="state-empty">Nenhuma solicitação de compra cadastrada.</td></tr>
+                    {filteredRequests.length === 0 ? (
+                      <tr><td colSpan={6} className="state-empty">Nenhuma solicitação de compra encontrada com os filtros selecionados.</td></tr>
                     ) : (
-                      requests.map(req => (
+                      filteredRequests.map(req => (
                         <tr key={req.id}>
                           <td>
                             <div className="cell-with-icon">
@@ -1905,19 +2589,44 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Cotação</th>
-                      <th>Solicitação de Origem</th>
-                      <th>Propostas Recebidas</th>
-                      <th>Status</th>
-                      <th>Data de Abertura</th>
+                      <th className="th-sortable" onClick={() => handleQuotSort('number')}>
+                        <div className="th-content">
+                          <span>Cotação</span>
+                          {quotSortField === 'number' ? (quotSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleQuotSort('request')}>
+                        <div className="th-content">
+                          <span>Solicitação de Origem</span>
+                          {quotSortField === 'request' ? (quotSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleQuotSort('proposals')}>
+                        <div className="th-content">
+                          <span>Propostas Recebidas</span>
+                          {quotSortField === 'proposals' ? (quotSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleQuotSort('status')}>
+                        <div className="th-content">
+                          <span>Status</span>
+                          {quotSortField === 'status' ? (quotSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleQuotSort('created_at')}>
+                        <div className="th-content">
+                          <span>Data de Abertura</span>
+                          {quotSortField === 'created_at' ? (quotSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {quotations.length === 0 ? (
-                      <tr><td colSpan={6} className="state-empty">Nenhum processo de cotação aberto no momento.</td></tr>
+                    {filteredQuotations.length === 0 ? (
+                      <tr><td colSpan={6} className="state-empty">Nenhum processo de cotação encontrado com os filtros selecionados.</td></tr>
                     ) : (
-                      quotations.map(quot => (
+                      filteredQuotations.map(quot => (
                         <tr key={quot.id}>
                           <td>
                             <div className="cell-with-icon">
@@ -2006,20 +2715,50 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Ordem de Compra</th>
-                      <th>Fornecedor</th>
-                      <th>Origem (SC)</th>
-                      <th>Total Líquido</th>
-                      <th>Status</th>
-                      <th>Entrega / NF</th>
+                      <th className="th-sortable" onClick={() => handleOrderSort('number')}>
+                        <div className="th-content">
+                          <span>Ordem de Compra</span>
+                          {orderSortField === 'number' ? (orderSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleOrderSort('supplier')}>
+                        <div className="th-content">
+                          <span>Fornecedor</span>
+                          {orderSortField === 'supplier' ? (orderSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleOrderSort('request')}>
+                        <div className="th-content">
+                          <span>Origem (SC)</span>
+                          {orderSortField === 'request' ? (orderSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleOrderSort('amount')}>
+                        <div className="th-content">
+                          <span>Total Líquido</span>
+                          {orderSortField === 'amount' ? (orderSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleOrderSort('status')}>
+                        <div className="th-content">
+                          <span>Status</span>
+                          {orderSortField === 'status' ? (orderSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleOrderSort('created_at')}>
+                        <div className="th-content">
+                          <span>Entrega / NF</span>
+                          {orderSortField === 'created_at' ? (orderSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {orders.length === 0 ? (
-                      <tr><td colSpan={7} className="state-empty">Nenhuma ordem de compra emitida.</td></tr>
+                    {filteredOrders.length === 0 ? (
+                      <tr><td colSpan={7} className="state-empty">Nenhuma ordem de compra encontrada com os filtros selecionados.</td></tr>
                     ) : (
-                      orders.map(ord => (
+                      filteredOrders.map(ord => (
                         <tr key={ord.id}>
                           <td>
                             <div className="cell-with-icon">
@@ -2116,20 +2855,40 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Fornecedor / Razão Social</th>
-                      <th>CNPJ / IE</th>
+                      <th className="th-sortable" onClick={() => handleSupSort('name')}>
+                        <div className="th-content">
+                          <span>Fornecedor / Razão Social</span>
+                          {supSortField === 'name' ? (supSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleSupSort('cnpj')}>
+                        <div className="th-content">
+                          <span>CNPJ / IE</span>
+                          {supSortField === 'cnpj' ? (supSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Linhas / Segmentos Atendidos</th>
-                      <th>Condição Comercial</th>
+                      <th className="th-sortable" onClick={() => handleSupSort('payment_terms')}>
+                        <div className="th-content">
+                          <span>Condição Comercial</span>
+                          {supSortField === 'payment_terms' ? (supSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Representante / Contato</th>
-                      <th>Localização</th>
+                      <th className="th-sortable" onClick={() => handleSupSort('city')}>
+                        <div className="th-content">
+                          <span>Localização</span>
+                          {supSortField === 'city' ? (supSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {suppliers.length === 0 ? (
-                      <tr><td colSpan={7} className="state-empty">Nenhum fornecedor cadastrado. Clique em "+ Novo Fornecedor" para cadastrar.</td></tr>
+                    {filteredSuppliers.length === 0 ? (
+                      <tr><td colSpan={7} className="state-empty">Nenhum fornecedor encontrado com os filtros selecionados.</td></tr>
                     ) : (
-                      suppliers.map(sup => {
+                      filteredSuppliers.map(sup => {
                         const segmentList = sup.segments ? sup.segments.split(',').map(s => s.trim()).filter(Boolean) : [];
 
                         return (
@@ -2212,21 +2971,46 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>SKU / Produto</th>
-                      <th>Categoria</th>
-                      <th>Marca / Fabricante</th>
+                      <th className="th-sortable" onClick={() => handleProdSort('name')}>
+                        <div className="th-content">
+                          <span>SKU / Produto</span>
+                          {prodSortField === 'name' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleProdSort('category')}>
+                        <div className="th-content">
+                          <span>Categoria</span>
+                          {prodSortField === 'category' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleProdSort('brand')}>
+                        <div className="th-content">
+                          <span>Marca / Fabricante</span>
+                          {prodSortField === 'brand' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Unidade</th>
-                      <th>Estoque Físico (Atual / Mín)</th>
-                      <th>Preço Referência</th>
+                      <th className="th-sortable" onClick={() => handleProdSort('stock')}>
+                        <div className="th-content">
+                          <span>Estoque Físico (Atual / Mín)</span>
+                          {prodSortField === 'stock' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleProdSort('price')}>
+                        <div className="th-content">
+                          <span>Preço Referência</span>
+                          {prodSortField === 'price' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Rastreabilidade & Validade</th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {products.length === 0 ? (
-                      <tr><td colSpan={8} className="state-empty">Nenhum produto cadastrado. Clique em "+ Novo Produto" para adicionar.</td></tr>
+                    {filteredProducts.length === 0 ? (
+                      <tr><td colSpan={8} className="state-empty">Nenhum produto cadastrado ou correspondente aos filtros.</td></tr>
                     ) : (
-                      products.map(prod => (
+                      filteredProducts.map(prod => (
                         <tr key={prod.id}>
                           <td>
                             <div className="cell-with-icon">
@@ -2249,9 +3033,9 @@ export const Purchasing: React.FC = () => {
                           <td>
                             <div className="stock-balance-cell">
                               <span className={`stock-now ${Number(prod.current_stock || 0) <= 0 ? 'zero' : Number(prod.current_stock || 0) <= Number(prod.min_stock || 0) ? 'warning' : 'ok'}`}>
-                                <strong>{Number(prod.current_stock || 0)} {prod.unit_of_measure}</strong>
+                                <strong>{formatQuantity(prod.current_stock)} {prod.unit_of_measure}</strong>
                               </span>
-                              <span className="stock-limits">Mín: {Number(prod.min_stock || 0)}</span>
+                              <span className="stock-limits">Mín: {formatQuantity(prod.min_stock)}</span>
                             </div>
                           </td>
                           <td><strong>{formatCurrency(prod.reference_price)}</strong></td>
@@ -2295,8 +3079,18 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Código / Prefixo SKU</th>
-                      <th>Nome da Categoria</th>
+                      <th className="th-sortable" onClick={() => handleCatSort('code')}>
+                        <div className="th-content">
+                          <span>Código / Prefixo SKU</span>
+                          {catSortField === 'code' ? (catSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleCatSort('name')}>
+                        <div className="th-content">
+                          <span>Nome da Categoria</span>
+                          {catSortField === 'name' ? (catSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Descrição</th>
                       <th>Produtos Vinculados</th>
                       <th>Status</th>
@@ -2304,10 +3098,10 @@ export const Purchasing: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {categories.length === 0 ? (
-                      <tr><td colSpan={6} className="state-empty">Nenhuma categoria cadastrada. Clique em "+ Nova Categoria" para criar a primeira.</td></tr>
+                    {filteredCategories.length === 0 ? (
+                      <tr><td colSpan={6} className="state-empty">Nenhuma categoria encontrada com os filtros selecionados.</td></tr>
                     ) : (
-                      categories.map(cat => {
+                      filteredCategories.map(cat => {
                         const linkedCount = products.filter(p => p.category_id === cat.id).length;
 
                         return (
@@ -2365,18 +3159,28 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Código</th>
-                      <th>Nome</th>
+                      <th className="th-sortable" onClick={() => handleCostSort('code')}>
+                        <div className="th-content">
+                          <span>Código</span>
+                          {costSortField === 'code' ? (costSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleCostSort('name')}>
+                        <div className="th-content">
+                          <span>Nome</span>
+                          {costSortField === 'name' ? (costSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Descrição</th>
                       <th>Status</th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {costCenters.length === 0 ? (
-                      <tr><td colSpan={5} className="state-empty">Nenhum centro de custo cadastrado.</td></tr>
+                    {filteredCostCenters.length === 0 ? (
+                      <tr><td colSpan={5} className="state-empty">Nenhum centro de custo cadastrado ou correspondente aos filtros.</td></tr>
                     ) : (
-                      costCenters.map(cc => (
+                      filteredCostCenters.map(cc => (
                         <tr key={cc.id}>
                           <td><span className="code-tag">{cc.code}</span></td>
                           <td><strong>{cc.name}</strong></td>
@@ -2414,21 +3218,51 @@ export const Purchasing: React.FC = () => {
                 <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Data / Horário</th>
-                      <th>Produto / Insumo</th>
-                      <th>Tipo de Movimentação</th>
-                      <th>Quantidade Movimentada</th>
-                      <th>Custo Unitário</th>
-                      <th>Saldo Resultante</th>
+                      <th className="th-sortable" onClick={() => handleMovSort('created_at')}>
+                        <div className="th-content">
+                          <span>Data / Horário</span>
+                          {movSortField === 'created_at' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleMovSort('product')}>
+                        <div className="th-content">
+                          <span>Produto / Insumo</span>
+                          {movSortField === 'product' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleMovSort('type')}>
+                        <div className="th-content">
+                          <span>Tipo de Movimentação</span>
+                          {movSortField === 'type' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleMovSort('quantity')}>
+                        <div className="th-content">
+                          <span>Quantidade Movimentada</span>
+                          {movSortField === 'quantity' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleMovSort('unit_cost')}>
+                        <div className="th-content">
+                          <span>Custo Unitário</span>
+                          {movSortField === 'unit_cost' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
+                      <th className="th-sortable" onClick={() => handleMovSort('balance_after')}>
+                        <div className="th-content">
+                          <span>Saldo Resultante</span>
+                          {movSortField === 'balance_after' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                        </div>
+                      </th>
                       <th>Documento / Referência</th>
                       <th>Observações</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {stockMovements.length === 0 ? (
+                    {filteredMovements.length === 0 ? (
                       <tr><td colSpan={8} className="state-empty">Nenhuma movimentação de estoque registrada. Ao receber ordens de compra ou realizar ajustes, o histórico aparecerá aqui.</td></tr>
                     ) : (
-                      stockMovements.map(mov => {
+                      filteredMovements.map(mov => {
                         const isPositive = mov.movement_type.startsWith('in_');
 
                         return (
@@ -2477,13 +3311,13 @@ export const Purchasing: React.FC = () => {
                             </td>
                             <td>
                               <strong className={isPositive ? 'qty-pos' : 'qty-neg'}>
-                                {isPositive ? '+' : '-'}{Number(mov.quantity)} {mov.product?.unit_of_measure || 'UN'}
+                                {isPositive ? '+' : '-'}{formatQuantity(mov.quantity)} {mov.product?.unit_of_measure || 'UN'}
                               </strong>
                             </td>
                             <td>{formatCurrency(mov.unit_cost)}</td>
                             <td>
                               <span className="balance-tag">
-                                {Number(mov.balance_after)} {mov.product?.unit_of_measure || 'UN'}
+                                {formatQuantity(mov.balance_after)} {mov.product?.unit_of_measure || 'UN'}
                               </span>
                             </td>
                             <td>
@@ -3294,7 +4128,7 @@ export const Purchasing: React.FC = () => {
                     <div className="stock-balance-info">
                       <span className="badge-label">Saldo Físico Atual:</span>
                       <strong className="badge-value">
-                        {productCurrentStock || 0} {productUnit}
+                        {formatQuantity(productCurrentStock)} {productUnit}
                       </strong>
                     </div>
                     <div className="stock-balance-hint">

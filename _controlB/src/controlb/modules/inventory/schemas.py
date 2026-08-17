@@ -54,10 +54,13 @@ class ProductBase(BaseModel):
     name: str = Field(..., max_length=500, description="Descrição / Nome do produto ou medicamento")
     description: str | None = Field(None, description="Especificação técnica detalhada")
     unit_of_measure: str = Field("UN", max_length=50, description="Unidade (UN, CX, FR, AMP, KG, L)")
-    reference_price: Decimal = Field(default=Decimal("0.0000"), description="Preço de custo / referência padrão")
+    reference_price: Decimal = Field(default=Decimal("0.0000"), description="Preço de referência")
+    cost_price: Decimal = Field(default=Decimal("0.0000"), description="Preço de custo unitário")
+    sale_price: Decimal = Field(default=Decimal("0.0000"), description="Preço de venda unitário ao consumidor")
     category_id: uuid.UUID | None = Field(None, description="ID da categoria vinculada")
     
-    # Rastreabilidade & Validade
+    # Rastreabilidade, Integrações & Validade
+    external_code: str | None = Field(None, max_length=100, description="Código do produto em sistema externo / legado")
     brand: str | None = Field(None, max_length=200, description="Marca, Fabricante ou Laboratório")
     barcode: str | None = Field(None, max_length=100, description="Código de barras EAN/GTIN")
     ncm: str | None = Field(None, max_length=50, description="Nomenclatura Comum do Mercosul")
@@ -82,7 +85,10 @@ class ProductUpdate(BaseModel):
     description: str | None = None
     unit_of_measure: str | None = Field(None, max_length=50)
     reference_price: Decimal | None = None
+    cost_price: Decimal | None = None
+    sale_price: Decimal | None = None
     category_id: uuid.UUID | None = None
+    external_code: str | None = Field(None, max_length=100)
     brand: str | None = Field(None, max_length=200)
     barcode: str | None = Field(None, max_length=100)
     ncm: str | None = Field(None, max_length=50)
@@ -154,4 +160,44 @@ class StockMovementResponse(BaseModel):
     product_name: str | None = None
     sku: str | None = None
     product: ProductResponse | None = None
+
+
+# ==============================================================================
+# 4. SCHEMAS DE IMPORTAÇÃO E SINCRONIZAÇÃO DE ESTOQUE
+# ==============================================================================
+
+class InventoryImportItemDetail(BaseModel):
+    code: str
+    name: str
+    barcode: str | None = None
+    ncm: str | None = None
+    previous_stock: Decimal
+    new_stock: Decimal
+    delta_stock: Decimal
+    action_type: str  # 'created', 'sale_detected', 'entry_detected', 'unchanged'
+    cost_price: Decimal
+    sale_price: Decimal
+
+
+class InventoryImportSummaryResponse(BaseModel):
+    total_products_read: int
+    created_products_count: int
+    updated_products_count: int
+    created_categories_count: int
+    
+    sales_identified_count: int
+    total_sales_quantity: Decimal
+    entries_identified_count: int
+    total_entries_quantity: Decimal
+    
+    total_cost_value: Decimal
+    total_sale_value: Decimal
+    inventory_date: str | None = None
+    message: str
+    sample_items: list[InventoryImportItemDetail] = []
+
+
+# Aliases para compatibilidade
+ToolsPharmaImportItemDetail = InventoryImportItemDetail
+ToolsPharmaImportSummaryResponse = InventoryImportSummaryResponse
 

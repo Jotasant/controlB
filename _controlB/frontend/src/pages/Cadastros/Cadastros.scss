@@ -249,9 +249,51 @@
             }
           }
 
-          .results-count {
-            font-size: 0.775rem;
-            color: var(--text-muted);
+          .toolbar-right-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+
+            .bulk-actions-wrap {
+              display: flex;
+              align-items: center;
+              gap: 0.6rem;
+
+              .selected-count-badge {
+                font-size: 0.75rem;
+                font-weight: 600;
+                color: var(--accent-brand);
+                background: var(--accent-brand-subtle);
+                border: 1px solid rgba(255, 85, 0, 0.2);
+                padding: 0.2rem 0.55rem;
+                border-radius: 6px;
+              }
+
+              .btn-bulk-delete {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                background: #ef4444;
+                color: #ffffff;
+                border: none;
+                padding: 0.35rem 0.75rem;
+                border-radius: 6px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.15s ease;
+
+                &:hover {
+                  background: #dc2626;
+                  transform: translateY(-1px);
+                }
+              }
+            }
+
+            .results-count {
+              font-size: 0.775rem;
+              color: var(--text-muted);
+            }
           }
         }
 
@@ -273,11 +315,44 @@
             padding: 0.7rem 1.2rem;
             border-bottom: 1px solid var(--border-subtle);
             background: var(--bg-surface-hover);
+
+            &.th-checkbox {
+              width: 44px;
+              max-width: 44px;
+              padding: 0.7rem 0.5rem 0.7rem 1rem;
+              text-align: center;
+            }
+          }
+
+          tr.selected-row {
+            background-color: rgba(255, 85, 0, 0.04) !important;
           }
 
           td {
             padding: 0.75rem 1.2rem;
             border-bottom: 1px solid var(--border-subtle);
+
+            &.td-checkbox {
+              width: 44px;
+              max-width: 44px;
+              padding: 0.75rem 0.5rem 0.75rem 1rem;
+              text-align: center;
+              vertical-align: middle;
+            }
+
+            .table-checkbox {
+              width: 16px;
+              height: 16px;
+              cursor: pointer;
+              accent-color: var(--accent-brand);
+              border-radius: 4px;
+              vertical-align: middle;
+
+              &:disabled {
+                opacity: 0.35;
+                cursor: not-allowed;
+              }
+            }
             font-size: 0.85rem;
             color: var(--text-secondary);
 

@@ -16,11 +16,14 @@ import {
   Edit, Trash2, SlidersHorizontal, AlertTriangle, ArrowDownRight,
   ArrowUpRight, Check, Loader2, Sparkles, DollarSign,
   ChevronRight, CheckCircle2, ShieldCheck, FileText, Paperclip,
-  UploadCloud, X, Scale
+  UploadCloud, X, Scale, FileSpreadsheet, TrendingUp, TrendingDown,
+  CheckCircle, ArrowUpDown, ArrowUp, ArrowDown, Download,
+  CheckSquare
 } from 'lucide-react';
 
-import { inventoryService, formatApiError } from '@/services/api';
-import { Product, ProductCategory, StockMovement } from '@/types';
+import { inventoryService, cacheManager, formatApiError } from '@/services/api';
+import { Product, ProductCategory, StockMovement, InventoryImportSummaryResponse } from '@/types';
+import { formatCurrency, formatQuantity, formatPriceInput, formatQuantityInput } from '@/utils/formatters';
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
 import './Inventory.scss';
@@ -33,8 +36,25 @@ type StockStatusFilter = 'todos' | 'criticos' | 'zerados' | 'regulares';
 export const Inventory: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<InventoryMenuOption>('produtos');
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchField, setSearchField] = useState<'all' | 'name' | 'sku' | 'external_code' | 'barcode' | 'ncm' | 'brand' | 'location'>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('');
   const [stockStatusFilter, setStockStatusFilter] = useState<StockStatusFilter>('todos');
+
+  // Seleção em Massa & Exportação
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+
+  // Ordenação Dinâmica (order_by) por Tabela
+  const [prodSortField, setProdSortField] = useState<string>('name');
+  const [prodSortDir, setProdSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [catSortField, setCatSortField] = useState<string>('name');
+  const [catSortDir, setCatSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const [movSortField, setMovSortField] = useState<string>('created_at');
+  const [movSortDir, setMovSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const [auditSortField, setAuditSortField] = useState<string>('name');
+  const [auditSortDir, setAuditSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Estados dos Dados carregados da API
   const [products, setProducts] = useState<Product[]>([]);
@@ -46,6 +66,14 @@ export const Inventory: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+
+  // Modal de Importação de Estoque (.xlsx)
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
+  const [isImportingFile, setIsImportingFile] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState<InventoryImportSummaryResponse | null>(null);
+  const [importSearchTerm, setImportSearchTerm] = useState('');
 
   // Estados para Edição
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -62,6 +90,9 @@ export const Inventory: React.FC = () => {
   const [productDesc, setProductDesc] = useState('');
   const [productUnit, setProductUnit] = useState('UN');
   const [productPrice, setProductPrice] = useState('0');
+  const [productCostPrice, setProductCostPrice] = useState('0');
+  const [productSalePrice, setProductSalePrice] = useState('0');
+  const [productExternalCode, setProductExternalCode] = useState('');
   const [productCategoryId, setProductCategoryId] = useState('');
   const [productBrand, setProductBrand] = useState('');
   const [productBarcode, setProductBarcode] = useState('');
@@ -90,19 +121,24 @@ export const Inventory: React.FC = () => {
   const [stockAdjustNotes, setStockAdjustNotes] = useState('');
   const [stockAdjustAuditor, setStockAdjustAuditor] = useState('');
 
-
   // Carregamento Inicial
   useEffect(() => {
     loadInventoryData();
   }, []);
 
-  const loadInventoryData = async () => {
-    setLoading(true);
+  const loadInventoryData = async (forceRefresh = false) => {
+    const cachedProds = cacheManager.get<Product[]>('inventory:products:all');
+    if (!cachedProds && !products.length) {
+      setLoading(true);
+    } else if (forceRefresh) {
+      setLoading(true);
+    }
+
     try {
       const [prodData, catData, movData] = await Promise.all([
-        inventoryService.getProducts(),
-        inventoryService.getCategories(),
-        inventoryService.getInventoryMovements()
+        inventoryService.getProducts(undefined, forceRefresh),
+        inventoryService.getCategories(forceRefresh),
+        inventoryService.getInventoryMovements(undefined, undefined, forceRefresh)
       ]);
 
       setProducts(Array.isArray(prodData) ? prodData : []);
@@ -163,7 +199,7 @@ export const Inventory: React.FC = () => {
     isOpen: false,
     title: '',
     message: '',
-    onConfirm: async () => {},
+    onConfirm: async () => { },
   });
 
   const openConfirmModal = (config: {
@@ -234,6 +270,41 @@ export const Inventory: React.FC = () => {
     });
   };
 
+  // Ações de Importação de Planilha de Estoque (.xlsx)
+  const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      if (!file.name.toLowerCase().endsWith('.xlsx')) {
+        setImportError("Formato inválido. Por favor, selecione um arquivo Excel (.xlsx).");
+        setSelectedImportFile(null);
+        return;
+      }
+      setSelectedImportFile(file);
+      setImportError(null);
+    }
+  };
+
+  const handleProcessImport = async () => {
+    if (!selectedImportFile) {
+      setImportError("Selecione o arquivo da planilha para iniciar a importação.");
+      return;
+    }
+
+    setIsImportingFile(true);
+    setImportError(null);
+
+    try {
+      const summary = await inventoryService.importInventorySpreadsheet(selectedImportFile);
+      setImportSummary(summary);
+      await loadInventoryData();
+    } catch (err: any) {
+      console.error("Erro ao importar planilha de estoque:", err);
+      setImportError(formatApiError(err));
+    } finally {
+      setIsImportingFile(false);
+    }
+  };
+
   // Ações de Produtos
   const handleEditProduct = (prod: Product) => {
     setEditingProduct(prod);
@@ -241,7 +312,10 @@ export const Inventory: React.FC = () => {
     setProductSku(prod.sku);
     setProductDesc(prod.description || '');
     setProductUnit(prod.unit_of_measure);
-    setProductPrice(String(prod.reference_price));
+    setProductPrice(formatPriceInput(prod.reference_price));
+    setProductCostPrice(formatPriceInput(prod.cost_price ?? prod.reference_price));
+    setProductSalePrice(formatPriceInput(prod.sale_price));
+    setProductExternalCode(prod.external_code || prod.toolspharma_code || '');
     setProductCategoryId(prod.category_id || '');
     setProductBrand(prod.brand || '');
     setProductBarcode(prod.barcode || '');
@@ -249,9 +323,9 @@ export const Inventory: React.FC = () => {
     setProductIsPerishable(Boolean(prod.is_perishable));
     setProductRequiresBatch(Boolean(prod.requires_batch));
     setProductShelfLifeDays(prod.shelf_life_days ? String(prod.shelf_life_days) : '');
-    setProductCurrentStock(String(prod.current_stock || 0));
-    setProductMinStock(String(prod.min_stock || 0));
-    setProductMaxStock(prod.max_stock ? String(prod.max_stock) : '');
+    setProductCurrentStock(formatQuantityInput(prod.current_stock));
+    setProductMinStock(formatQuantityInput(prod.min_stock));
+    setProductMaxStock(prod.max_stock ? formatQuantityInput(prod.max_stock) : '');
     setProductStorageLocation(prod.storage_location || '');
     setModalError(null);
     setIsModalOpen(true);
@@ -305,6 +379,9 @@ export const Inventory: React.FC = () => {
       setProductDesc('');
       setProductUnit('UN');
       setProductPrice('0');
+      setProductCostPrice('0');
+      setProductSalePrice('0');
+      setProductExternalCode('');
       setProductCategoryId(categories[0]?.id || '');
       setProductBrand('');
       setProductBarcode('');
@@ -358,7 +435,10 @@ export const Inventory: React.FC = () => {
             name: productName,
             description: productDesc || undefined,
             unit_of_measure: productUnit,
-            reference_price: parseFloat(productPrice) || 0,
+            reference_price: parseFloat(productPrice) || parseFloat(productCostPrice) || 0,
+            cost_price: parseFloat(productCostPrice) || 0,
+            sale_price: parseFloat(productSalePrice) || 0,
+            external_code: productExternalCode || undefined,
             category_id: productCategoryId || undefined,
             brand: productBrand || undefined,
             barcode: productBarcode || undefined,
@@ -377,7 +457,10 @@ export const Inventory: React.FC = () => {
             name: productName,
             description: productDesc || undefined,
             unit_of_measure: productUnit,
-            reference_price: parseFloat(productPrice) || 0,
+            reference_price: parseFloat(productPrice) || parseFloat(productCostPrice) || 0,
+            cost_price: parseFloat(productCostPrice) || 0,
+            sale_price: parseFloat(productSalePrice) || 0,
+            external_code: productExternalCode || undefined,
             category_id: productCategoryId || undefined,
             brand: productBrand || undefined,
             barcode: productBarcode || undefined,
@@ -406,7 +489,7 @@ export const Inventory: React.FC = () => {
 
   // Movimentação & Auditoria de Estoque
   const handleOpenStockAdjustModal = (
-    prod: Product, 
+    prod: Product,
     type: 'invoice_entry' | 'manual_loss' | 'reconciliation' = 'invoice_entry'
   ) => {
     setStockAdjustProduct(prod);
@@ -420,7 +503,7 @@ export const Inventory: React.FC = () => {
     setStockAdjustExpiry('');
     setStockAdjustReason(
       type === 'invoice_entry' ? 'Entrada por Nota Fiscal' :
-      type === 'manual_loss' ? 'Avaria / Quebra de Produto' : 'Contagem Cíclica de Inventário'
+        type === 'manual_loss' ? 'Avaria / Quebra de Produto' : 'Contagem Cíclica de Inventário'
     );
     setStockAdjustNotes('');
     setStockAdjustAuditor('');
@@ -511,10 +594,7 @@ export const Inventory: React.FC = () => {
 
 
 
-  const formatCurrency = (val: number | string | undefined) => {
-    const num = typeof val === 'string' ? parseFloat(val) : (val || 0);
-    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(num);
-  };
+
 
   // Cálculos de Métricas
   const totalStockValue = (products || []).reduce((acc, p) => acc + ((p.current_stock || 0) * (p.reference_price || 0)), 0);
@@ -531,11 +611,197 @@ export const Inventory: React.FC = () => {
 
   const accuracyRate = products.length > 0 ? Math.round((auditedProductsCount / products.length) * 100) : 100;
 
-  // Filtros Avançados
+  // Handlers de Ordenação
+  const handleProdSort = (field: string) => {
+    if (prodSortField === field) {
+      setProdSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setProdSortField(field);
+      setProdSortDir('asc');
+    }
+  };
+
+  const handleCatSort = (field: string) => {
+    if (catSortField === field) {
+      setCatSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setCatSortField(field);
+      setCatSortDir('asc');
+    }
+  };
+
+  const handleMovSort = (field: string) => {
+    if (movSortField === field) {
+      setMovSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setMovSortField(field);
+      setMovSortDir('asc');
+    }
+  };
+
+  const handleAuditSort = (field: string) => {
+    if (auditSortField === field) {
+      setAuditSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setAuditSortField(field);
+      setAuditSortDir('asc');
+    }
+  };
+
+  // Exportação para Planilha CSV formatada
+  const exportProductsToCsv = (itemsToExport: Product[], filenameSuffix: string = 'catalogo') => {
+    if (!itemsToExport || itemsToExport.length === 0) {
+      alert("Nenhum produto disponível para exportação.");
+      return;
+    }
+
+    const headers = [
+      "ID",
+      "Código Legado / Externo",
+      "SKU",
+      "Código de Barras (EAN)",
+      "Nome do Produto",
+      "Categoria",
+      "Marca",
+      "NCM",
+      "Saldo Físico",
+      "Unidade",
+      "Preço Custo (R$)",
+      "Preço Venda (R$)",
+      "Preço Referência (R$)",
+      "Estoque Mínimo",
+      "Estoque Máximo",
+      "Localização",
+      "Perecível",
+      "Exige Lote",
+      "Status Estoque"
+    ];
+
+    const escapeCsv = (val: any) => {
+      if (val === null || val === undefined) return '';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = itemsToExport.map(p => {
+      const cur = Number(p.current_stock || 0);
+      const min = Number(p.min_stock || 0);
+      let statusStr = "Regular";
+      if (cur <= 0) statusStr = "Zerado";
+      else if (cur <= min) statusStr = "Crítico";
+
+      return [
+        escapeCsv(p.id),
+        escapeCsv(p.external_code || p.toolspharma_code || ''),
+        escapeCsv(p.sku),
+        escapeCsv(p.barcode || ''),
+        escapeCsv(p.name),
+        escapeCsv(p.category?.name || ''),
+        escapeCsv(p.brand || ''),
+        escapeCsv(p.ncm || ''),
+        escapeCsv(cur.toFixed(2).replace('.', ',')),
+        escapeCsv(p.unit_of_measure),
+        escapeCsv(Number(p.cost_price || p.reference_price || 0).toFixed(2).replace('.', ',')),
+        escapeCsv(Number(p.sale_price || 0).toFixed(2).replace('.', ',')),
+        escapeCsv(Number(p.reference_price || 0).toFixed(2).replace('.', ',')),
+        escapeCsv(min.toFixed(2).replace('.', ',')),
+        escapeCsv(p.max_stock ? Number(p.max_stock).toFixed(2).replace('.', ',') : ''),
+        escapeCsv(p.storage_location || ''),
+        escapeCsv(p.is_perishable ? 'Sim' : 'Não'),
+        escapeCsv(p.requires_batch ? 'Sim' : 'Não'),
+        escapeCsv(statusStr)
+      ].join(';');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `controlb_estoque_${filenameSuffix}_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Exclusão em Massa de Produtos Selecionados
+  const handleBulkDeleteProducts = () => {
+    if (selectedProductIds.size === 0) return;
+    const count = selectedProductIds.size;
+
+    openConfirmModal({
+      title: `Excluir ${count} Produtos Selecionados`,
+      subtitle: 'Esta ação removerá permanentemente os produtos selecionados e suas respectivas fichas de estoque.',
+      type: 'danger',
+      message: (
+        <>
+          Você selecionou <strong>{count} produtos</strong> para exclusão definitiva.
+          <div className="alert-callout" style={{ marginTop: '0.75rem' }}>
+            <strong>Atenção:</strong> Esta operação é irreversível e excluirá o histórico direto vinculado a estes produtos.
+          </div>
+        </>
+      ),
+      confirmText: `Sim, Excluir ${count} Produtos`,
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, isLoading: true, errorMessage: null }));
+        try {
+          const ids = Array.from(selectedProductIds);
+          for (const id of ids) {
+            await inventoryService.deleteProduct(id);
+          }
+          setSelectedProductIds(new Set());
+          await loadInventoryData();
+          closeConfirmModal();
+        } catch (err: any) {
+          setConfirmModal(prev => ({
+            ...prev,
+            isLoading: false,
+            errorMessage: err?.response?.data?.detail || 'Erro ao excluir produtos selecionados.'
+          }));
+        }
+      }
+    });
+  };
+
+  // Filtros Avançados & Ordenação de Produtos
   const filteredProducts = (products || []).filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.brand && p.brand.toLowerCase().includes(searchTerm.toLowerCase()));
+    const term = searchTerm.trim().toLowerCase();
+    let matchesSearch = true;
+
+    if (term) {
+      if (searchField === 'all') {
+        matchesSearch = (
+          p.name.toLowerCase().includes(term) ||
+          p.sku.toLowerCase().includes(term) ||
+          Boolean(p.external_code && p.external_code.toLowerCase().includes(term)) ||
+          Boolean(p.toolspharma_code && p.toolspharma_code.toLowerCase().includes(term)) ||
+          Boolean(p.barcode && p.barcode.toLowerCase().includes(term)) ||
+          Boolean(p.ncm && p.ncm.toLowerCase().includes(term)) ||
+          Boolean(p.brand && p.brand.toLowerCase().includes(term)) ||
+          Boolean(p.storage_location && p.storage_location.toLowerCase().includes(term))
+        );
+      } else if (searchField === 'name') {
+        matchesSearch = p.name.toLowerCase().includes(term);
+      } else if (searchField === 'sku') {
+        matchesSearch = p.sku.toLowerCase().includes(term);
+      } else if (searchField === 'external_code') {
+        matchesSearch = Boolean(
+          (p.external_code && p.external_code.toLowerCase().includes(term)) ||
+          (p.toolspharma_code && p.toolspharma_code.toLowerCase().includes(term))
+        );
+      } else if (searchField === 'barcode') {
+        matchesSearch = Boolean(p.barcode && p.barcode.toLowerCase().includes(term));
+      } else if (searchField === 'ncm') {
+        matchesSearch = Boolean(p.ncm && p.ncm.toLowerCase().includes(term));
+      } else if (searchField === 'brand') {
+        matchesSearch = Boolean(p.brand && p.brand.toLowerCase().includes(term));
+      } else if (searchField === 'location') {
+        matchesSearch = Boolean(p.storage_location && p.storage_location.toLowerCase().includes(term));
+      }
+    }
+
     const matchesCategory = selectedCategoryFilter ? p.category_id === selectedCategoryFilter : true;
 
     let matchesStatus = true;
@@ -550,18 +816,89 @@ export const Inventory: React.FC = () => {
     }
 
     return matchesSearch && matchesCategory && matchesStatus;
+  }).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+
+    if (prodSortField === 'name') {
+      valA = a.name.toLowerCase();
+      valB = b.name.toLowerCase();
+    } else if (prodSortField === 'sku') {
+      valA = a.sku.toLowerCase();
+      valB = b.sku.toLowerCase();
+    } else if (prodSortField === 'external_code') {
+      valA = a.external_code || a.toolspharma_code || '';
+      valB = b.external_code || b.toolspharma_code || '';
+    } else if (prodSortField === 'category') {
+      valA = a.category?.name?.toLowerCase() || '';
+      valB = b.category?.name?.toLowerCase() || '';
+    } else if (prodSortField === 'cost_price') {
+      valA = Number(a.cost_price || a.reference_price || 0);
+      valB = Number(b.cost_price || b.reference_price || 0);
+    } else if (prodSortField === 'sale_price') {
+      valA = Number(a.sale_price || 0);
+      valB = Number(b.sale_price || 0);
+    } else if (prodSortField === 'current_stock') {
+      valA = Number(a.current_stock || 0);
+      valB = Number(b.current_stock || 0);
+    } else if (prodSortField === 'storage_location') {
+      valA = a.storage_location?.toLowerCase() || '';
+      valB = b.storage_location?.toLowerCase() || '';
+    }
+
+    if (valA < valB) return prodSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return prodSortDir === 'asc' ? 1 : -1;
+    return 0;
   });
 
   const filteredCategories = (categories || []).filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (c.code && c.code.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  ).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (catSortField === 'name') {
+      valA = a.name.toLowerCase();
+      valB = b.name.toLowerCase();
+    } else if (catSortField === 'code') {
+      valA = (a.code || '').toLowerCase();
+      valB = (b.code || '').toLowerCase();
+    }
+    if (valA < valB) return catSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return catSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   const filteredMovements = (stockMovements || []).filter(m =>
     (m.product_name && m.product_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (m.sku && m.sku.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (m.reference_doc && m.reference_doc.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  ).sort((a, b) => {
+    let valA: any = '';
+    let valB: any = '';
+    if (movSortField === 'created_at') {
+      valA = new Date(a.created_at).getTime();
+      valB = new Date(b.created_at).getTime();
+    } else if (movSortField === 'product') {
+      valA = (a.product_name || '').toLowerCase();
+      valB = (b.product_name || '').toLowerCase();
+    } else if (movSortField === 'quantity') {
+      valA = Number(a.quantity || 0);
+      valB = Number(b.quantity || 0);
+    } else if (movSortField === 'unit_cost') {
+      valA = Number(a.unit_cost || 0);
+      valB = Number(b.unit_cost || 0);
+    } else if (movSortField === 'balance_after') {
+      valA = Number(a.balance_after || 0);
+      valB = Number(b.balance_after || 0);
+    } else if (movSortField === 'type') {
+      valA = a.movement_type;
+      valB = b.movement_type;
+    }
+    if (valA < valB) return movSortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return movSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   return (
     <div className="inventory-page">
@@ -673,11 +1010,26 @@ export const Inventory: React.FC = () => {
             <div className="header-actions">
               <button
                 className="btn-refresh"
-                onClick={loadInventoryData}
+                onClick={() => loadInventoryData(true)}
                 disabled={loading}
                 title="Recarregar Dados"
               >
                 <RefreshCw size={15} className={loading ? 'spinning' : ''} />
+              </button>
+
+              <button
+                className="btn-secondary btn-inventory-import"
+                onClick={() => {
+                  setIsImportModalOpen(true);
+                  setSelectedImportFile(null);
+                  setImportError(null);
+                  setImportSummary(null);
+                  setImportSearchTerm('');
+                }}
+                title="Importar carga de estoque via planilha Excel (.xlsx)"
+              >
+                <UploadCloud size={16} />
+                <span>Importar Planilha</span>
               </button>
 
               {activeMenu !== 'movimentacoes' && activeMenu !== 'auditoria' && (
@@ -777,14 +1129,46 @@ export const Inventory: React.FC = () => {
 
           {/* TOOLBAR DE FILTROS & PESQUISA */}
           <div className="search-toolbar">
-            <div className="search-box">
-              <Search className="search-icon" size={16} />
-              <input
-                type="text"
-                placeholder={`Pesquisar em ${activeMenu}... (nome, SKU, marca)`}
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+            <div className="search-box-composite">
+              <select
+                className="search-field-select"
+                value={searchField}
+                onChange={(e) => setSearchField(e.target.value as any)}
+                title="Filtrar pesquisa por campo específico"
+              >
+                <option value="all">Todos os Campos</option>
+                <option value="name">Nome do Produto</option>
+                <option value="sku">SKU</option>
+                <option value="external_code">Código Legado / Externo</option>
+                <option value="barcode">Código de Barras (EAN)</option>
+                <option value="ncm">NCM</option>
+                <option value="brand">Marca / Fabricante</option>
+                <option value="location">Localização Física</option>
+              </select>
+
+              <div className="search-box">
+                <Search className="search-icon" size={16} />
+                <input
+                  type="text"
+                  placeholder={
+                    searchField === 'all' ? `Pesquisar em ${activeMenu}... (nome, SKU, marca, EAN)` :
+                    searchField === 'name' ? 'Pesquisar por nome do produto...' :
+                    searchField === 'sku' ? 'Pesquisar por código SKU...' :
+                    searchField === 'external_code' ? 'Pesquisar por código externo / legado...' :
+                    searchField === 'barcode' ? 'Pesquisar por código de barras (EAN-13)...' :
+                    searchField === 'ncm' ? 'Pesquisar por classificação fiscal NCM...' :
+                    searchField === 'brand' ? 'Pesquisar por marca / fabricante...' :
+                    'Pesquisar por localização física...'
+                  }
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                {searchTerm && (
+                  <button type="button" className="btn-clear-search" onClick={() => setSearchTerm('')} title="Limpar busca">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
             </div>
 
             {activeMenu === 'produtos' && (
@@ -828,6 +1212,17 @@ export const Inventory: React.FC = () => {
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
+
+                {/* Botão Exportar Tudo */}
+                <button
+                  type="button"
+                  className="btn-export-all"
+                  onClick={() => exportProductsToCsv(filteredProducts, 'filtrado')}
+                  title="Exportar produtos listados para CSV / Excel"
+                >
+                  <Download size={14} />
+                  <span>Exportar ({filteredProducts.length})</span>
+                </button>
               </div>
             )}
 
@@ -835,8 +1230,53 @@ export const Inventory: React.FC = () => {
               {activeMenu === 'produtos' && `${filteredProducts.length} produtos listados`}
               {activeMenu === 'categorias' && `${filteredCategories.length} categorias listadas`}
               {activeMenu === 'movimentacoes' && `${filteredMovements.length} movimentações listadas`}
+              {activeMenu === 'auditoria' && `${filteredProducts.length} itens no inventário`}
             </div>
           </div>
+
+          {/* BARRA DE AÇÕES EM MASSA FLUTUANTE / INTEGRADA */}
+          {activeMenu === 'produtos' && selectedProductIds.size > 0 && (
+            <div className="bulk-actions-toolbar">
+              <div className="bulk-info">
+                <CheckSquare size={16} className="bulk-icon" />
+                <span><strong>{selectedProductIds.size}</strong> {selectedProductIds.size === 1 ? 'produto selecionado' : 'produtos selecionados'}</span>
+              </div>
+              <div className="bulk-buttons">
+                <button
+                  type="button"
+                  className="btn-bulk-export"
+                  onClick={() => {
+                    const selectedList = products.filter(p => selectedProductIds.has(p.id));
+                    exportProductsToCsv(selectedList, 'selecionados');
+                  }}
+                  title="Exportar itens selecionados para planilha CSV / Excel"
+                >
+                  <Download size={14} />
+                  <span>Exportar Selecionados ({selectedProductIds.size})</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="btn-bulk-delete"
+                  onClick={handleBulkDeleteProducts}
+                  title="Excluir permanentemente os itens selecionados"
+                >
+                  <Trash2 size={14} />
+                  <span>Excluir Selecionados</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="btn-bulk-clear"
+                  onClick={() => setSelectedProductIds(new Set())}
+                  title="Desmarcar todos"
+                >
+                  <X size={14} />
+                  <span>Desmarcar</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* =============================================================== */}
           {/* 3. TABELAS DE DADOS                                             */}
@@ -863,17 +1303,57 @@ export const Inventory: React.FC = () => {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Produto & SKU</th>
-                        <th>Categoria</th>
-                        <th>Preço Ref.</th>
-                        <th>Nível de Estoque (Físico)</th>
-                        <th>Localização</th>
+                        <th style={{ width: '40px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(filteredProducts.length && selectedProductIds.size === filteredProducts.length)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedProductIds(new Set(filteredProducts.map(p => p.id)));
+                              } else {
+                                setSelectedProductIds(new Set());
+                              }
+                            }}
+                            title={selectedProductIds.size === filteredProducts.length ? "Desmarcar todos" : "Selecionar todos os listados"}
+                          />
+                        </th>
+                        <th className="th-sortable" onClick={() => handleProdSort('name')}>
+                          <div className="th-content">
+                            <span>Produto & SKU</span>
+                            {prodSortField === 'name' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleProdSort('category')}>
+                          <div className="th-content">
+                            <span>Categoria</span>
+                            {prodSortField === 'category' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleProdSort('cost_price')}>
+                          <div className="th-content">
+                            <span>Custo / Venda</span>
+                            {prodSortField === 'cost_price' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleProdSort('current_stock')}>
+                          <div className="th-content">
+                            <span>Nível de Estoque (Físico)</span>
+                            {prodSortField === 'current_stock' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleProdSort('storage_location')}>
+                          <div className="th-content">
+                            <span>Localização</span>
+                            {prodSortField === 'storage_location' ? (prodSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
                         <th>Rastreabilidade</th>
                         <th className="th-actions">Ações</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredProducts.map((prod) => {
+                        const isSelected = selectedProductIds.has(prod.id);
                         const cur = Number(prod.current_stock || 0);
                         const min = Number(prod.min_stock || 0);
                         const max = prod.max_stock ? Number(prod.max_stock) : Math.max(min * 2, cur * 1.5, 50);
@@ -882,12 +1362,32 @@ export const Inventory: React.FC = () => {
                         const stockPercent = Math.min(100, Math.max(0, (cur / max) * 100));
 
                         return (
-                          <tr key={prod.id} className={isZero ? 'row-zero' : isLow ? 'row-low' : ''}>
+                          <tr key={prod.id} className={`${isZero ? 'row-zero' : isLow ? 'row-low' : ''} ${isSelected ? 'row-selected' : ''}`}>
+                            <td style={{ textAlign: 'center' }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setSelectedProductIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(prod.id)) next.delete(prod.id);
+                                    else next.add(prod.id);
+                                    return next;
+                                  });
+                                }}
+                              />
+                            </td>
                             <td>
                               <div className="product-title-cell">
                                 <strong className="product-name">{prod.name}</strong>
                                 <div className="tags-row">
                                   <span className="sku-tag">SKU: {prod.sku}</span>
+                                  {(prod.external_code || prod.toolspharma_code) && (
+                                    <span className="external-code-tag" title="Código de produto no sistema legado / externo">
+                                      CÓD: {prod.external_code || prod.toolspharma_code}
+                                    </span>
+                                  )}
+                                  {prod.barcode && <span className="barcode-tag" title="Código de barras EAN-13">EAN: {prod.barcode}</span>}
                                   {prod.brand && <span className="brand-tag">{prod.brand}</span>}
                                 </div>
                               </div>
@@ -897,7 +1397,18 @@ export const Inventory: React.FC = () => {
                                 {prod.category?.name || 'Geral'}
                               </span>
                             </td>
-                            <td><strong>{formatCurrency(prod.reference_price)}</strong></td>
+                            <td>
+                              <div className="price-stack">
+                                <span className="cost-val" title="Custo Unitário de Aquisição">
+                                  Custo: {formatCurrency(prod.cost_price || prod.reference_price)}
+                                </span>
+                                {Boolean(prod.sale_price && Number(prod.sale_price) > 0) && (
+                                  <strong className="sale-val" title="Preço de Venda ao Consumidor">
+                                    Venda: {formatCurrency(prod.sale_price!)}
+                                  </strong>
+                                )}
+                              </div>
+                            </td>
                             <td>
                               <div className="stock-visual-cell">
                                 <div className="stock-header-info">
@@ -905,7 +1416,7 @@ export const Inventory: React.FC = () => {
                                     {isZero ? 'ZERADO' : isLow ? 'CRÍTICO' : 'REGULAR'}
                                   </span>
                                   <span className="stock-numbers">
-                                    <strong>{cur}</strong> / {min} {prod.unit_of_measure}
+                                    <strong>{formatQuantity(cur)}</strong> / {formatQuantity(min)} {prod.unit_of_measure}
                                   </span>
                                 </div>
                                 <div className="stock-progress-bar">
@@ -983,8 +1494,18 @@ export const Inventory: React.FC = () => {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Código / Prefixo</th>
-                        <th>Nome da Categoria</th>
+                        <th className="th-sortable" onClick={() => handleCatSort('code')}>
+                          <div className="th-content">
+                            <span>Código / Prefixo</span>
+                            {catSortField === 'code' ? (catSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleCatSort('name')}>
+                          <div className="th-content">
+                            <span>Nome da Categoria</span>
+                            {catSortField === 'name' ? (catSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
                         <th>Descrição</th>
                         <th className="th-actions">Ações</th>
                       </tr>
@@ -1039,12 +1560,42 @@ export const Inventory: React.FC = () => {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Data / Hora</th>
-                        <th>Produto</th>
-                        <th>Tipo de Movimentação</th>
-                        <th>Qtd</th>
-                        <th>Custo Unit.</th>
-                        <th>Saldo Resultante</th>
+                        <th className="th-sortable" onClick={() => handleMovSort('created_at')}>
+                          <div className="th-content">
+                            <span>Data / Hora</span>
+                            {movSortField === 'created_at' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleMovSort('product')}>
+                          <div className="th-content">
+                            <span>Produto</span>
+                            {movSortField === 'product' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleMovSort('type')}>
+                          <div className="th-content">
+                            <span>Tipo de Movimentação</span>
+                            {movSortField === 'type' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleMovSort('quantity')}>
+                          <div className="th-content">
+                            <span>Qtd</span>
+                            {movSortField === 'quantity' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleMovSort('unit_cost')}>
+                          <div className="th-content">
+                            <span>Custo Unit.</span>
+                            {movSortField === 'unit_cost' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleMovSort('balance_after')}>
+                          <div className="th-content">
+                            <span>Saldo Resultante</span>
+                            {movSortField === 'balance_after' ? (movSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
                         <th>Documento de Referência</th>
                       </tr>
                     </thead>
@@ -1107,13 +1658,13 @@ export const Inventory: React.FC = () => {
                             </td>
                             <td>
                               <strong className={isPositive ? 'qty-pos' : 'qty-neg'}>
-                                {isPositive ? '+' : '-'}{Number(mov.quantity)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
+                                {isPositive ? '+' : '-'}{formatQuantity(mov.quantity)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
                               </strong>
                             </td>
                             <td>{formatCurrency(mov.unit_cost)}</td>
                             <td>
                               <span className="balance-tag">
-                                {Number(mov.balance_after)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
+                                {formatQuantity(mov.balance_after)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
                               </span>
                             </td>
                             <td>
@@ -1167,10 +1718,25 @@ export const Inventory: React.FC = () => {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Produto / SKU</th>
+                        <th className="th-sortable" onClick={() => handleAuditSort('name')}>
+                          <div className="th-content">
+                            <span>Produto / SKU</span>
+                            {auditSortField === 'name' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
                         <th>Categoria</th>
-                        <th>Localização</th>
-                        <th>Saldo Sistema</th>
+                        <th className="th-sortable" onClick={() => handleAuditSort('storage_location')}>
+                          <div className="th-content">
+                            <span>Localização</span>
+                            {auditSortField === 'storage_location' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
+                        <th className="th-sortable" onClick={() => handleAuditSort('current_stock')}>
+                          <div className="th-content">
+                            <span>Saldo Sistema</span>
+                            {auditSortField === 'current_stock' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                          </div>
+                        </th>
                         <th>Status Auditoria</th>
                         <th>Última Auditoria</th>
                         <th style={{ textAlign: 'right' }}>Ação de Auditoria</th>
@@ -1212,7 +1778,7 @@ export const Inventory: React.FC = () => {
                               </td>
                               <td>
                                 <strong style={{ fontSize: '0.9rem', color: Number(prod.current_stock || 0) <= 0 ? '#ef4444' : 'var(--text-primary)' }}>
-                                  {Number(prod.current_stock || 0)} {prod.unit_of_measure}
+                                  {formatQuantity(prod.current_stock)} {prod.unit_of_measure}
                                 </strong>
                               </td>
                               <td>
@@ -1471,7 +2037,7 @@ export const Inventory: React.FC = () => {
                 </div>
               </div>
 
-              <div className="form-row cols-3">
+              <div className="form-row cols-2">
                 <div className="form-group">
                   <label>SKU (Código Interno)</label>
                   <div className="input-with-button">
@@ -1507,9 +2073,38 @@ export const Inventory: React.FC = () => {
                     <option value="M">Metro (M)</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="form-row cols-3">
+                <div className="form-group">
+                  <label>Preço de Custo (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={productCostPrice}
+                    onChange={(e) => {
+                      setProductCostPrice(e.target.value);
+                      if (!productPrice || productPrice === '0') setProductPrice(e.target.value);
+                    }}
+                    placeholder="0,00"
+                  />
+                </div>
 
                 <div className="form-group">
-                  <label>Preço de Referência (R$)</label>
+                  <label>Preço de Venda (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={productSalePrice}
+                    onChange={(e) => setProductSalePrice(e.target.value)}
+                    placeholder="0,00"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Preço Ref. / Base (R$)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -1532,7 +2127,7 @@ export const Inventory: React.FC = () => {
                   <div className="stock-balance-info">
                     <span className="badge-label">Saldo Físico Atual:</span>
                     <strong className="badge-value">
-                      {productCurrentStock || 0} {productUnit}
+                      {formatQuantity(productCurrentStock)} {productUnit}
                     </strong>
                   </div>
                   <div className="stock-balance-hint">
@@ -1628,10 +2223,19 @@ export const Inventory: React.FC = () => {
               {/* Seção 3: Rastreabilidade & Fiscal */}
               <div className="form-section-divider">
                 <Tags size={14} />
-                <span>3. Rastreabilidade & Tributário (Opcional)</span>
+                <span>3. Rastreabilidade, Integrações & Tributário</span>
               </div>
 
-              <div className="form-row cols-2">
+              <div className="form-row cols-3">
+                <div className="form-group">
+                  <label>Código Externo / Legado</label>
+                  <input
+                    type="text"
+                    value={productExternalCode}
+                    onChange={(e) => setProductExternalCode(e.target.value)}
+                    placeholder="Ex: 9353051"
+                  />
+                </div>
                 <div className="form-group">
                   <label>Código de Barras / EAN-13</label>
                   <input
@@ -1706,7 +2310,7 @@ export const Inventory: React.FC = () => {
             <div className="stock-balance-info">
               <span className="badge-label">Saldo Físico no Sistema:</span>
               <strong className="badge-value">
-                {Number(stockAdjustProduct?.current_stock || 0)} {stockAdjustProduct?.unit_of_measure}
+                {formatQuantity(stockAdjustProduct?.current_stock)} {stockAdjustProduct?.unit_of_measure}
               </strong>
             </div>
             <div className="stock-balance-hint">
@@ -2040,6 +2644,253 @@ export const Inventory: React.FC = () => {
             </button>
           </div>
         </form>
+      </Modal>
+
+
+      {/* =====================================================================
+          5. MODAL DE IMPORTAÇÃO & SINCRONIZAÇÃO DE PLANILHA DE ESTOQUE (.XLSX)
+      ===================================================================== */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => {
+          if (!isImportingFile) {
+            setIsImportModalOpen(false);
+          }
+        }}
+        title="Sincronização & Importação de Estoque"
+        size="lg"
+      >
+        <div className="inventory-import-wizard">
+          {importError && (
+            <div className="modal-alert-error">
+              <AlertTriangle size={16} />
+              <span>{importError}</span>
+            </div>
+          )}
+
+          {!importSummary ? (
+            <div className="import-step-upload">
+              {/* Card Informativo das Regras de Negócio */}
+              <div className="import-guidance-card">
+                <div className="guidance-header">
+                  <Sparkles size={16} className="sparkle-icon" />
+                  <strong>Como funciona a Reconciliação de Estoque via Planilha:</strong>
+                </div>
+                <div className="guidance-grid">
+                  <div className="guidance-item">
+                    <CheckCircle2 size={14} className="ok-icon" />
+                    <span><strong>Novos Produtos & Categorias:</strong> Itens inexistentes são cadastrados e categorizados automaticamente via NCM.</span>
+                  </div>
+                  <div className="guidance-item">
+                    <TrendingDown size={14} className="sale-icon" />
+                    <span><strong>Detecção de Vendas:</strong> Quedas de saldo físico são registradas como saídas por venda no Kardex.</span>
+                  </div>
+                  <div className="guidance-item">
+                    <TrendingUp size={14} className="entry-icon" />
+                    <span><strong>Detecção de Reposições:</strong> Aumentos de saldo são registrados como entradas de mercadoria.</span>
+                  </div>
+                  <div className="guidance-item">
+                    <DollarSign size={14} className="price-icon" />
+                    <span><strong>Preços de Custo & Venda:</strong> Atualiza os valores unitários e custos médios sem perder dados prévios.</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Área de Dropzone e Seleção de Arquivo */}
+              <div className="file-dropzone-container">
+                <input
+                  type="file"
+                  id="inventory-file-input"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={handleImportFileChange}
+                  style={{ display: 'none' }}
+                  disabled={isImportingFile}
+                />
+
+                <label
+                  htmlFor="inventory-file-input"
+                  className={`file-dropzone-box ${selectedImportFile ? 'has-file' : ''}`}
+                >
+                  <div className="dropzone-icon-wrap">
+                    <FileSpreadsheet size={36} className="excel-icon" />
+                  </div>
+                  {selectedImportFile ? (
+                    <div className="selected-file-details">
+                      <strong className="file-name">{selectedImportFile.name}</strong>
+                      <span className="file-meta">
+                        {(selectedImportFile.size / 1024).toFixed(1)} KB • Pronto para processamento
+                      </span>
+                      <span className="file-change-hint">Clique para selecionar outro arquivo</span>
+                    </div>
+                  ) : (
+                    <div className="dropzone-text">
+                      <strong>Clique aqui para selecionar a planilha .xlsx de estoque</strong>
+                      <span>Relatório de Estoque e Inventário Físico</span>
+                    </div>
+                  )}
+                </label>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={() => setIsImportModalOpen(false)}
+                  disabled={isImportingFile}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleProcessImport}
+                  disabled={!selectedImportFile || isImportingFile}
+                >
+                  {isImportingFile ? (
+                    <>
+                      <Loader2 size={16} className="spinning" />
+                      <span>Processando produtos...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud size={16} />
+                      <span>Processar e Sincronizar Estoque</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="import-step-summary">
+              {/* Banner de Sucesso */}
+              <div className="import-success-banner">
+                <div className="banner-icon-wrap">
+                  <CheckCircle size={24} />
+                </div>
+                <div className="banner-text">
+                  <h3>Sincronização Concluída com Sucesso!</h3>
+                  <p>{importSummary.message}</p>
+                  {importSummary.inventory_date && (
+                    <span className="date-tag">Posição de Estoque: {importSummary.inventory_date}</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Grid de KPIs da Carga */}
+              <div className="summary-kpis-grid">
+                <div className="summary-card">
+                  <span className="kpi-title">Itens Processados</span>
+                  <strong className="kpi-num">{importSummary.total_products_read}</strong>
+                  <span className="kpi-sub">{importSummary.created_categories_count} categorias criadas</span>
+                </div>
+
+                <div className="summary-card highlight-created">
+                  <span className="kpi-title">Novos Produtos</span>
+                  <strong className="kpi-num ok">{importSummary.created_products_count}</strong>
+                  <span className="kpi-sub">{importSummary.updated_products_count} atualizados</span>
+                </div>
+
+                <div className="summary-card highlight-sales">
+                  <span className="kpi-title">Vendas Identificadas (Saídas)</span>
+                  <strong className="kpi-num sale">{importSummary.sales_identified_count} itens</strong>
+                  <span className="kpi-sub">Total: {importSummary.total_sales_quantity} unidades</span>
+                </div>
+
+                <div className="summary-card highlight-entries">
+                  <span className="kpi-title">Entradas / Reposições</span>
+                  <strong className="kpi-num entry">{importSummary.entries_identified_count} itens</strong>
+                  <span className="kpi-sub">Total: {importSummary.total_entries_quantity} unidades</span>
+                </div>
+
+                <div className="summary-card highlight-values">
+                  <span className="kpi-title">Patrimônio em Custo</span>
+                  <strong className="kpi-num">{formatCurrency(importSummary.total_cost_value)}</strong>
+                  <span className="kpi-sub">Valor de Venda: {formatCurrency(importSummary.total_sale_value)}</span>
+                </div>
+              </div>
+
+              {/* Tabela de Amostra / Divergências Identificadas */}
+              {importSummary.sample_items && importSummary.sample_items.length > 0 && (
+                <div className="sample-items-section">
+                  <div className="sample-header">
+                    <h4>Auditoria de Itens & Movimentações Geradas</h4>
+                    <div className="sample-search">
+                      <Search size={14} />
+                      <input
+                        type="text"
+                        placeholder="Filtrar nesta auditoria..."
+                        value={importSearchTerm}
+                        onChange={(e) => setImportSearchTerm(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="sample-table-wrapper">
+                    <table className="sample-table">
+                      <thead>
+                        <tr>
+                          <th>Código / Produto</th>
+                          <th>Saldo Anterior</th>
+                          <th>Novo Saldo</th>
+                          <th>Diferença</th>
+                          <th>Ação Registrada</th>
+                          <th>Custo</th>
+                          <th>Venda</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importSummary.sample_items
+                          .filter(it =>
+                            it.name.toLowerCase().includes(importSearchTerm.toLowerCase()) ||
+                            it.code.toLowerCase().includes(importSearchTerm.toLowerCase())
+                          )
+                          .map((item, idx) => (
+                            <tr key={idx}>
+                              <td>
+                                <div className="sample-prod-cell">
+                                  <strong>{item.name}</strong>
+                                  <span className="sample-code">Cód: {item.code} {item.barcode ? `• EAN: ${item.barcode}` : ''}</span>
+                                </div>
+                              </td>
+                              <td>{item.previous_stock}</td>
+                              <td><strong>{item.new_stock}</strong></td>
+                              <td>
+                                <span className={`delta-tag ${item.delta_stock > 0 ? 'pos' : item.delta_stock < 0 ? 'neg' : 'zero'}`}>
+                                  {item.delta_stock > 0 ? `+${item.delta_stock}` : item.delta_stock}
+                                </span>
+                              </td>
+                              <td>
+                                {item.action_type === 'created' && <span className="action-pill created">Novo Cadastro</span>}
+                                {item.action_type === 'sale_detected' && <span className="action-pill sale">Venda (Saída)</span>}
+                                {item.action_type === 'entry_detected' && <span className="action-pill entry">Reposição (Entrada)</span>}
+                                {item.action_type === 'unchanged' && <span className="action-pill unchanged">Saldo Inalterado</span>}
+                              </td>
+                              <td>{formatCurrency(item.cost_price)}</td>
+                              <td>{formatCurrency(item.sale_price)}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setIsImportModalOpen(false);
+                    setActiveMenu('produtos');
+                  }}
+                >
+                  <Check size={16} />
+                  <span>Concluir e Ver Catálogo de Produtos</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </Modal>
 
 

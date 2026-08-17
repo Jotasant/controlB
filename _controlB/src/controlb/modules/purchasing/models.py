@@ -85,13 +85,13 @@ class CostCenter(Base):
 
 class PurchaseRequest(Base):
     """
-    Tabela 'purchase_request' - Solicitações de compra abertas por colaboradores.
+    Tabela 'purchase_request' - Solicitações de compra emitidas pelos setores da empresa.
     """
     __tablename__ = "purchase_request"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
-    requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id", ondelete="RESTRICT"), nullable=False)
+    requester_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     cost_center_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True)
     
     request_number: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
@@ -128,7 +128,7 @@ class PurchaseRequest(Base):
 
 class PurchaseRequestItem(Base):
     """
-    Tabela 'purchrequestase__item' - Linhas/produtos de uma solicitação de compra.
+    Tabela 'purchase_request_item' - Linhas/produtos de uma solicitação de compra.
     """
     __tablename__ = "purchase_request_item"
 
@@ -137,7 +137,7 @@ class PurchaseRequestItem(Base):
         ForeignKey("purchase_request.id", ondelete="CASCADE"), 
         nullable=False
     )
-    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product.id", ondelete="RESTRICT"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product.id", ondelete="CASCADE"), nullable=False)
     
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     estimated_unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0.0000"))
@@ -163,7 +163,7 @@ class ApprovalEvent(Base):
         ForeignKey("purchase_request.id", ondelete="CASCADE"), 
         nullable=False
     )
-    approver_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id", ondelete="RESTRICT"), nullable=False)
+    approver_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     
     action: Mapped[str] = mapped_column(String(50), nullable=False)  # approved, rejected
     comments: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -190,7 +190,7 @@ class PurchaseOrder(Base):
         nullable=True
     )
     supplier_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("supplier.id", ondelete="RESTRICT"), nullable=False)
-    buyer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id", ondelete="RESTRICT"), nullable=False)
+    buyer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     cost_center_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True)
     
     order_number: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
@@ -239,7 +239,7 @@ class PurchaseOrderItem(Base):
         ForeignKey("purchase_order.id", ondelete="CASCADE"), 
         nullable=False
     )
-    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product.id", ondelete="RESTRICT"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product.id", ondelete="CASCADE"), nullable=False)
     
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
@@ -334,7 +334,7 @@ class SupplierQuoteItem(Base):
         ForeignKey("supplier_quote.id", ondelete="CASCADE"), 
         nullable=False
     )
-    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product.id", ondelete="RESTRICT"), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product.id", ondelete="CASCADE"), nullable=False)
 
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)

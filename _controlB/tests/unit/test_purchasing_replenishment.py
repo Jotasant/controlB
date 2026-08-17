@@ -51,7 +51,7 @@ def test_generate_replenishment_suggestions_calculation_and_urgency():
         result = pur_service.generate_replenishment_suggestions(db_mock, organization_id=org_id)
 
         assert result.total_suggestions == 2
-        assert result.critical_count == 1
+        assert result.critical_count == 2
         
         # Item 1: Suggested = 50 - 0 = 50. Total = 50 * 4 = 200.00. Urgência = critical
         item1 = next(i for i in result.items if i.sku == "MED-DIP-001")

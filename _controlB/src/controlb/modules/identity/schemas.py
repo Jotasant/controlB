@@ -163,3 +163,64 @@ class UserMeResponse(UserBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# 5. ESQUEMAS DE OPERAÇÕES EM LOTE (Bulk Operations)
+# ==============================================================================
+
+class BulkDeleteUsersRequest(BaseModel):
+    user_ids: list[uuid.UUID]
+
+
+class BulkDeleteOrganizationsRequest(BaseModel):
+    org_ids: list[uuid.UUID]
+
+
+class BulkDeleteRolesRequest(BaseModel):
+    role_ids: list[uuid.UUID]
+
+
+class BulkDeleteResponse(BaseModel):
+    message: str
+    deleted_count: int
+
+
+# ==============================================================================
+# 6. ESQUEMAS DE CONTATO INSTITUCIONAL (Contact)
+# ==============================================================================
+
+class ContactBase(BaseModel):
+    full_name: str
+    email: str | None = None
+    phone: str | None = None
+    mobile: str | None = None
+    document: str | None = None
+    position: str | None = None
+    notes: str | None = None
+    is_active: bool = True
+
+
+class ContactCreate(ContactBase):
+    pass
+
+
+class ContactUpdate(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    mobile: str | None = None
+    document: str | None = None
+    position: str | None = None
+    notes: str | None = None
+    is_active: bool | None = None
+
+
+class ContactResponse(ContactBase):
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+

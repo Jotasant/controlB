@@ -14,6 +14,7 @@ import { Purchasing } from '@/pages/Purchasing/Purchasing';
 import { Inventory } from '@/pages/Inventory/Inventory';
 import { CRM } from '@/pages/CRM/CRM';
 import { Sales } from '@/pages/Sales/Sales';
+import { POS } from '@/pages/POS/POS';
 import { Finance } from '@/pages/Finance/Finance';
 import { Billing } from '@/pages/Billing/Billing';
 import { Cadastros } from '@/pages/Cadastros/Cadastros';
@@ -45,6 +46,7 @@ export const App: React.FC = () => {
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/crm" element={<CRM />} />
               <Route path="/vendas" element={<Sales />} />
+              <Route path="/pdv" element={<POS />} />
               <Route path="/faturamento" element={<Billing />} />
               <Route path="/financeiro" element={<Finance />} />
               <Route path="/estoque" element={<Inventory />} />

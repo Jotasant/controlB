@@ -54,9 +54,11 @@ class Organization(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
-    # Relacionamentos 1-para-N (Uma organização possui múltiplos usuários e múltiplos cargos)
-    users: Mapped[list["User"]] = relationship(back_populates="organization")
-    roles: Mapped[list["Role"]] = relationship(back_populates="organization")
+    # Relacionamentos 1-para-N (Uma organização possui múltiplos usuários, cargos e contatos)
+    users: Mapped[list["User"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    roles: Mapped[list["Role"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    contacts: Mapped[list["Contact"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+
 
 
 # ==============================================================================
@@ -95,7 +97,7 @@ class Role(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Chave estrangeira ligando o cargo obrigatoriamente a uma organização existente
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
 
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str | None] = mapped_column(String(200), nullable=True) # Descrição opcional
@@ -128,9 +130,9 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Chave estrangeira obrigatória para a organização
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
     # Chave estrangeira opcional para o cargo (pode ser nulo)
-    role_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("role.id"), nullable=True)
+    role_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("role.id", ondelete="SET NULL"), nullable=True)
 
     # E-mail com índice exclusivo (não permite e-mails duplicados e acelera buscas no login)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
@@ -144,3 +146,33 @@ class User(Base):
     # Relacionamentos ORM
     organization: Mapped["Organization"] = relationship(back_populates="users")
     role: Mapped["Role"] = relationship(back_populates="users", lazy="selectin")
+
+
+# ==============================================================================
+# 5. MODELO CONTATO INSTITUCIONAL (Contact)
+# ==============================================================================
+
+class Contact(Base):
+    """
+    Tabela 'contact' - Representa contatos, interlocutores e pessoas físicas/jurídicas
+    institucionais da organização (compradores, representantes, parceiros).
+    """
+    __tablename__ = "contact"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+
+    full_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mobile: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    document: Mapped[str | None] = mapped_column(String(30), nullable=True)  # CPF ou RG
+    position: Mapped[str | None] = mapped_column(String(100), nullable=True) # Cargo / Função
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    # Relacionamentos
+    organization: Mapped["Organization"] = relationship(back_populates="contacts")

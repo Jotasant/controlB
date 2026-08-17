@@ -160,8 +160,26 @@ def create_new_organization(db: Session, organization_data: OrganizationCreate):
     return repository.create_organization(db, organization_data)
 
 
+def update_organization(db: Session, organization_id: uuid.UUID, organization_data: OrganizationUpdate):
+    """Regra de negócio: Atualiza organização validando duplicidade de nomes."""
+    db_org = repository.get_organization_by_id(db, id=organization_id)
+    if not db_org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organização não encontrada."
+        )
+    if organization_data.name and organization_data.name.strip() != db_org.name:
+        existing = repository.get_organization_by_name(db, name=organization_data.name.strip())
+        if existing and existing.id != organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Já existe outra organização cadastrada com este nome."
+            )
+    return repository.update_organization(db, db_org, organization_data)
+
+
 def delete_organization(db: Session, organization_id: uuid.UUID):
-    """Exclui a organização do banco."""
+    """Exclui a organização do banco e limpa dependências em cascata."""
     db_org = repository.get_organization_by_id(db, id=organization_id)
     if not db_org:
         raise HTTPException(
@@ -170,6 +188,24 @@ def delete_organization(db: Session, organization_id: uuid.UUID):
         )
     repository.delete_organization(db, db_org)
     return {"message": "Organização excluída com sucesso."}
+
+
+def bulk_delete_organizations(db: Session, org_ids: list[uuid.UUID]):
+    """Exclui múltiplas organizações em lote."""
+    count = repository.bulk_delete_organizations(db, org_ids)
+    return {"message": f"{count} organização(ões) excluída(s) com sucesso.", "deleted_count": count}
+
+
+def bulk_delete_users(db: Session, user_ids: list[uuid.UUID], current_user_id: uuid.UUID):
+    """Exclui múltiplos usuários em lote, impedindo autoexclusão."""
+    count = repository.bulk_delete_users(db, user_ids, current_user_id)
+    return {"message": f"{count} usuário(s) excluído(s) com sucesso.", "deleted_count": count}
+
+
+def bulk_delete_roles(db: Session, role_ids: list[uuid.UUID]):
+    """Exclui múltiplos cargos em lote."""
+    count = repository.bulk_delete_roles(db, role_ids)
+    return {"message": f"{count} cargo(s) excluído(s) com sucesso.", "deleted_count": count}
 
 
 # ==============================================================================
@@ -225,3 +261,49 @@ def delete_role(db: Session, role_id: uuid.UUID):
         )
     repository.delete_role(db, db_role)
     return {"message": "Cargo excluído com sucesso."}
+
+
+# ==============================================================================
+# 4. REGRAS DE NEGÓCIO DE CONTATOS (Contact)
+# ==============================================================================
+
+from controlb.modules.identity.schemas import ContactCreate, ContactUpdate
+
+
+def list_contacts(db: Session, organization_id: uuid.UUID, search: str | None = None):
+    """Lista contatos institucionais da organização com filtro opcional."""
+    return repository.list_contacts(db, organization_id, search)
+
+
+def get_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID):
+    """Busca contato por ID, validando tenant."""
+    contact = repository.get_contact_by_id(db, contact_id, organization_id)
+    if not contact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contato não encontrado."
+        )
+    return contact
+
+
+def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate):
+    """Cria um novo contato na organização."""
+    if not data.full_name or not data.full_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O nome completo do contato é obrigatório."
+        )
+    return repository.create_contact(db, organization_id, data)
+
+
+def update_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID, data: ContactUpdate):
+    """Atualiza dados cadastrais de um contato."""
+    contact = get_contact(db, contact_id, organization_id)
+    return repository.update_contact(db, contact, data)
+
+
+def delete_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID):
+    """Remove um contato institucional."""
+    contact = get_contact(db, contact_id, organization_id)
+    repository.delete_contact(db, contact)
+    return {"message": "Contato excluído com sucesso."}

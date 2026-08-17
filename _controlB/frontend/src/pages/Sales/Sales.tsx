@@ -1,53 +1,250 @@
 /**
- * pages/Sales/Sales.tsx - Módulo de Vendas, Orçamentos & Frente de Caixa PDV (ControlB)
+ * pages/Sales/Sales.tsx - Módulo Comercial, Cotações & Vendas (ControlB ERP)
+ * 
+ * Funcionalidades Estruturais:
+ * 1. 📝 Cotações & Propostas Comerciais (Orçamentos, Descontos, Alçadas, Validade e Conversão em Pedido)
+ * 2. 📦 Pedidos de Venda (Gestão de status, itens, faturamento e entregas)
+ * 3. 👥 Clientes PJ / PF (Cadastro com CNPJ/CPF, Limite de Crédito, Contato Identity e CRM)
+ * 4. 🎯 Gestão Comercial (Metas por Vendedor, Comissões e Tabelas de Preços)
+ * 5. 🔄 Pós-Venda (Cancelamentos, Devoluções e Trocas com Reestocagem no Kardex)
+ * 6. 📊 Indicadores & BI Comercial (Faturamento, Ticket Médio, Conversão e Ranking de Vendedores)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  ShoppingBag, Store, FileText, RefreshCw, Search,
-  CheckCircle2, Trash2, X
+  ShoppingBag, FileText, RefreshCw, Search,
+  Trash2, Users, Plus, Target, DollarSign,
+  TrendingUp, Undo2, ChevronRight, Award, BarChart3,
+  Package, CheckCircle2, Layers, Edit, Filter, ArrowUpRight
 } from 'lucide-react';
-import { salesService, inventoryService } from '@/services/api';
-import { SalesOrder, SalesQuote, Product } from '@/types';
+import {
+  salesService, inventoryService, identityService, formatApiError
+} from '@/services/api';
+import {
+  SalesOrder, SalesQuote, Product,
+  Customer, Contact, SalesGoal, PriceTable, SalesReturn, SalesAnalytics
+} from '@/types';
+import { formatCurrency, formatQuantity } from '@/utils/formatters';
+import { Modal } from '@/components/Modal/Modal';
+import { ConfirmModal, ConfirmModalType } from '@/components/ConfirmModal/ConfirmModal';
 import './Sales.scss';
 
+type ActiveSalesTab =
+  | 'quotes'
+  | 'orders'
+  | 'customers'
+  | 'commercial'
+  | 'post_sales'
+  | 'analytics';
+
 export const Sales: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'pos' | 'orders' | 'quotes'>('pos');
+  const [activeTab, setActiveTab] = useState<ActiveSalesTab>('quotes');
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Dados
-  const [orders, setOrders] = useState<SalesOrder[]>([]);
+  // --- DADOS DO SERVIDOR ---
   const [quotes, setQuotes] = useState<SalesQuote[]>([]);
+  const [orders, setOrders] = useState<SalesOrder[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [salesGoals, setSalesGoals] = useState<SalesGoal[]>([]);
+  const [priceTables, setPriceTables] = useState<PriceTable[]>([]);
+  const [salesReturns, setSalesReturns] = useState<SalesReturn[]>([]);
+  const [analytics, setAnalytics] = useState<SalesAnalytics | null>(null);
 
-  // PDV State
-  const [productSearch, setProductSearch] = useState<string>('');
-  const [cart, setCart] = useState<Array<{
-    product: Product;
+  // --- FILTROS E BUSCAS GLOBAIS POR ABA ---
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [typeFilter, setTypeFilter] = useState<string>('ALL');
+  const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear());
+
+  // --- FEEDBACK E CONTROLE ---
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  // --- CONFIRM MODAL GENÉRICO ---
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    message: React.ReactNode;
+    type: ConfirmModalType;
+    confirmText: string;
+    onConfirm: () => Promise<void>;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'danger',
+    confirmText: 'Confirmar',
+    onConfirm: async () => {}
+  });
+
+  const openConfirm = (opts: {
+    title: string;
+    subtitle?: string;
+    message: React.ReactNode;
+    type?: ConfirmModalType;
+    confirmText?: string;
+    onConfirm: () => Promise<void>;
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title: opts.title,
+      subtitle: opts.subtitle,
+      message: opts.message,
+      type: opts.type || 'danger',
+      confirmText: opts.confirmText || 'Confirmar Exclusão',
+      onConfirm: opts.onConfirm
+    });
+  };
+
+  const closeConfirm = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+  };
+
+  // =========================================================================
+  // ESTADOS: 1. COTAÇÕES & PROPOSTAS COMERCIAIS
+  // =========================================================================
+  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState<boolean>(false);
+  const [quoteCustomerName, setQuoteCustomerName] = useState<string>('');
+  const [quoteCustomerDocument, setQuoteCustomerDocument] = useState<string>('');
+  const [quoteValidUntil, setQuoteValidUntil] = useState<string>('');
+  const [quotePaymentTerms, setQuotePaymentTerms] = useState<string>('30 DDL');
+  const [quoteNotes, setQuoteNotes] = useState<string>('');
+  const [quoteItems, setQuoteItems] = useState<Array<{
+    product_id: string;
     quantity: number;
     unit_price: number;
     discount_amount: number;
+    notes?: string;
   }>>([]);
-  const [customerName, setCustomerName] = useState<string>('Consumidor Final');
-  const [paymentMethod, setPaymentMethod] = useState<string>('DINHEIRO');
-  const [generalDiscount, setGeneralDiscount] = useState<string>('0.00');
 
-  // Modais
-  const [isSessionModalOpen, setIsSessionModalOpen] = useState<boolean>(false);
-  const [openingCash, setOpeningCash] = useState<string>('100.00');
+  // =========================================================================
+  // ESTADOS: 2. PEDIDOS DE VENDA
+  // =========================================================================
+  const [isOrderModalOpen, setIsOrderModalOpen] = useState<boolean>(false);
+  const [orderCustomerName, setOrderCustomerName] = useState<string>('');
+  const [orderCustomerDocument, setOrderCustomerDocument] = useState<string>('');
+  const [orderPaymentTerms, setOrderPaymentTerms] = useState<string>('À Vista');
+  const [orderDeliveryStatus, setOrderDeliveryStatus] = useState<string>('PENDING');
+  const [orderNotes, setOrderNotes] = useState<string>('');
+  const [orderItems, setOrderItems] = useState<Array<{
+    product_id: string;
+    quantity: number;
+    unit_price: number;
+    discount_amount: number;
+    notes?: string;
+  }>>([]);
 
-  const loadAllSalesData = async () => {
+  // =========================================================================
+  // ESTADOS: 3. CLIENTES (PF / PJ)
+  // =========================================================================
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
+  const [custPersonType, setCustPersonType] = useState<'PJ' | 'PF'>('PJ');
+  const [custName, setCustName] = useState<string>('');
+  const [custTradeName, setCustTradeName] = useState<string>('');
+  const [custDocument, setCustDocument] = useState<string>('');
+  const [custStateReg, setCustStateReg] = useState<string>('');
+  const [custEmail, setCustEmail] = useState<string>('');
+  const [custPhone, setCustPhone] = useState<string>('');
+  const [custCreditLimit, setCustCreditLimit] = useState<string>('50000.00');
+  const [custStreet, setCustStreet] = useState<string>('');
+  const [custNumber, setCustNumber] = useState<string>('');
+  const [custNeighborhood, setCustNeighborhood] = useState<string>('');
+  const [custCity, setCustCity] = useState<string>('');
+  const [custState, setCustState] = useState<string>('SP');
+  const [custZipCode, setCustZipCode] = useState<string>('');
+  const [custContactId, setCustContactId] = useState<string>('');
+  const [custNotes, setCustNotes] = useState<string>('');
+
+  // =========================================================================
+  // ESTADOS: 4. GESTÃO COMERCIAL (METAS & TABELAS DE PREÇOS)
+  // =========================================================================
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState<boolean>(false);
+  const [goalSellerName, setGoalSellerName] = useState<string>('');
+  const [goalMonth, setGoalMonth] = useState<number>(new Date().getMonth() + 1);
+  const [goalTargetAmount, setGoalTargetAmount] = useState<string>('50000.00');
+  const [goalCommission, setGoalCommission] = useState<string>('3.0');
+
+  const [isPriceTableModalOpen, setIsPriceTableModalOpen] = useState<boolean>(false);
+  const [priceTableName, setPriceTableName] = useState<string>('');
+  const [priceTableDesc, setPriceTableDesc] = useState<string>('');
+  const [priceTableIsDefault, setPriceTableIsDefault] = useState<boolean>(false);
+  const [priceTableItems, setPriceTableItems] = useState<Array<{
+    product_id: string;
+    price: number;
+    discount_percent: number;
+  }>>([]);
+
+  // =========================================================================
+  // ESTADOS: 5. PÓS-VENDA (DEVOLUÇÕES / TROCAS)
+  // =========================================================================
+  const [isReturnModalOpen, setIsReturnModalOpen] = useState<boolean>(false);
+  const [retCustomerName, setRetCustomerName] = useState<string>('');
+  const [retType, setRetType] = useState<'DEVOLUCAO' | 'TROCA' | 'CANCELAMENTO'>('DEVOLUCAO');
+  const [retReason, setRetReason] = useState<string>('Defeito de fábrica');
+  const [retRestock, setRetRestock] = useState<boolean>(true);
+  const [retProductId, setRetProductId] = useState<string>('');
+  const [retQuantity, setRetQuantity] = useState<string>('1');
+  const [retUnitPrice, setRetUnitPrice] = useState<string>('0.00');
+  const [retCondition, setRetCondition] = useState<'GOOD' | 'DAMAGED'>('GOOD');
+
+  // =========================================================================
+  // HELPERS DE FORMATAÇÃO SEGURA (Evitam TypeError com toFixed)
+  // =========================================================================
+  const safeNumber = (val: number | string | undefined | null): number => {
+    if (val === undefined || val === null) return 0;
+    const n = typeof val === 'string' ? parseFloat(val) : Number(val);
+    return isNaN(n) ? 0 : n;
+  };
+
+  const fmtCurrency = (val: number | string | undefined | null): string => {
+    return formatCurrency(safeNumber(val));
+  };
+
+  const fmtPercent = (val: number | string | undefined | null): string => {
+    return `${safeNumber(val).toFixed(1)}%`;
+  };
+
+  const triggerSuccess = (msg: string) => {
+    setActionSuccess(msg);
+    setTimeout(() => setActionSuccess(null), 4000);
+  };
+
+  // =========================================================================
+  // CARREGAMENTO DE DADOS DO SERVIDOR
+  // =========================================================================
+  const loadAllData = async (force = false) => {
     setLoading(true);
     try {
-      const [ordersRes, quotesRes, prodsRes] = await Promise.all([
-        salesService.getOrders().catch(() => []),
-        salesService.getQuotes().catch(() => []),
-        inventoryService.getProducts().catch(() => [])
+      const [
+        quotesRes, ordersRes, productsRes, customersRes,
+        contactsRes, goalsRes, priceTablesRes, returnsRes, analyticsRes
+      ] = await Promise.all([
+        salesService.getQuotes(force),
+        salesService.getOrders(force),
+        inventoryService.getProducts(undefined, force),
+        salesService.getCustomers('', force),
+        identityService.getContacts(force),
+        salesService.getSalesGoals(yearFilter, force),
+        salesService.getPriceTables(force),
+        salesService.getSalesReturns(force),
+        salesService.getSalesAnalytics(force)
       ]);
-      setOrders(ordersRes);
-      setQuotes(quotesRes);
-      setProducts(prodsRes);
-    } catch (err) {
+
+      setQuotes(quotesRes || []);
+      setOrders(ordersRes || []);
+      setProducts(productsRes || []);
+      setCustomers(customersRes || []);
+      setContacts(contactsRes || []);
+      setSalesGoals(goalsRes || []);
+      setPriceTables(priceTablesRes || []);
+      setSalesReturns(returnsRes || []);
+      setAnalytics(analyticsRes || null);
+    } catch (err: any) {
       console.error("Erro ao carregar dados de vendas:", err);
     } finally {
       setLoading(false);
@@ -55,451 +252,1996 @@ export const Sales: React.FC = () => {
   };
 
   useEffect(() => {
-    loadAllSalesData();
-  }, []);
+    loadAllData();
+  }, [yearFilter]);
 
-  const fmtCurrency = (val: number | undefined | null) => {
-    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
-  };
-
-  const fmtDate = (dStr: string | undefined | null) => {
-    if (!dStr) return '-';
-    try {
-      const parts = dStr.split('-');
-      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-      return new Date(dStr).toLocaleDateString('pt-BR');
-    } catch {
-      return dStr;
-    }
-  };
-
-  // --- PDV: Adicionar Produto ao Carrinho ---
-  const handleAddToCart = (prod: Product) => {
-    const existing = cart.find(item => item.product.id === prod.id);
-    const salePrice = (prod as any).selling_price || 25.00;
-
-    if (existing) {
-      setCart(cart.map(item =>
-        item.product.id === prod.id
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      ));
-    } else {
-      setCart([...cart, {
-        product: prod,
+  // =========================================================================
+  // HANDLERS: COTAÇÕES & PROPOSTAS COMERCIAIS
+  // =========================================================================
+  const handleOpenQuoteModal = () => {
+    setModalError(null);
+    setQuoteCustomerName('');
+    setQuoteCustomerDocument('');
+    setQuoteValidUntil('');
+    setQuotePaymentTerms('30 DDL');
+    setQuoteNotes('');
+    if (products.length > 0) {
+      setQuoteItems([{
+        product_id: products[0].id,
         quantity: 1,
-        unit_price: salePrice,
+        unit_price: safeNumber(products[0].reference_price) || 10.00,
         discount_amount: 0
       }]);
-    }
-  };
-
-  const handleUpdateQty = (prodId: string, newQty: number) => {
-    if (newQty <= 0) {
-      setCart(cart.filter(item => item.product.id !== prodId));
     } else {
-      setCart(cart.map(item =>
-        item.product.id === prodId ? { ...item, quantity: newQty } : item
-      ));
+      setQuoteItems([]);
+    }
+    setIsQuoteModalOpen(true);
+  };
+
+  const handleAddQuoteItem = () => {
+    if (products.length > 0) {
+      setQuoteItems([
+        ...quoteItems,
+        {
+          product_id: products[0].id,
+          quantity: 1,
+          unit_price: safeNumber(products[0].reference_price) || 10.00,
+          discount_amount: 0
+        }
+      ]);
     }
   };
 
-  const handleRemoveFromCart = (prodId: string) => {
-    setCart(cart.filter(item => item.product.id !== prodId));
+  const handleRemoveQuoteItem = (index: number) => {
+    setQuoteItems(quoteItems.filter((_, idx) => idx !== index));
   };
 
-  // Cálculos do Carrinho
-  const cartSubtotal = cart.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
-  const discountVal = parseFloat(generalDiscount) || 0;
-  const cartFinalTotal = Math.max(0, cartSubtotal - discountVal);
-
-  const handleFinalizePOSSale = async () => {
-    if (cart.length === 0) {
-      alert("Adicione produtos ao carrinho antes de finalizar.");
+  const handleSaveQuote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quoteCustomerName.trim()) {
+      setModalError("Informe o nome do cliente.");
+      return;
+    }
+    if (quoteItems.length === 0) {
+      setModalError("Adicione pelo menos um item à proposta comercial.");
       return;
     }
 
+    setIsSaving(true);
+    setModalError(null);
     try {
-      await salesService.processPOSSale({
-        customer_name: customerName,
-        payment_method: paymentMethod,
-        discount_amount: discountVal,
-        items: cart.map(item => ({
-          product_id: item.product.id,
-          quantity: item.quantity,
-          unit_price: item.unit_price
+      await salesService.createQuote({
+        customer_name: quoteCustomerName.trim(),
+        customer_document: quoteCustomerDocument.trim() || undefined,
+        valid_until: quoteValidUntil || undefined,
+        notes: quoteNotes.trim() ? `${quoteNotes.trim()} | Condição: ${quotePaymentTerms}` : `Condição: ${quotePaymentTerms}`,
+        items: quoteItems.map(it => ({
+          product_id: it.product_id,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          discount_amount: it.discount_amount,
+          notes: it.notes
         }))
       });
-
-      alert("🎉 Venda de balcão finalizada e estoque baixado com sucesso!");
-      setCart([]);
-      setGeneralDiscount('0.00');
-      setCustomerName('Consumidor Final');
-      loadAllSalesData();
+      setIsQuoteModalOpen(false);
+      triggerSuccess("Cotação comercial emitida com sucesso!");
+      loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao registrar venda.");
+      setModalError(formatApiError(err, "Erro ao salvar proposta comercial."));
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleOpenPOSSession = async (e: React.FormEvent) => {
+  const handleConvertToOrder = (quote: SalesQuote) => {
+    openConfirm({
+      title: 'Converter Cotação em Pedido de Venda',
+      subtitle: `Cotação #${quote.quote_number}`,
+      message: (
+        <div>
+          <p>Deseja converter a cotação comercial de <strong>{quote.customer_name}</strong> em um Pedido de Venda definitivo?</p>
+          <p style={{ marginTop: '0.5rem', color: '#10b981', fontWeight: 600 }}>
+            Valor Total: {fmtCurrency(quote.net_amount)}
+          </p>
+        </div>
+      ),
+      type: 'success',
+      confirmText: 'Converter em Pedido',
+      onConfirm: async () => {
+        try {
+          await salesService.convertQuoteToOrder(quote.id);
+          triggerSuccess("Cotação convertida em Pedido de Venda com sucesso!");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao converter cotação."));
+        }
+      }
+    });
+  };
+
+  const handleDeleteQuote = (quote: SalesQuote) => {
+    openConfirm({
+      title: 'Excluir Cotação Comercial',
+      subtitle: `Cotação #${quote.quote_number}`,
+      message: `Deseja realmente remover a cotação #${quote.quote_number} de ${quote.customer_name}?`,
+      type: 'danger',
+      confirmText: 'Excluir Cotação',
+      onConfirm: async () => {
+        try {
+          await salesService.deleteQuote(quote.id);
+          triggerSuccess("Cotação excluída com sucesso.");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao excluir cotação."));
+        }
+      }
+    });
+  };
+
+  // =========================================================================
+  // HANDLERS: PEDIDOS DE VENDA
+  // =========================================================================
+  const handleOpenOrderModal = () => {
+    setModalError(null);
+    setOrderCustomerName('');
+    setOrderCustomerDocument('');
+    setOrderPaymentTerms('À Vista');
+    setOrderDeliveryStatus('PENDING');
+    setOrderNotes('');
+    if (products.length > 0) {
+      setOrderItems([{
+        product_id: products[0].id,
+        quantity: 1,
+        unit_price: safeNumber(products[0].reference_price) || 10.00,
+        discount_amount: 0
+      }]);
+    } else {
+      setOrderItems([]);
+    }
+    setIsOrderModalOpen(true);
+  };
+
+  const handleAddOrderItem = () => {
+    if (products.length > 0) {
+      setOrderItems([
+        ...orderItems,
+        {
+          product_id: products[0].id,
+          quantity: 1,
+          unit_price: safeNumber(products[0].reference_price) || 10.00,
+          discount_amount: 0
+        }
+      ]);
+    }
+  };
+
+  const handleRemoveOrderItem = (index: number) => {
+    setOrderItems(orderItems.filter((_, idx) => idx !== index));
+  };
+
+  const handleSaveOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!orderCustomerName.trim()) {
+      setModalError("Informe o nome do cliente.");
+      return;
+    }
+    if (orderItems.length === 0) {
+      setModalError("Adicione pelo menos um produto ao pedido.");
+      return;
+    }
+
+    setIsSaving(true);
+    setModalError(null);
     try {
-      await salesService.openPOSSession({
-        pos_terminal: 'CAIXA-01',
-        opening_cash: parseFloat(openingCash || '0')
+      await salesService.createOrder({
+        customer_name: orderCustomerName.trim(),
+        customer_document: orderCustomerDocument.trim() || undefined,
+        payment_terms: orderPaymentTerms,
+        delivery_status: orderDeliveryStatus,
+        notes: orderNotes.trim() || undefined,
+        items: orderItems.map(it => ({
+          product_id: it.product_id,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          discount_amount: it.discount_amount,
+          notes: it.notes
+        }))
       });
-      alert("✅ Turno de caixa aberto com sucesso!");
-      setIsSessionModalOpen(false);
-      loadAllSalesData();
+      setIsOrderModalOpen(false);
+      triggerSuccess("Pedido de venda cadastrado com sucesso!");
+      loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao abrir caixa.");
+      setModalError(formatApiError(err, "Erro ao salvar pedido de venda."));
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const filteredProducts = products.filter(p =>
-    p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
-    (p.sku && p.sku.toLowerCase().includes(productSearch.toLowerCase()))
-  );
+  const handleDeleteOrder = (order: SalesOrder) => {
+    openConfirm({
+      title: 'Cancelar / Excluir Pedido de Venda',
+      subtitle: `Pedido #${order.order_number}`,
+      message: `Deseja realmente remover o pedido #${order.order_number} de ${order.customer_name}?`,
+      type: 'danger',
+      confirmText: 'Excluir Pedido',
+      onConfirm: async () => {
+        try {
+          await salesService.deleteOrder(order.id);
+          triggerSuccess("Pedido excluído com sucesso.");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao excluir pedido."));
+        }
+      }
+    });
+  };
+
+  // =========================================================================
+  // HANDLERS: CLIENTES (PF / PJ)
+  // =========================================================================
+  const handleOpenCustomerModal = (customer?: Customer) => {
+    setModalError(null);
+    if (customer) {
+      setEditingCustomerId(customer.id);
+      setCustPersonType(customer.person_type as 'PJ' | 'PF');
+      setCustName(customer.name);
+      setCustTradeName(customer.trade_name || '');
+      setCustDocument(customer.document);
+      setCustStateReg(customer.state_registration || '');
+      setCustEmail(customer.email || '');
+      setCustPhone(customer.phone || '');
+      setCustCreditLimit(String(customer.credit_limit || '50000.00'));
+      setCustStreet(customer.address_street || '');
+      setCustNumber(customer.address_number || '');
+      setCustNeighborhood(customer.address_neighborhood || '');
+      setCustCity(customer.address_city || '');
+      setCustState(customer.address_state || 'SP');
+      setCustZipCode(customer.address_zip_code || '');
+      setCustContactId(customer.contact_id || '');
+      setCustNotes(customer.notes || '');
+    } else {
+      setEditingCustomerId(null);
+      setCustPersonType('PJ');
+      setCustName('');
+      setCustTradeName('');
+      setCustDocument('');
+      setCustStateReg('');
+      setCustEmail('');
+      setCustPhone('');
+      setCustCreditLimit('50000.00');
+      setCustStreet('');
+      setCustNumber('');
+      setCustNeighborhood('');
+      setCustCity('');
+      setCustState('SP');
+      setCustZipCode('');
+      setCustContactId('');
+      setCustNotes('');
+    }
+    setIsCustomerModalOpen(true);
+  };
+
+  const handleSaveCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!custName.trim() || !custDocument.trim()) {
+      setModalError("Nome/Razão Social e CPF/CNPJ são campos obrigatórios.");
+      return;
+    }
+
+    setIsSaving(true);
+    setModalError(null);
+    try {
+      const payload: any = {
+        person_type: custPersonType,
+        document: custDocument.trim(),
+        name: custName.trim(),
+        trade_name: custTradeName.trim() || undefined,
+        state_registration: custStateReg.trim() || undefined,
+        email: custEmail.trim() || undefined,
+        phone: custPhone.trim() || undefined,
+        credit_limit: safeNumber(custCreditLimit),
+        address_street: custStreet.trim() || undefined,
+        address_number: custNumber.trim() || undefined,
+        address_neighborhood: custNeighborhood.trim() || undefined,
+        address_city: custCity.trim() || undefined,
+        address_state: custState.trim() || undefined,
+        address_zip_code: custZipCode.trim() || undefined,
+        contact_id: custContactId || undefined,
+        notes: custNotes.trim() || undefined
+      };
+
+      if (editingCustomerId) {
+        await salesService.updateCustomer(editingCustomerId, payload);
+        triggerSuccess("Cadastro de cliente atualizado com sucesso!");
+      } else {
+        await salesService.createCustomer(payload);
+        triggerSuccess("Novo cliente cadastrado com sucesso!");
+      }
+      setIsCustomerModalOpen(false);
+      loadAllData();
+    } catch (err: any) {
+      setModalError(formatApiError(err, "Erro ao salvar cliente."));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteCustomer = (customer: Customer) => {
+    openConfirm({
+      title: 'Excluir Cliente',
+      subtitle: customer.name,
+      message: `Deseja realmente remover o cliente ${customer.name} (${customer.document})?`,
+      type: 'danger',
+      confirmText: 'Excluir Cliente',
+      onConfirm: async () => {
+        try {
+          await salesService.deleteCustomer(customer.id);
+          triggerSuccess("Cliente excluído com sucesso.");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao excluir cliente."));
+        }
+      }
+    });
+  };
+
+  // =========================================================================
+  // HANDLERS: GESTÃO COMERCIAL (METAS & TABELAS)
+  // =========================================================================
+  const handleSaveGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!goalSellerName.trim()) {
+      setModalError("O nome do vendedor é obrigatório.");
+      return;
+    }
+
+    setIsSaving(true);
+    setModalError(null);
+    try {
+      await salesService.createSalesGoal({
+        seller_name: goalSellerName.trim(),
+        month: Number(goalMonth),
+        year: Number(yearFilter),
+        target_amount: safeNumber(goalTargetAmount),
+        commission_percent: safeNumber(goalCommission)
+      });
+      setIsGoalModalOpen(false);
+      triggerSuccess("Meta comercial cadastrada com sucesso!");
+      loadAllData();
+    } catch (err: any) {
+      setModalError(formatApiError(err, "Erro ao cadastrar meta comercial."));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteGoal = (goal: SalesGoal) => {
+    openConfirm({
+      title: 'Excluir Meta Comercial',
+      subtitle: `${goal.seller_name} - Mês ${goal.month}/${goal.year}`,
+      message: `Deseja realmente remover a meta de ${fmtCurrency(goal.target_amount)} para ${goal.seller_name}?`,
+      type: 'danger',
+      confirmText: 'Excluir Meta',
+      onConfirm: async () => {
+        try {
+          await salesService.deleteSalesGoal(goal.id);
+          triggerSuccess("Meta comercial excluída com sucesso.");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao excluir meta."));
+        }
+      }
+    });
+  };
+
+  const handleSavePriceTable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!priceTableName.trim()) {
+      setModalError("O nome da tabela de preços é obrigatório.");
+      return;
+    }
+
+    setIsSaving(true);
+    setModalError(null);
+    try {
+      await salesService.createPriceTable({
+        name: priceTableName.trim(),
+        description: priceTableDesc.trim() || undefined,
+        is_default: priceTableIsDefault,
+        is_active: true,
+        items: priceTableItems.map(it => ({
+          product_id: it.product_id,
+          price: it.price,
+          discount_percent: it.discount_percent
+        }))
+      });
+      setIsPriceTableModalOpen(false);
+      triggerSuccess("Tabela de preços cadastrada com sucesso!");
+      loadAllData();
+    } catch (err: any) {
+      setModalError(formatApiError(err, "Erro ao cadastrar tabela de preços."));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeletePriceTable = (table: PriceTable) => {
+    openConfirm({
+      title: 'Excluir Tabela de Preços',
+      subtitle: table.name,
+      message: `Deseja realmente remover a tabela de preços ${table.name}?`,
+      type: 'danger',
+      confirmText: 'Excluir Tabela',
+      onConfirm: async () => {
+        try {
+          await salesService.deletePriceTable(table.id);
+          triggerSuccess("Tabela de preços excluída com sucesso.");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao excluir tabela."));
+        }
+      }
+    });
+  };
+
+  // =========================================================================
+  // HANDLERS: PÓS-VENDA
+  // =========================================================================
+  const handleOpenReturnModal = () => {
+    setModalError(null);
+    setRetCustomerName('');
+    setRetType('DEVOLUCAO');
+    setRetReason('Defeito de fabricação');
+    setRetRestock(true);
+    setRetQuantity('1');
+    setRetCondition('GOOD');
+    if (products.length > 0) {
+      setRetProductId(products[0].id);
+      setRetUnitPrice(String(products[0].reference_price || '10.00'));
+    }
+    setIsReturnModalOpen(true);
+  };
+
+  const handleSaveReturn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!retCustomerName.trim() || !retProductId) {
+      setModalError("Cliente e Produto são obrigatórios.");
+      return;
+    }
+
+    setIsSaving(true);
+    setModalError(null);
+    try {
+      const q = Math.max(1, parseInt(retQuantity) || 1);
+      const p = safeNumber(retUnitPrice);
+      await salesService.createSalesReturn({
+        customer_name: retCustomerName.trim(),
+        return_type: retType,
+        reason: retReason.trim(),
+        restock_items: retRestock,
+        items: [{
+          product_id: retProductId,
+          quantity: q,
+          unit_price: p,
+          total_price: q * p,
+          condition: retCondition
+        }]
+      });
+      setIsReturnModalOpen(false);
+      triggerSuccess("Registro de pós-venda processado com sucesso!");
+      loadAllData();
+    } catch (err: any) {
+      setModalError(formatApiError(err, "Erro ao registrar devolução/troca."));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteReturn = (ret: SalesReturn) => {
+    openConfirm({
+      title: 'Excluir Registro de Pós-Venda',
+      subtitle: `${ret.return_type} - ${ret.customer_name}`,
+      message: `Deseja realmente remover o registro de ${ret.return_type} de ${ret.customer_name}?`,
+      type: 'danger',
+      confirmText: 'Excluir Registro',
+      onConfirm: async () => {
+        try {
+          await salesService.deleteSalesReturn(ret.id);
+          triggerSuccess("Registro excluído com sucesso.");
+          closeConfirm();
+          loadAllData();
+        } catch (err: any) {
+          alert(formatApiError(err, "Erro ao excluir registro."));
+        }
+      }
+    });
+  };
+
+  // =========================================================================
+  // FILTROS DINÂMICOS
+  // =========================================================================
+  const filteredQuotes = useMemo(() => {
+    return quotes.filter(q => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term || (
+        q.quote_number.toLowerCase().includes(term) ||
+        q.customer_name.toLowerCase().includes(term) ||
+        Boolean(q.customer_document && q.customer_document.toLowerCase().includes(term))
+      );
+      const matchesStatus = statusFilter === 'ALL' || q.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [quotes, searchTerm, statusFilter]);
+
+  const filteredOrders = useMemo(() => {
+    return orders.filter(o => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term || (
+        o.order_number.toLowerCase().includes(term) ||
+        o.customer_name.toLowerCase().includes(term) ||
+        Boolean(o.customer_document && o.customer_document.toLowerCase().includes(term))
+      );
+      const matchesStatus = statusFilter === 'ALL' || o.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [orders, searchTerm, statusFilter]);
+
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term || (
+        c.name.toLowerCase().includes(term) ||
+        c.document.toLowerCase().includes(term) ||
+        Boolean(c.trade_name && c.trade_name.toLowerCase().includes(term)) ||
+        Boolean(c.email && c.email.toLowerCase().includes(term)) ||
+        Boolean(c.address_city && c.address_city.toLowerCase().includes(term))
+      );
+      const matchesType = typeFilter === 'ALL' || c.person_type === typeFilter;
+      return matchesSearch && matchesType;
+    });
+  }, [customers, searchTerm, typeFilter]);
+
+  const filteredReturns = useMemo(() => {
+    return salesReturns.filter(r => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term || (
+        r.customer_name.toLowerCase().includes(term) ||
+        r.reason.toLowerCase().includes(term) ||
+        r.return_type.toLowerCase().includes(term)
+      );
+      const matchesType = typeFilter === 'ALL' || r.return_type === typeFilter;
+      return matchesSearch && matchesType;
+    });
+  }, [salesReturns, searchTerm, typeFilter]);
 
   return (
     <div className="sales-page">
       <div className="sales-layout">
-        {/* 1. SIDEBAR LATERAL ESQUERDA */}
+        {/* ================================================================= */}
+        {/* 1. SIDEBAR LATERAL ESQUERDA (PADRÃO CORPORATIVO CONTROLB)         */}
+        {/* ================================================================= */}
         <aside className="sidebar-left">
           <div className="sidebar-header">
             <ShoppingBag className="brand-icon" size={20} />
             <div className="sidebar-title-wrap">
-              <span className="sidebar-title"><strong>Vendas & PDV</strong></span>
-              <span className="sidebar-subtitle">Operação Comercial</span>
+              <span className="sidebar-title"><strong>Vendas & Cotações</strong></span>
+              <span className="sidebar-subtitle">Gestão Comercial B2B/B2C</span>
             </div>
           </div>
 
           <nav className="nav-menu">
-            <span className="menu-group-label">Canais de Venda</span>
+            <span className="menu-group-label">Pipeline & Negociação</span>
 
             <button
-              className={`nav-item ${activeTab === 'pos' ? 'active' : ''}`}
-              onClick={() => setActiveTab('pos')}
+              className={`nav-item ${activeTab === 'quotes' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('quotes'); setSearchTerm(''); setStatusFilter('ALL'); }}
             >
               <div className="nav-item-content">
-                <Store size={16} />
-                <span>Frente de Caixa (PDV)</span>
+                <FileText size={16} />
+                <span>Cotações & Propostas</span>
               </div>
+              <span className="nav-badge">{quotes.length}</span>
             </button>
 
             <button
               className={`nav-item ${activeTab === 'orders' ? 'active' : ''}`}
-              onClick={() => setActiveTab('orders')}
+              onClick={() => { setActiveTab('orders'); setSearchTerm(''); setStatusFilter('ALL'); }}
             >
               <div className="nav-item-content">
-                <ShoppingBag size={16} />
+                <Package size={16} />
                 <span>Pedidos de Venda</span>
               </div>
               <span className="nav-badge">{orders.length}</span>
             </button>
 
+            <span className="menu-group-label">Relacionamento & Clientes</span>
+
             <button
-              className={`nav-item ${activeTab === 'quotes' ? 'active' : ''}`}
-              onClick={() => setActiveTab('quotes')}
+              className={`nav-item ${activeTab === 'customers' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('customers'); setSearchTerm(''); setTypeFilter('ALL'); }}
             >
               <div className="nav-item-content">
-                <FileText size={16} />
-                <span>Orçamentos Comerciais</span>
+                <Users size={16} />
+                <span>Base de Clientes (PJ / PF)</span>
               </div>
-              <span className="nav-badge">{quotes.length}</span>
+              <span className="nav-badge">{customers.length}</span>
+            </button>
+
+            <span className="menu-group-label">Estratégia & Qualidade</span>
+
+            <button
+              className={`nav-item ${activeTab === 'commercial' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('commercial'); setSearchTerm(''); }}
+            >
+              <div className="nav-item-content">
+                <Target size={16} />
+                <span>Gestão Comercial & Metas</span>
+              </div>
+              <span className="nav-badge">{salesGoals.length}</span>
+            </button>
+
+            <button
+              className={`nav-item ${activeTab === 'post_sales' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('post_sales'); setSearchTerm(''); setTypeFilter('ALL'); }}
+            >
+              <div className="nav-item-content">
+                <Undo2 size={16} />
+                <span>Pós-Venda & Devoluções</span>
+              </div>
+              <span className="nav-badge">{salesReturns.length}</span>
+            </button>
+
+            <button
+              className={`nav-item ${activeTab === 'analytics' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('analytics'); setSearchTerm(''); }}
+            >
+              <div className="nav-item-content">
+                <BarChart3 size={16} />
+                <span>Indicadores & BI</span>
+              </div>
             </button>
           </nav>
         </aside>
 
-        {/* 2. CONTEÚDO PRINCIPAL */}
-        <main className="main-content">
+        {/* ================================================================= */}
+        {/* 2. ÁREA PRINCIPAL DE TRABALHO                                     */}
+        {/* ================================================================= */}
+        <main className="content-right">
+          {actionSuccess && (
+            <div className="alert-banner success">
+              <CheckCircle2 size={16} />
+              <span>{actionSuccess}</span>
+            </div>
+          )}
+
+          {/* CABEÇALHO DA SEÇÃO */}
           <div className="content-header">
             <div className="header-titles">
+              <div className="breadcrumbs">
+                <span>Comercial</span>
+                <ChevronRight size={12} />
+                <span className="current">
+                  {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
+                  {activeTab === 'orders' && 'Pedidos de Venda'}
+                  {activeTab === 'customers' && 'Base Centralizada de Clientes'}
+                  {activeTab === 'commercial' && 'Gestão Comercial, Metas & Preços'}
+                  {activeTab === 'post_sales' && 'Pós-Venda & Reestocagem no Kardex'}
+                  {activeTab === 'analytics' && 'Inteligência Comercial & BI'}
+                </span>
+              </div>
               <h1>
-                {activeTab === 'pos' && 'Frente de Caixa (PDV Balcão Ágil)'}
-                {activeTab === 'orders' && 'Pedidos de Venda Formalizados'}
-                {activeTab === 'quotes' && 'Orçamentos & Propostas Comerciais'}
+                {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
+                {activeTab === 'orders' && 'Pedidos de Venda'}
+                {activeTab === 'customers' && 'Clientes (Pessoa Jurídica / Física)'}
+                {activeTab === 'commercial' && 'Gestão de Metas & Tabelas de Preços'}
+                {activeTab === 'post_sales' && 'Pós-Venda & Trocas / Devoluções'}
+                {activeTab === 'analytics' && 'Painel Analítico de Vendas & BI'}
               </h1>
-              <p className="subtitle">Gestão de vendas no balcão e pedidos corporativos</p>
             </div>
 
             <div className="header-actions">
-              <button className="btn-refresh" onClick={loadAllSalesData} title="Atualizar Dados">
+              <button className="btn-refresh" onClick={() => loadAllData(true)} title="Atualizar Dados">
                 <RefreshCw size={15} className={loading ? 'spinning' : ''} />
               </button>
 
-              <button className="btn-secondary" onClick={() => setIsSessionModalOpen(true)}>
-                <Store size={16} />
-                <span>Abrir Turno de Caixa</span>
-              </button>
+              {activeTab === 'quotes' && (
+                <button className="btn-primary" onClick={handleOpenQuoteModal}>
+                  <Plus size={16} /> Nova Cotação
+                </button>
+              )}
+
+              {activeTab === 'orders' && (
+                <button className="btn-primary" onClick={handleOpenOrderModal}>
+                  <Plus size={16} /> Novo Pedido
+                </button>
+              )}
+
+              {activeTab === 'customers' && (
+                <button className="btn-primary" onClick={() => handleOpenCustomerModal()}>
+                  <Plus size={16} /> Novo Cliente
+                </button>
+              )}
+
+              {activeTab === 'commercial' && (
+                <>
+                  <button className="btn-secondary" onClick={() => setIsPriceTableModalOpen(true)}>
+                    <Layers size={16} /> Nova Tabela de Preços
+                  </button>
+                  <button className="btn-primary" onClick={() => setIsGoalModalOpen(true)}>
+                    <Plus size={16} /> Nova Meta
+                  </button>
+                </>
+              )}
+
+              {activeTab === 'post_sales' && (
+                <button className="btn-primary" onClick={handleOpenReturnModal}>
+                  <Plus size={16} /> Registrar Devolução
+                </button>
+              )}
             </div>
           </div>
 
-          {/* ABA PDV */}
-          {activeTab === 'pos' && (
-            <div className="pos-workspace">
-              {/* Catálogo de Produtos */}
-              <div className="pos-catalog-panel">
-                <div className="catalog-search-bar">
+          {/* =============================================================== */}
+          {/* ABA 1: COTAÇÕES & PROPOSTAS COMERCIAIS                          */}
+          {/* =============================================================== */}
+          {activeTab === 'quotes' && (
+            <div className="tab-pane">
+              <div className="toolbar">
+                <div className="search-box">
                   <Search size={16} />
                   <input
                     type="text"
-                    placeholder="Buscar produto por nome ou código SKU..."
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
+                    placeholder="Buscar por número da cotação ou cliente..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-
-                <div className="products-grid">
-                  {filteredProducts.length === 0 ? (
-                    <div className="empty-catalog">Nenhum produto encontrado.</div>
-                  ) : (
-                    filteredProducts.map((prod) => (
-                      <div
-                        key={prod.id}
-                        className="product-card-pos"
-                        onClick={() => handleAddToCart(prod)}
-                      >
-                        <span className="p-sku">{prod.sku || 'SKU-AUTO'}</span>
-                        <span className="p-name">{prod.name}</span>
-                        <div className="p-bottom">
-                          <span className="p-price">{fmtCurrency((prod as any).selling_price || 25.00)}</span>
-                          <span className="p-stock">{prod.current_stock || 0} {prod.unit_of_measure}</span>
-                        </div>
-                      </div>
-                    ))
-                  )}
+                <div className="filter-group">
+                  <Filter size={14} />
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    <option value="ALL">Todos os Status</option>
+                    <option value="DRAFT">Rascunho</option>
+                    <option value="APPROVED">Aprovado</option>
+                    <option value="CONVERTED">Convertido em Pedido</option>
+                    <option value="REJECTED">Rejeitado</option>
+                  </select>
                 </div>
               </div>
 
-              {/* Carrinho de Compras */}
-              <div className="pos-cart-panel">
-                <div className="cart-header">
-                  <h3>Cupom de Venda</h3>
-                  {cart.length > 0 && (
-                    <button className="btn-clear-cart" onClick={() => setCart([])}>
-                      Limpar
-                    </button>
-                  )}
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Cotação</th>
+                      <th>Cliente</th>
+                      <th>Emissão</th>
+                      <th>Validade</th>
+                      <th>Total Líquido</th>
+                      <th>Status</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredQuotes.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="empty-state">
+                          Nenhuma cotação comercial encontrada.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredQuotes.map(q => (
+                        <tr key={q.id}>
+                          <td><strong>#{q.quote_number}</strong></td>
+                          <td>
+                            <div className="cell-client">
+                              <span className="client-name">{q.customer_name}</span>
+                              {q.customer_document && <span className="client-doc">{q.customer_document}</span>}
+                            </div>
+                          </td>
+                          <td>{new Date(q.created_at).toLocaleDateString('pt-BR')}</td>
+                          <td>{q.valid_until ? new Date(q.valid_until).toLocaleDateString('pt-BR') : '15 dias'}</td>
+                          <td><strong>{fmtCurrency(q.net_amount)}</strong></td>
+                          <td>
+                            <span className={`status-pill ${
+                              q.status === 'APPROVED' ? 'success' :
+                              q.status === 'CONVERTED' ? 'info' :
+                              q.status === 'REJECTED' ? 'danger' : 'warning'
+                            }`}>
+                              {q.status === 'CONVERTED' ? 'Convertido' :
+                               q.status === 'APPROVED' ? 'Aprovado' :
+                               q.status === 'DRAFT' ? 'Rascunho' : q.status}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="table-actions">
+                              {q.status !== 'CONVERTED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn primary"
+                                  onClick={() => handleConvertToOrder(q)}
+                                  title="Converter em Pedido de Venda"
+                                >
+                                  <ArrowUpRight size={14} /> Converter
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="table-action-btn danger"
+                                onClick={() => handleDeleteQuote(q)}
+                                title="Excluir Cotação"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* =============================================================== */}
+          {/* ABA 2: PEDIDOS DE VENDA                                         */}
+          {/* =============================================================== */}
+          {activeTab === 'orders' && (
+            <div className="tab-pane">
+              <div className="toolbar">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por número do pedido ou cliente..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
                 </div>
-
-                <div className="cart-items-list">
-                  {cart.length === 0 ? (
-                    <div className="empty-cart-msg">Nenhum item adicionado ao carrinho.</div>
-                  ) : (
-                    cart.map((item) => (
-                      <div key={item.product.id} className="cart-item">
-                        <div className="item-info">
-                          <div className="item-title">{item.product.name}</div>
-                          <div className="item-price">{fmtCurrency(item.unit_price)} un</div>
-                        </div>
-
-                        <div className="item-qty-controls">
-                          <button onClick={() => handleUpdateQty(item.product.id, item.quantity - 1)}>-</button>
-                          <span>{item.quantity}</span>
-                          <button onClick={() => handleUpdateQty(item.product.id, item.quantity + 1)}>+</button>
-                        </div>
-
-                        <div className="item-subtotal">
-                          {fmtCurrency(item.quantity * item.unit_price)}
-                        </div>
-
-                        <button className="btn-remove-item" onClick={() => handleRemoveFromCart(item.product.id)}>
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    ))
-                  )}
+                <div className="filter-group">
+                  <Filter size={14} />
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    <option value="ALL">Todos os Status</option>
+                    <option value="DRAFT">Rascunho</option>
+                    <option value="CONFIRMED">Confirmado</option>
+                    <option value="COMPLETED">Faturado / Concluído</option>
+                    <option value="CANCELLED">Cancelado</option>
+                  </select>
                 </div>
+              </div>
 
-                <div className="pos-checkout-section">
-                  <div className="field-row">
-                    <label>Cliente / Consumidor</label>
-                    <input
-                      type="text"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                    />
-                  </div>
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Pedido</th>
+                      <th>Cliente</th>
+                      <th>Emissão</th>
+                      <th>Entrega</th>
+                      <th>Faturamento</th>
+                      <th>Total</th>
+                      <th>Status</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredOrders.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="empty-state">
+                          Nenhum pedido de venda encontrado.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredOrders.map(o => (
+                        <tr key={o.id}>
+                          <td><strong>#{o.order_number}</strong></td>
+                          <td>
+                            <div className="cell-client">
+                              <span className="client-name">{o.customer_name}</span>
+                              {o.customer_document && <span className="client-doc">{o.customer_document}</span>}
+                            </div>
+                          </td>
+                          <td>{new Date(o.created_at).toLocaleDateString('pt-BR')}</td>
+                          <td>
+                            <span className={`status-pill ${
+                              o.delivery_status === 'DELIVERED' ? 'success' :
+                              o.delivery_status === 'DISPATCHED' ? 'info' : 'warning'
+                            }`}>
+                              {o.delivery_status === 'DELIVERED' ? 'Entregue' :
+                               o.delivery_status === 'DISPATCHED' ? 'Em Trânsito' : 'Pendente'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-pill ${o.billing_status === 'INVOICED' ? 'success' : 'warning'}`}>
+                              {o.billing_status === 'INVOICED' ? 'Faturado' : 'Aguardando'}
+                            </span>
+                          </td>
+                          <td><strong>{fmtCurrency(o.net_amount)}</strong></td>
+                          <td>
+                            <span className={`status-pill ${
+                              o.status === 'COMPLETED' ? 'success' :
+                              o.status === 'CONFIRMED' ? 'info' :
+                              o.status === 'CANCELLED' ? 'danger' : 'warning'
+                            }`}>
+                              {o.status}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="table-actions">
+                              <button
+                                type="button"
+                                className="table-action-btn danger"
+                                onClick={() => handleDeleteOrder(o)}
+                                title="Cancelar / Excluir Pedido"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
-                  <div className="field-row">
-                    <label>Forma de Pagamento</label>
+          {/* =============================================================== */}
+          {/* ABA 3: CLIENTES (PJ / PF)                                       */}
+          {/* =============================================================== */}
+          {activeTab === 'customers' && (
+            <div className="tab-pane">
+              <div className="toolbar">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por Razão Social, CNPJ/CPF, E-mail ou Cidade..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <div className="filter-group">
+                  <Filter size={14} />
+                  <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                    <option value="ALL">Todos os Tipos</option>
+                    <option value="PJ">Pessoa Jurídica (PJ)</option>
+                    <option value="PF">Pessoa Física (PF)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Tipo</th>
+                      <th>Cliente / Razão Social</th>
+                      <th>CNPJ / CPF</th>
+                      <th>Contato Principal</th>
+                      <th>Cidade / UF</th>
+                      <th>Limite Crédito</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCustomers.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="empty-state">
+                          Nenhum cliente cadastrado no módulo de vendas.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredCustomers.map(c => (
+                        <tr key={c.id}>
+                          <td>
+                            <span className={`person-badge ${c.person_type.toLowerCase()}`}>
+                              {c.person_type}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="cell-client">
+                              <span className="client-name">{c.name}</span>
+                              {c.trade_name && <span className="client-doc">Nome Fantasia: {c.trade_name}</span>}
+                            </div>
+                          </td>
+                          <td><strong>{c.document}</strong></td>
+                          <td>
+                            <div className="cell-contact">
+                              <span>{c.email || '-'}</span>
+                              <span className="sub">{c.phone || '-'}</span>
+                            </div>
+                          </td>
+                          <td>{c.address_city ? `${c.address_city}/${c.address_state}` : '-'}</td>
+                          <td><strong>{fmtCurrency(c.credit_limit)}</strong></td>
+                          <td>
+                            <div className="table-actions">
+                              <button
+                                type="button"
+                                className="table-action-btn"
+                                onClick={() => handleOpenCustomerModal(c)}
+                                title="Editar Cliente"
+                              >
+                                <Edit size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="table-action-btn danger"
+                                onClick={() => handleDeleteCustomer(c)}
+                                title="Excluir Cliente"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* =============================================================== */}
+          {/* ABA 4: GESTÃO COMERCIAL (METAS & TABELAS DE PREÇOS)              */}
+          {/* =============================================================== */}
+          {activeTab === 'commercial' && (
+            <div className="tab-pane commercial-pane">
+              <div className="commercial-subgrid">
+                {/* Seção 1: Metas por Vendedor */}
+                <div className="subgrid-card">
+                  <div className="card-header-row">
+                    <h3><Target size={16} /> Metas Comerciais por Vendedor ({yearFilter})</h3>
                     <select
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value)}
+                      value={yearFilter}
+                      onChange={(e) => setYearFilter(Number(e.target.value))}
+                      className="year-picker"
                     >
-                      <option value="DINHEIRO">Dinheiro (Espécie)</option>
-                      <option value="PIX">PIX Instantâneo</option>
-                      <option value="DEBIT_CARD">Cartão de Débito</option>
-                      <option value="CREDIT_CARD">Cartão de Crédito</option>
+                      <option value={2025}>Ano 2025</option>
+                      <option value={2026}>Ano 2026</option>
+                      <option value={2027}>Ano 2027</option>
                     </select>
                   </div>
 
-                  <div className="field-row">
-                    <label>Desconto Geral (R$)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={generalDiscount}
-                      onChange={(e) => setGeneralDiscount(e.target.value)}
-                    />
+                  <div className="table-container mini">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Vendedor</th>
+                          <th>Mês</th>
+                          <th>Meta R$</th>
+                          <th>Comissão %</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {salesGoals.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="empty-state">
+                              Nenhuma meta comercial cadastrada para {yearFilter}.
+                            </td>
+                          </tr>
+                        ) : (
+                          salesGoals.map(g => (
+                            <tr key={g.id}>
+                              <td><strong>{g.seller_name || 'Vendedor'}</strong></td>
+                              <td>Mês {g.month}</td>
+                              <td><strong>{fmtCurrency(g.target_amount)}</strong></td>
+                              <td>{fmtPercent(g.commission_percent)}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="table-action-btn danger"
+                                  onClick={() => handleDeleteGoal(g)}
+                                  title="Excluir Meta"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Seção 2: Tabelas de Preços */}
+                <div className="subgrid-card">
+                  <div className="card-header-row">
+                    <h3><Layers size={16} /> Tabelas de Preços Personalizadas</h3>
                   </div>
 
-                  <div className="total-breakdown">
-                    <div className="breakdown-row">
-                      <span>Subtotal:</span>
-                      <span>{fmtCurrency(cartSubtotal)}</span>
-                    </div>
-                    {discountVal > 0 && (
-                      <div className="breakdown-row">
-                        <span>Desconto:</span>
-                        <span>- {fmtCurrency(discountVal)}</span>
-                      </div>
-                    )}
-                    <div className="breakdown-row final-total">
-                      <span>Total a Pagar:</span>
-                      <span>{fmtCurrency(cartFinalTotal)}</span>
-                    </div>
+                  <div className="table-container mini">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Nome da Tabela</th>
+                          <th>Descrição</th>
+                          <th>Padrão</th>
+                          <th>Status</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {priceTables.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="empty-state">
+                              Nenhuma tabela de preços cadastrada.
+                            </td>
+                          </tr>
+                        ) : (
+                          priceTables.map(t => (
+                            <tr key={t.id}>
+                              <td><strong>{t.name}</strong></td>
+                              <td>{t.description || '-'}</td>
+                              <td>
+                                <span className={`status-pill ${t.is_default ? 'success' : 'info'}`}>
+                                  {t.is_default ? 'Sim' : 'Não'}
+                                </span>
+                              </td>
+                              <td>
+                                <span className={`status-pill ${t.is_active ? 'success' : 'danger'}`}>
+                                  {t.is_active ? 'Ativa' : 'Inativa'}
+                                </span>
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="table-action-btn danger"
+                                  onClick={() => handleDeletePriceTable(t)}
+                                  title="Excluir Tabela"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
-
-                  <button
-                    className="btn-finalize-pos"
-                    onClick={handleFinalizePOSSale}
-                    disabled={cart.length === 0}
-                  >
-                    <CheckCircle2 size={18} />
-                    <span>Finalizar Venda ({fmtCurrency(cartFinalTotal)})</span>
-                  </button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* ABA PEDIDOS */}
-          {activeTab === 'orders' && (
-            <div className="table-card">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Número do Pedido</th>
-                    <th>Cliente</th>
-                    <th>Data Emissão</th>
-                    <th>Total dos Itens</th>
-                    <th>Desconto</th>
-                    <th>Total Líquido</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.length === 0 ? (
+          {/* =============================================================== */}
+          {/* ABA 5: PÓS-VENDA & DEVOLUÇÕES                                   */}
+          {/* =============================================================== */}
+          {activeTab === 'post_sales' && (
+            <div className="tab-pane">
+              <div className="toolbar">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por cliente ou motivo da devolução..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <div className="filter-group">
+                  <Filter size={14} />
+                  <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                    <option value="ALL">Todos os Tipos</option>
+                    <option value="DEVOLUCAO">Devolução</option>
+                    <option value="TROCA">Troca</option>
+                    <option value="CANCELAMENTO">Cancelamento</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <td colSpan={7} className="empty-row">
-                        Nenhum pedido de venda formalizado no período.
-                      </td>
+                      <th>Tipo</th>
+                      <th>Cliente</th>
+                      <th>Data</th>
+                      <th>Motivo</th>
+                      <th>Reestocado</th>
+                      <th>Valor Estornado</th>
+                      <th>Status</th>
+                      <th>Ações</th>
                     </tr>
-                  ) : (
-                    orders.map((o) => (
-                      <tr key={o.id}>
-                        <td><strong>{o.order_number}</strong></td>
-                        <td>{o.customer_name}</td>
-                        <td>{fmtDate(o.created_at)}</td>
-                        <td>{fmtCurrency(o.total_amount)}</td>
-                        <td>{fmtCurrency(o.discount_amount)}</td>
-                        <td className="net-val">{fmtCurrency(o.net_amount)}</td>
-                        <td><span className="status-badge">{o.status}</span></td>
+                  </thead>
+                  <tbody>
+                    {filteredReturns.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="empty-state">
+                          Nenhum registro de pós-venda encontrado.
+                        </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      filteredReturns.map(r => (
+                        <tr key={r.id}>
+                          <td>
+                            <span className={`status-pill ${
+                              r.return_type === 'DEVOLUCAO' ? 'danger' :
+                              r.return_type === 'TROCA' ? 'info' : 'warning'
+                            }`}>
+                              {r.return_type}
+                            </span>
+                          </td>
+                          <td><strong>{r.customer_name}</strong></td>
+                          <td>{new Date(r.created_at).toLocaleDateString('pt-BR')}</td>
+                          <td>{r.reason}</td>
+                          <td>
+                            <span className={`status-pill ${r.restock_items ? 'success' : 'danger'}`}>
+                              {r.restock_items ? 'Sim (Kardex)' : 'Não'}
+                            </span>
+                          </td>
+                          <td><strong>{fmtCurrency(r.total_amount)}</strong></td>
+                          <td>
+                            <span className={`status-pill ${
+                              r.status === 'COMPLETED' ? 'success' :
+                              r.status === 'REJECTED' ? 'danger' : 'warning'
+                            }`}>
+                              {r.status}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="table-action-btn danger"
+                              onClick={() => handleDeleteReturn(r)}
+                              title="Excluir Registro"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
-          {/* ABA ORÇAMENTOS */}
-          {activeTab === 'quotes' && (
-            <div className="table-card">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Número da Proposta</th>
-                    <th>Cliente</th>
-                    <th>Validade</th>
-                    <th>Total dos Itens</th>
-                    <th>Desconto</th>
-                    <th>Total Líquido</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {quotes.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="empty-row">
-                        Nenhum orçamento comercial registrado.
-                      </td>
-                    </tr>
+          {/* =============================================================== */}
+          {/* ABA 6: INDICADORES & BI COMERCIAL                               */}
+          {/* =============================================================== */}
+          {activeTab === 'analytics' && (
+            <div className="tab-pane analytics-pane">
+              {/* Cards de Métricas Principais */}
+              <div className="kpi-grid">
+                <div className="kpi-card">
+                  <div className="kpi-header">
+                    <span className="label">Faturamento Total Comercial</span>
+                    <DollarSign size={18} className="icon green" />
+                  </div>
+                  <div className="kpi-value">{fmtCurrency(analytics?.total_revenue || 0)}</div>
+                  <span className="kpi-sub">Receita consolidada de pedidos no período</span>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-header">
+                    <span className="label">Ticket Médio por Pedido</span>
+                    <TrendingUp size={18} className="icon blue" />
+                  </div>
+                  <div className="kpi-value">{fmtCurrency(analytics?.average_ticket || 0)}</div>
+                  <span className="kpi-sub">Média líquida por transação comercial</span>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-header">
+                    <span className="label">Taxa de Conversão de Cotações</span>
+                    <Award size={18} className="icon purple" />
+                  </div>
+                  <div className="kpi-value">{fmtPercent(analytics?.quote_conversion_rate || 0)}</div>
+                  <span className="kpi-sub">Propostas convertidas em pedidos</span>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-header">
+                    <span className="label">Volume Total de Vendas</span>
+                    <ShoppingBag size={18} className="icon amber" />
+                  </div>
+                  <div className="kpi-value">{orders.length}</div>
+                  <span className="kpi-sub">Pedidos emitidos no período</span>
+                </div>
+              </div>
+
+              {/* Ranking e Desempenho */}
+              <div className="analytics-details-grid">
+                <div className="details-card">
+                  <h3>Top 5 Produtos Mais Vendidos</h3>
+                  {(!analytics?.top_selling_products || analytics.top_selling_products.length === 0) ? (
+                    <p className="empty-sub">Nenhuma movimentação de produto registrada.</p>
                   ) : (
-                    quotes.map((q) => (
-                      <tr key={q.id}>
-                        <td><strong>{q.quote_number}</strong></td>
-                        <td>{q.customer_name}</td>
-                        <td>{fmtDate(q.valid_until)}</td>
-                        <td>{fmtCurrency(q.total_amount)}</td>
-                        <td>{fmtCurrency(q.discount_amount)}</td>
-                        <td className="net-val">{fmtCurrency(q.net_amount)}</td>
-                        <td><span className="status-badge">{q.status}</span></td>
-                      </tr>
-                    ))
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Produto</th>
+                          <th>Qtd Vendida</th>
+                          <th>Receita Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.top_selling_products.map((p, idx) => (
+                          <tr key={idx}>
+                            <td><strong>{p.product_name}</strong></td>
+                            <td>{formatQuantity(p.total_quantity_sold)}</td>
+                            <td><strong>{fmtCurrency(p.total_revenue)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
-                </tbody>
-              </table>
+                </div>
+
+                <div className="details-card">
+                  <h3>Desempenho da Equipe Comercial</h3>
+                  {(!analytics?.seller_performance || analytics.seller_performance.length === 0) ? (
+                    <p className="empty-sub">Nenhuma meta apurada para a equipe comercial.</p>
+                  ) : (
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Vendedor</th>
+                          <th>Meta R$</th>
+                          <th>Realizado R$</th>
+                          <th>Atingimento</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.seller_performance.map((s, idx) => (
+                          <tr key={idx}>
+                            <td><strong>{s.seller_name}</strong></td>
+                            <td>{fmtCurrency(s.target_amount)}</td>
+                            <td>{fmtCurrency(s.total_sales_amount)}</td>
+                            <td>
+                              <div className="progress-cell">
+                                <span>{fmtPercent(s.achievement_percent)}</span>
+                                <div className="progress-bar-bg">
+                                  <div
+                                    className="progress-bar-fill"
+                                    style={{ width: `${Math.min(100, safeNumber(s.achievement_percent))}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </main>
       </div>
 
-      {/* Modal Abertura de Caixa */}
-      {isSessionModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-box">
-            <div className="modal-head">
-              <h3>Abertura de Turno / Caixa PDV</h3>
-              <button className="btn-close-modal" onClick={() => setIsSessionModalOpen(false)}>
-                <X size={18} />
+      {/* =================================================================== */}
+      {/* MODAIS DO MÓDULO DE VENDAS                                          */}
+      {/* =================================================================== */}
+
+      {/* Modal 1: Nova Cotação / Proposta Comercial */}
+      <Modal
+        isOpen={isQuoteModalOpen}
+        onClose={() => setIsQuoteModalOpen(false)}
+        title="Nova Cotação / Proposta Comercial"
+        subtitle="Emissão de proposta comercial formal com alçada e condições"
+        size="lg"
+      >
+        <form onSubmit={handleSaveQuote} className="wizard-form">
+          {modalError && <div className="form-error-callout">{modalError}</div>}
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Nome do Cliente *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: Laboratório Santa Maria Ltda"
+                value={quoteCustomerName}
+                onChange={(e) => setQuoteCustomerName(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Condição Comercial</label>
+              <select value={quotePaymentTerms} onChange={(e) => setQuotePaymentTerms(e.target.value)}>
+                <option value="À Vista">À Vista</option>
+                <option value="30 DDL">30 DDL</option>
+                <option value="30/60 DDL">30/60 DDL</option>
+                <option value="PIX">PIX</option>
+              </select>
+            </div>
+            <div className="form-group flex-1">
+              <label>Validade da Proposta</label>
+              <input
+                type="date"
+                value={quoteValidUntil}
+                onChange={(e) => setQuoteValidUntil(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-items-section">
+            <div className="section-title-row">
+              <h4>Itens do Orçamento</h4>
+              <button type="button" className="btn-secondary sm" onClick={handleAddQuoteItem}>
+                <Plus size={13} /> Adicionar Produto
               </button>
             </div>
-            <form onSubmit={handleOpenPOSSession}>
-              <div className="modal-content-body">
-                <div className="form-field">
-                  <label>Identificação do Terminal / Caixa</label>
-                  <input type="text" value="CAIXA-01 (Balcão Principal)" disabled />
-                </div>
 
-                <div className="form-field">
-                  <label>Fundo de Troco Inicial (R$) *</label>
+            {quoteItems.map((item, idx) => (
+              <div key={idx} className="dynamic-item-row">
+                <div className="form-group flex-3">
+                  <select
+                    value={item.product_id}
+                    onChange={(e) => {
+                      const pid = e.target.value;
+                      const prod = products.find(p => p.id === pid);
+                      const updated = [...quoteItems];
+                      updated[idx].product_id = pid;
+                      if (prod) updated[idx].unit_price = safeNumber(prod.reference_price) || 10.00;
+                      setQuoteItems(updated);
+                    }}
+                  >
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group flex-1">
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Qtd"
+                    value={item.quantity}
+                    onChange={(e) => {
+                      const updated = [...quoteItems];
+                      updated[idx].quantity = Math.max(1, parseInt(e.target.value) || 1);
+                      setQuoteItems(updated);
+                    }}
+                  />
+                </div>
+                <div className="form-group flex-1">
                   <input
                     type="number"
                     step="0.01"
-                    min="0"
-                    required
-                    value={openingCash}
-                    onChange={(e) => setOpeningCash(e.target.value)}
+                    placeholder="Preço"
+                    value={item.unit_price}
+                    onChange={(e) => {
+                      const updated = [...quoteItems];
+                      updated[idx].unit_price = safeNumber(e.target.value);
+                      setQuoteItems(updated);
+                    }}
                   />
                 </div>
-              </div>
-
-              <div className="modal-foot">
-                <button type="button" className="btn-cancel" onClick={() => setIsSessionModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-submit">
-                  Abrir Caixa
+                <button type="button" className="btn-del-item" onClick={() => handleRemoveQuoteItem(idx)}>
+                  <Trash2 size={14} />
                 </button>
               </div>
-            </form>
+            ))}
           </div>
-        </div>
-      )}
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsQuoteModalOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? 'Salvando...' : 'Salvar Cotação'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal 2: Novo Pedido de Venda */}
+      <Modal
+        isOpen={isOrderModalOpen}
+        onClose={() => setIsOrderModalOpen(false)}
+        title="Novo Pedido de Venda"
+        subtitle="Cadastro direto de pedido comercial"
+        size="lg"
+      >
+        <form onSubmit={handleSaveOrder} className="wizard-form">
+          {modalError && <div className="form-error-callout">{modalError}</div>}
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Cliente *</label>
+              <input
+                type="text"
+                required
+                placeholder="Nome / Razão Social"
+                value={orderCustomerName}
+                onChange={(e) => setOrderCustomerName(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Condição de Pgto</label>
+              <select value={orderPaymentTerms} onChange={(e) => setOrderPaymentTerms(e.target.value)}>
+                <option value="À Vista">À Vista</option>
+                <option value="30 DDL">30 DDL</option>
+                <option value="30/60 DDL">30/60 DDL</option>
+                <option value="PIX">PIX</option>
+                <option value="Cartão">Cartão</option>
+              </select>
+            </div>
+            <div className="form-group flex-1">
+              <label>Status Entrega</label>
+              <select value={orderDeliveryStatus} onChange={(e) => setOrderDeliveryStatus(e.target.value)}>
+                <option value="PENDING">Pendente</option>
+                <option value="DISPATCHED">Em Trânsito</option>
+                <option value="DELIVERED">Entregue</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-items-section">
+            <div className="section-title-row">
+              <h4>Produtos do Pedido</h4>
+              <button type="button" className="btn-secondary sm" onClick={handleAddOrderItem}>
+                <Plus size={13} /> Adicionar Produto
+              </button>
+            </div>
+
+            {orderItems.map((item, idx) => (
+              <div key={idx} className="dynamic-item-row">
+                <div className="form-group flex-3">
+                  <select
+                    value={item.product_id}
+                    onChange={(e) => {
+                      const pid = e.target.value;
+                      const prod = products.find(p => p.id === pid);
+                      const updated = [...orderItems];
+                      updated[idx].product_id = pid;
+                      if (prod) updated[idx].unit_price = safeNumber(prod.reference_price) || 10.00;
+                      setOrderItems(updated);
+                    }}
+                  >
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group flex-1">
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Qtd"
+                    value={item.quantity}
+                    onChange={(e) => {
+                      const updated = [...orderItems];
+                      updated[idx].quantity = Math.max(1, parseInt(e.target.value) || 1);
+                      setOrderItems(updated);
+                    }}
+                  />
+                </div>
+                <div className="form-group flex-1">
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Preço"
+                    value={item.unit_price}
+                    onChange={(e) => {
+                      const updated = [...orderItems];
+                      updated[idx].unit_price = safeNumber(e.target.value);
+                      setOrderItems(updated);
+                    }}
+                  />
+                </div>
+                <button type="button" className="btn-del-item" onClick={() => handleRemoveOrderItem(idx)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsOrderModalOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? 'Salvando...' : 'Salvar Pedido'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal 3: Cadastro / Edição de Cliente */}
+      <Modal
+        isOpen={isCustomerModalOpen}
+        onClose={() => setIsCustomerModalOpen(false)}
+        title={editingCustomerId ? "Editar Cliente" : "Novo Cliente (PJ / PF)"}
+        subtitle="Cadastro centralizado para Vendas, CRM, Faturamento e Identity"
+        size="lg"
+      >
+        <form onSubmit={handleSaveCustomer} className="wizard-form">
+          {modalError && <div className="form-error-callout">{modalError}</div>}
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Tipo de Pessoa *</label>
+              <select value={custPersonType} onChange={(e) => setCustPersonType(e.target.value as any)}>
+                <option value="PJ">Pessoa Jurídica (PJ)</option>
+                <option value="PF">Pessoa Física (PF)</option>
+              </select>
+            </div>
+            <div className="form-group flex-2">
+              <label>{custPersonType === 'PJ' ? 'Razão Social *' : 'Nome Completo *'}</label>
+              <input
+                type="text"
+                required
+                value={custName}
+                onChange={(e) => setCustName(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>{custPersonType === 'PJ' ? 'CNPJ *' : 'CPF *'}</label>
+              <input
+                type="text"
+                required
+                value={custDocument}
+                onChange={(e) => setCustDocument(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Nome Fantasia</label>
+              <input
+                type="text"
+                value={custTradeName}
+                onChange={(e) => setCustTradeName(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Inscrição Estadual</label>
+              <input
+                type="text"
+                value={custStateReg}
+                onChange={(e) => setCustStateReg(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Limite de Crédito (R$)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={custCreditLimit}
+                onChange={(e) => setCustCreditLimit(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>E-mail Comercial</label>
+              <input
+                type="email"
+                value={custEmail}
+                onChange={(e) => setCustEmail(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Telefone / WhatsApp</label>
+              <input
+                type="text"
+                value={custPhone}
+                onChange={(e) => setCustPhone(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Contato Identity</label>
+              <select value={custContactId} onChange={(e) => setCustContactId(e.target.value)}>
+                <option value="">Nenhum contato vinculado</option>
+                {contacts.map(ct => (
+                  <option key={ct.id} value={ct.id}>{ct.full_name} ({ct.email || ct.phone || 'S/ dados'})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsCustomerModalOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? 'Salvando...' : 'Salvar Cliente'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal 4: Nova Meta Comercial */}
+      <Modal
+        isOpen={isGoalModalOpen}
+        onClose={() => setIsGoalModalOpen(false)}
+        title="Nova Meta Comercial de Vendas"
+        subtitle="Definição de objetivos por vendedor e comissão"
+        size="sm"
+      >
+        <form onSubmit={handleSaveGoal} className="wizard-form">
+          {modalError && <div className="form-error-callout">{modalError}</div>}
+          <div className="form-group">
+            <label>Nome do Vendedor *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Amanda Silva"
+              value={goalSellerName}
+              onChange={(e) => setGoalSellerName(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label>Mês de Referência *</label>
+            <select value={goalMonth} onChange={(e) => setGoalMonth(Number(e.target.value))}>
+              {Array.from({ length: 12 }, (_, i) => (
+                <option key={i + 1} value={i + 1}>Mês {i + 1}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Meta de Faturamento (R$) *</label>
+            <input
+              type="number"
+              step="0.01"
+              required
+              value={goalTargetAmount}
+              onChange={(e) => setGoalTargetAmount(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label>Comissão (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={goalCommission}
+              onChange={(e) => setGoalCommission(e.target.value)}
+            />
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsGoalModalOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? 'Salvando...' : 'Salvar Meta'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal 5: Nova Tabela de Preços */}
+      <Modal
+        isOpen={isPriceTableModalOpen}
+        onClose={() => setIsPriceTableModalOpen(false)}
+        title="Nova Tabela de Preços"
+        subtitle="Precificação diferenciada por canal de venda"
+        size="md"
+      >
+        <form onSubmit={handleSavePriceTable} className="wizard-form">
+          {modalError && <div className="form-error-callout">{modalError}</div>}
+          <div className="form-group">
+            <label>Nome da Tabela *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Tabela Atacado / Hospitais"
+              value={priceTableName}
+              onChange={(e) => setPriceTableName(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label>Descrição</label>
+            <input
+              type="text"
+              value={priceTableDesc}
+              onChange={(e) => setPriceTableDesc(e.target.value)}
+            />
+          </div>
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={priceTableIsDefault}
+                onChange={(e) => setPriceTableIsDefault(e.target.checked)}
+              />
+              <span>Definir como tabela padrão para novos clientes</span>
+            </label>
+          </div>
+
+          <div className="form-items-section">
+            <div className="section-title-row">
+              <h4>Produtos da Tabela (Opcional)</h4>
+              <button
+                type="button"
+                className="btn-secondary sm"
+                onClick={() => {
+                  if (products.length > 0) {
+                    setPriceTableItems([
+                      ...priceTableItems,
+                      { product_id: products[0].id, price: safeNumber(products[0].reference_price) || 10, discount_percent: 0 }
+                    ]);
+                  }
+                }}
+              >
+                <Plus size={13} /> Adicionar Produto
+              </button>
+            </div>
+            {priceTableItems.map((item, idx) => (
+              <div key={idx} className="dynamic-item-row">
+                <div className="form-group flex-3">
+                  <select
+                    value={item.product_id}
+                    onChange={(e) => {
+                      const updated = [...priceTableItems];
+                      updated[idx].product_id = e.target.value;
+                      setPriceTableItems(updated);
+                    }}
+                  >
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group flex-1">
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Preço (R$)"
+                    value={item.price}
+                    onChange={(e) => {
+                      const updated = [...priceTableItems];
+                      updated[idx].price = safeNumber(e.target.value);
+                      setPriceTableItems(updated);
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn-del-item"
+                  onClick={() => setPriceTableItems(priceTableItems.filter((_, i) => i !== idx))}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsPriceTableModalOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? 'Salvando...' : 'Salvar Tabela'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal 6: Registrar Devolução / Pós-Venda */}
+      <Modal
+        isOpen={isReturnModalOpen}
+        onClose={() => setIsReturnModalOpen(false)}
+        title="Registrar Devolução ou Troca (Pós-Venda)"
+        subtitle="Estorno financeiro e reestocagem auditada no Kardex"
+        size="md"
+      >
+        <form onSubmit={handleSaveReturn} className="wizard-form">
+          {modalError && <div className="form-error-callout">{modalError}</div>}
+          <div className="form-row">
+            <div className="form-group flex-2">
+              <label>Cliente *</label>
+              <input
+                type="text"
+                required
+                value={retCustomerName}
+                onChange={(e) => setRetCustomerName(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Tipo *</label>
+              <select value={retType} onChange={(e) => setRetType(e.target.value as any)}>
+                <option value="DEVOLUCAO">Devolução</option>
+                <option value="TROCA">Troca</option>
+                <option value="CANCELAMENTO">Cancelamento</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Produto Devolvido *</label>
+            <select
+              value={retProductId}
+              onChange={(e) => {
+                const pid = e.target.value;
+                setRetProductId(pid);
+                const p = products.find(prod => prod.id === pid);
+                if (p) setRetUnitPrice(String(p.reference_price || '10.00'));
+              }}
+            >
+              {products.map(p => (
+                <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Quantidade *</label>
+              <input
+                type="number"
+                min="1"
+                required
+                value={retQuantity}
+                onChange={(e) => setRetQuantity(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Preço Unitário (R$) *</label>
+              <input
+                type="number"
+                step="0.01"
+                required
+                value={retUnitPrice}
+                onChange={(e) => setRetUnitPrice(e.target.value)}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Estado do Item</label>
+              <select value={retCondition} onChange={(e) => setRetCondition(e.target.value as any)}>
+                <option value="GOOD">Bom Estado (Reestocável)</option>
+                <option value="DAMAGED">Avariado / Danificado</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Motivo da Devolução / Troca *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Item com lacre rompido / Erro no pedido do cliente"
+              value={retReason}
+              onChange={(e) => setRetReason(e.target.value)}
+            />
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={retRestock}
+                onChange={(e) => setRetRestock(e.target.checked)}
+              />
+              <span>Reestocar produto no inventário (Kardex) se em bom estado</span>
+            </label>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsReturnModalOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSaving}>
+              {isSaving ? 'Processando...' : 'Processar Devolução'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* CONFIRM MODAL GENÉRICO */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        subtitle={confirmModal.subtitle}
+        message={confirmModal.message}
+        type={confirmModal.type}
+        confirmText={confirmModal.confirmText}
+      />
     </div>
   );
 };

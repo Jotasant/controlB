@@ -48,12 +48,15 @@ class Opportunity(Base):
     """
     Tabela 'opportunity' - Oportunidades de Negócio no Funil de Vendas (Pipeline).
     Estágios: PROSPECTING, QUALIFICATION, PROPOSAL, NEGOTIATION, WON, LOST.
+    Integrada com o cadastro central de Clientes (Customer) e Cotações de Vendas (SalesQuote).
     """
     __tablename__ = "opportunity"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
     lead_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("lead.id", ondelete="SET NULL"), nullable=True)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("customer.id", ondelete="SET NULL"), nullable=True)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contact.id", ondelete="SET NULL"), nullable=True)
     
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -74,6 +77,7 @@ class Opportunity(Base):
     # Relacionamentos
     lead: Mapped["Lead | None"] = relationship(back_populates="opportunities", lazy="selectin")
     interactions: Mapped[list["CustomerInteraction"]] = relationship(back_populates="opportunity", cascade="all, delete-orphan")
+    quotes: Mapped[list["controlb.modules.sales.models.SalesQuote"]] = relationship(back_populates="opportunity", lazy="selectin")
 
 
 class CustomerInteraction(Base):

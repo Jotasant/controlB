@@ -130,6 +130,16 @@ def delete_user(
     return service.delete_user(db=db, user_id=user_id, current_user_id=current_user.id)
 
 
+@router.delete("/users", response_model=schemas.BulkDeleteResponse, status_code=status.HTTP_200_OK)
+def bulk_delete_users(
+    payload: schemas.BulkDeleteUsersRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("users:delete"))
+):
+    """Exclui múltiplos usuários selecionados em lote (Exige permissão: users:delete)."""
+    return service.bulk_delete_users(db=db, user_ids=payload.user_ids, current_user_id=current_user.id)
+
+
 # ==============================================================================
 # 4. ENDPOINTS DE CARGOS / PAPÉIS (Role) - Protegidos por Permissões
 # ==============================================================================
@@ -174,6 +184,16 @@ def delete_role(
     return service.delete_role(db=db, role_id=role_id)
 
 
+@router.delete("/role", response_model=schemas.BulkDeleteResponse, status_code=status.HTTP_200_OK)
+def bulk_delete_roles(
+    payload: schemas.BulkDeleteRolesRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("roles:manage"))
+):
+    """Exclui múltiplos cargos selecionados em lote (Exige permissão: roles:manage)."""
+    return service.bulk_delete_roles(db=db, role_ids=payload.role_ids)
+
+
 # ==============================================================================
 # 5. ENDPOINTS DE ORGANIZAÇÕES (Organization) - Protegidos por Permissões
 # ==============================================================================
@@ -197,6 +217,17 @@ def get_organizations(
     return repository.get_all_organizations(db)
 
 
+@router.put("/organization/{org_id}", response_model=schemas.OrganizationResponse)
+def update_organization(
+    org_id: uuid.UUID,
+    organization: schemas.OrganizationUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("organizations:manage"))
+):
+    """Atualiza dados cadastrais de uma organização (Exige permissão: organizations:manage)."""
+    return service.update_organization(db=db, organization_id=org_id, organization_data=organization)
+
+
 @router.delete("/organization/{org_id}", status_code=status.HTTP_200_OK)
 def delete_organization(
     org_id: uuid.UUID,
@@ -205,3 +236,70 @@ def delete_organization(
 ):
     """Exclui a organização cadastrada (Exige permissão: organizations:manage)."""
     return service.delete_organization(db=db, organization_id=org_id)
+
+
+@router.delete("/organization", response_model=schemas.BulkDeleteResponse, status_code=status.HTTP_200_OK)
+def bulk_delete_organizations(
+    payload: schemas.BulkDeleteOrganizationsRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("organizations:manage"))
+):
+    """Exclui múltiplas organizações selecionadas em lote (Exige permissão: organizations:manage)."""
+    return service.bulk_delete_organizations(db=db, org_ids=payload.org_ids)
+
+
+# ==============================================================================
+# 6. ENDPOINTS DE CONTATOS INSTITUCIONAIS (Contact)
+# ==============================================================================
+
+@router.get("/contacts", response_model=list[schemas.ContactResponse], summary="Listar Contatos")
+def list_contacts(
+    search: str | None = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Retorna contatos institucionais cadastrados para a organização do usuário."""
+    return service.list_contacts(db, current_user.organization_id, search)
+
+
+@router.get("/contacts/{contact_id}", response_model=schemas.ContactResponse, summary="Obter Contato")
+def get_contact(
+    contact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Busca os dados de um contato pelo ID."""
+    return service.get_contact(db, contact_id, current_user.organization_id)
+
+
+@router.post("/contacts", response_model=schemas.ContactResponse, status_code=status.HTTP_201_CREATED, summary="Cadastrar Contato")
+def create_contact(
+    payload: schemas.ContactCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Cadastra um novo contato na organização."""
+    return service.create_contact(db, current_user.organization_id, payload)
+
+
+@router.put("/contacts/{contact_id}", response_model=schemas.ContactResponse, summary="Atualizar Contato")
+def update_contact(
+    contact_id: uuid.UUID,
+    payload: schemas.ContactUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Atualiza dados cadastrais de um contato."""
+    return service.update_contact(db, contact_id, current_user.organization_id, payload)
+
+
+@router.delete("/contacts/{contact_id}", status_code=status.HTTP_200_OK, summary="Excluir Contato")
+def delete_contact(
+    contact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Remove um contato cadastrado."""
+    return service.delete_contact(db, contact_id, current_user.organization_id)
+
+

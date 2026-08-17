@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # Configurações de Segurança do Token JWT
     secret_key: str                     # Chave secreta usada para assinar digitalmente os tokens JWT
     algorithm: str = "HS256"            # Algoritmo de criptografia do token (HMAC com SHA-256)
-    access_token_expire_minutes: int = 30 # Tempo de expiração da sessão do usuário (em minutos)
+    access_token_expire_minutes: int = 480 # Tempo de expiração da sessão do usuário (em minutos)
 
     # Configuração do Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(

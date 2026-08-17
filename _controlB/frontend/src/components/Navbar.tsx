@@ -14,7 +14,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, Sun, Moon, ChevronDown, User,
   LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart, Package,
-  Layers, Landmark, ReceiptText, Users, ShoppingBag
+  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
@@ -82,7 +82,7 @@ export const Navbar: React.FC = () => {
   ]);
 
   // Verifica se está dentro de alguma rota de módulo para destacar o menu "Módulos"
-  const isModuleActive = ['/crm', '/vendas', '/faturamento', '/financeiro', '/estoque', '/compras'].some(path => 
+  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras'].some(path => 
     location.pathname.startsWith(path)
   );
 
@@ -106,7 +106,7 @@ export const Navbar: React.FC = () => {
           </NavLink>
         )}
 
-        {/* 🗂️ Menu Principal: Módulos (CRM, Vendas, Faturamento, Financeiro, Estoque, Compras) */}
+        {/* 🗂️ Menu Principal: Módulos (CRM, Vendas, PDV, Faturamento, Financeiro, Estoque, Compras) */}
         <div className="dropdown-wrapper" ref={modulesRef}>
           <button
             type="button"
@@ -133,7 +133,7 @@ export const Navbar: React.FC = () => {
                 </div>
               </NavLink>
 
-              {/* 🛍️ Módulo de Vendas & PDV */}
+              {/* 🛍️ Módulo de Vendas */}
               <NavLink
                 to="/vendas"
                 className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
@@ -141,8 +141,21 @@ export const Navbar: React.FC = () => {
               >
                 <ShoppingBag size={16} className="icon-module icon-sales" />
                 <div className="item-text">
-                  <span className="title">Vendas & Frente de Caixa</span>
-                  <span className="desc">Orçamentos, pedidos e PDV</span>
+                  <span className="title">Vendas & Cotações</span>
+                  <span className="desc">Orçamentos, propostas e pedidos</span>
+                </div>
+              </NavLink>
+
+              {/* 🏪 Frente de Caixa (PDV) */}
+              <NavLink
+                to="/pdv"
+                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                onClick={() => setIsModulesOpen(false)}
+              >
+                <Store size={16} className="icon-module icon-pos" />
+                <div className="item-text">
+                  <span className="title">Frente de Caixa (PDV)</span>
+                  <span className="desc">Venda balcão e cupom não-fiscal</span>
                 </div>
               </NavLink>
 

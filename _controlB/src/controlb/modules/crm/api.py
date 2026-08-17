@@ -45,6 +45,15 @@ def update_lead(
     return service.update_lead(db, lead_id, current_user.organization_id, payload)
 
 
+@router.delete("/leads/{lead_id}", status_code=status.HTTP_200_OK, summary="Excluir Lead")
+def delete_lead(
+    lead_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.delete_lead(db, lead_id, current_user.organization_id)
+
+
 # ==============================================================================
 # OPORTUNIDADES (PIPELINE)
 # ==============================================================================
@@ -58,6 +67,15 @@ def list_opportunities(
     return service.list_opportunities(db, current_user.organization_id, stage)
 
 
+@router.get("/opportunities/{opp_id}", response_model=schemas.OpportunityResponse, summary="Obter Oportunidade por ID")
+def get_opportunity(
+    opp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.get_opportunity(db, opp_id, current_user.organization_id)
+
+
 @router.post("/opportunities", response_model=schemas.OpportunityResponse, status_code=status.HTTP_201_CREATED, summary="Criar Oportunidade")
 def create_opportunity(
     payload: schemas.OpportunityCreate,
@@ -65,6 +83,16 @@ def create_opportunity(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.create_opportunity(db, current_user.organization_id, payload)
+
+
+@router.put("/opportunities/{opp_id}", response_model=schemas.OpportunityResponse, summary="Atualizar Oportunidade")
+def update_opportunity(
+    opp_id: uuid.UUID,
+    payload: schemas.OpportunityUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.update_opportunity(db, opp_id, current_user.organization_id, payload)
 
 
 @router.patch("/opportunities/{opp_id}/stage", response_model=schemas.OpportunityResponse, summary="Mover Oportunidade no Funil")
@@ -76,6 +104,15 @@ def update_opportunity_stage(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.update_opportunity_stage(db, opp_id, current_user.organization_id, stage, loss_reason)
+
+
+@router.delete("/opportunities/{opp_id}", status_code=status.HTTP_200_OK, summary="Excluir Oportunidade")
+def delete_opportunity(
+    opp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.delete_opportunity(db, opp_id, current_user.organization_id)
 
 
 # ==============================================================================
@@ -99,3 +136,35 @@ def create_interaction(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.register_interaction(db, current_user.organization_id, current_user, payload)
+
+
+# ==============================================================================
+# INTEGRAÇÃO COM MÓDULO DE VENDAS
+# ==============================================================================
+
+@router.post("/leads/{lead_id}/convert-customer", summary="Converter Lead em Cliente no Módulo de Vendas")
+def convert_lead_to_customer(
+    lead_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.convert_lead_to_customer(db, lead_id, current_user.organization_id, current_user)
+
+
+@router.get("/opportunities/{opp_id}/quotations", summary="Listar Cotações Vinculadas à Oportunidade")
+def list_opportunity_quotations(
+    opp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.list_opportunity_quotations(db, opp_id, current_user.organization_id)
+
+
+@router.post("/opportunities/{opp_id}/create-quote", summary="Gerar Cotação/Orçamento no Módulo de Vendas a partir de Oportunidade")
+def create_quote_from_opportunity(
+    opp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.create_quote_from_opportunity(db, opp_id, current_user.organization_id, current_user)
+

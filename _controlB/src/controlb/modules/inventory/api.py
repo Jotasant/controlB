@@ -137,3 +137,32 @@ def list_inventory_movements(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.list_movements(db, current_user.organization_id, product_id, limit)
+
+
+# ==============================================================================
+# 4. IMPORTAÇÃO E SINCRONIZAÇÃO DE PLANILHA DE ESTOQUE
+# ==============================================================================
+
+from fastapi import File, UploadFile
+from controlb.modules.inventory.schemas import InventoryImportSummaryResponse
+
+@router.post("/import-spreadsheet", response_model=InventoryImportSummaryResponse, summary="Importar Planilha de Inventário / Estoque")
+@router.post("/import-toolspharma", response_model=InventoryImportSummaryResponse, summary="Importar Planilha (Alias)")
+async def import_inventory_spreadsheet(
+    file: UploadFile = File(..., description="Arquivo .xlsx de inventário e estoque"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """
+    Recebe e processa a planilha de inventário e estoque (.xlsx).
+    Identifica novos produtos, atualiza saldos, cria categorias e detecta vendas e reposições diárias.
+    """
+    file_bytes = await file.read()
+    return service.import_inventory_spreadsheet(
+        db=db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+        file_bytes=file_bytes
+    )
+
+

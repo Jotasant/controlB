@@ -1315,14 +1315,15 @@ def generate_replenishment_suggestions(
         est_total = suggested_qty * ref_price
         total_cost += est_total
 
-        # Nível de urgência
+        # Nível de urgência e criticidade de estoque
         if current <= Decimal("0.00"):
-            urgency = "critical"
+            urgency = "critical"  # Estoque zerado / esgotado
             critical_count += 1
-        elif min_s > Decimal("0.00") and current <= (min_s / Decimal("2.0")):
-            urgency = "high"
+        elif min_s > Decimal("0.00") and current < min_s:
+            urgency = "high"  # Abaixo do estoque mínimo configurado (Crítico)
+            critical_count += 1
         else:
-            urgency = "medium"
+            urgency = "medium"  # No ponto de pedido exato (Saldo == Mínimo)
 
         suggestion_items.append(
             schemas.PurchaseSuggestionItem(

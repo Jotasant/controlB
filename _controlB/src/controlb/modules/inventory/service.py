@@ -418,3 +418,274 @@ def get_replenishment_candidates(
     Chamado pelo motor de sugestões de compra para obter produtos que estão abaixo do estoque mínimo.
     """
     return repository.get_products_below_replenishment_point(db, organization_id)
+
+
+# ==============================================================================
+# 5. IMPORTAÇÃO E SINCRONIZAÇÃO DE PLANILHA DE ESTOQUE
+# ==============================================================================
+
+def import_inventory_spreadsheet(
+    db: Session,
+    organization_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    file_bytes: bytes
+) -> dict:
+    """
+    Processa e sincroniza a planilha de inventário e estoque:
+    1. Lê todos os produtos e metadados via spreadsheet_parser.
+    2. Identifica ou cria categorias automaticamente com base no NCM.
+    3. Compara o estoque atual com o estoque da planilha para detectar vendas (saídas) e entradas (reposições).
+    4. Gera as movimentações de estoque correspondentes no Kardex.
+    5. Atualiza saldos e preços sem quebrar a estrutura existente.
+    """
+    from controlb.modules.inventory.spreadsheet_parser import parse_inventory_xlsx
+
+    try:
+        parsed_data = parse_inventory_xlsx(file_bytes)
+    except Exception as exc:
+        logger.error(f"❌ Erro ao realizar parsing do XLSX de estoque: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Não foi possível processar a planilha de estoque. Verifique se o formato do arquivo é válido. Erro: {exc}"
+        )
+
+    products_list = parsed_data.get("products", [])
+    if not products_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nenhum produto válido foi encontrado na planilha informada."
+        )
+
+    # 1. Carrega categorias existentes da organização
+    categories_map: dict[str, ProductCategory] = {
+        c.name.strip().lower(): c for c in repository.list_categories(db, organization_id)
+    }
+
+    # 2. Carrega produtos existentes da organização em mapas de alta performance O(1)
+    existing_prods = repository.list_products(db, organization_id)
+    prod_by_external_code: dict[str, Product] = {
+        p.external_code: p for p in existing_prods if p.external_code
+    }
+    prod_by_barcode: dict[str, Product] = {
+        p.barcode.strip(): p for p in existing_prods if p.barcode and p.barcode.strip()
+    }
+    prod_by_sku: dict[str, Product] = {
+        p.sku.strip().upper(): p for p in existing_prods if p.sku
+    }
+    prod_by_name: dict[str, Product] = {
+        p.name.strip().upper(): p for p in existing_prods if p.name
+    }
+
+    created_products_count = 0
+    updated_products_count = 0
+    created_categories_count = 0
+
+    sales_identified_count = 0
+    total_sales_quantity = Decimal("0.0000")
+    entries_identified_count = 0
+    total_entries_quantity = Decimal("0.0000")
+
+    sample_items = []
+    inv_date = parsed_data.get("inventory_date") or "Diário"
+
+    for item in products_list:
+        # A. Categoria: Identifica ou cria
+        cat_name = item["suggested_category_name"]
+        cat_key = cat_name.strip().lower()
+
+        if cat_key not in categories_map:
+            new_cat = ProductCategory(
+                organization_id=organization_id,
+                name=cat_name.strip(),
+                code=cat_name[:4].upper()
+            )
+            db.add(new_cat)
+            db.flush()
+            categories_map[cat_key] = new_cat
+            created_categories_count += 1
+
+        category_id = categories_map[cat_key].id
+
+        # B. Localiza o produto existente
+        code = item["code"]
+        barcode = item["barcode"].strip() if item.get("barcode") else None
+        name_upper = item["name"].strip().upper()
+
+        prod = None
+        if code in prod_by_external_code:
+            prod = prod_by_external_code[code]
+        elif barcode and barcode in prod_by_barcode:
+            prod = prod_by_barcode[barcode]
+        elif code in prod_by_sku or f"IMP-{code}".upper() in prod_by_sku or f"TP-{code}".upper() in prod_by_sku:
+            prod = prod_by_sku.get(code) or prod_by_sku.get(f"IMP-{code}".upper()) or prod_by_sku.get(f"TP-{code}".upper())
+        elif name_upper in prod_by_name:
+            prod = prod_by_name[name_upper]
+
+        new_stock = item["quantity"]
+        cost_price = item["cost_price"]
+        sale_price = item["sale_price"]
+
+        if prod:
+            # Produto já existe: reconciliação diária de saldo
+            previous_stock = Decimal(str(prod.current_stock or 0))
+            delta = new_stock - previous_stock
+
+            # Atualiza dados cadastrais e preços
+            prod.external_code = code
+            if barcode:
+                prod.barcode = barcode
+            if item.get("ncm"):
+                prod.ncm = item["ncm"]
+            prod.cost_price = cost_price
+            prod.sale_price = sale_price
+            prod.reference_price = cost_price
+            prod.unit_of_measure = item["unit_of_measure"]
+            prod.current_stock = new_stock
+            if not prod.category_id:
+                prod.category_id = category_id
+
+            action_type = "unchanged"
+
+            # Detecta Venda / Saída Diária
+            if delta < 0:
+                abs_delta = abs(delta)
+                sales_identified_count += 1
+                total_sales_quantity += abs_delta
+                action_type = "sale_detected"
+
+                movement = StockMovement(
+                    organization_id=organization_id,
+                    product_id=prod.id,
+                    movement_type="out_sale",
+                    quantity=abs_delta,
+                    unit_cost=cost_price,
+                    balance_after=new_stock,
+                    reference_doc=f"Sync Inventário - Venda ({inv_date})",
+                    notes=f"Saída/Venda de {abs_delta} {prod.unit_of_measure} apurada na importação da planilha de estoque",
+                    created_by_id=user_id
+                )
+                db.add(movement)
+
+            # Detecta Entrada / Reposição Diária
+            elif delta > 0:
+                entries_identified_count += 1
+                total_entries_quantity += delta
+                action_type = "entry_detected"
+
+                movement = StockMovement(
+                    organization_id=organization_id,
+                    product_id=prod.id,
+                    movement_type="in_purchase_sync",
+                    quantity=delta,
+                    unit_cost=cost_price,
+                    balance_after=new_stock,
+                    reference_doc=f"Sync Inventário - Entrada ({inv_date})",
+                    notes=f"Entrada/Reposição de {delta} {prod.unit_of_measure} apurada na importação da planilha de estoque",
+                    created_by_id=user_id
+                )
+                db.add(movement)
+
+            updated_products_count += 1
+
+            if len(sample_items) < 30:
+                sample_items.append({
+                    "code": code,
+                    "name": item["name"],
+                    "barcode": barcode,
+                    "ncm": item["ncm"],
+                    "previous_stock": previous_stock,
+                    "new_stock": new_stock,
+                    "delta_stock": delta,
+                    "action_type": action_type,
+                    "cost_price": cost_price,
+                    "sale_price": sale_price
+                })
+
+        else:
+            # Produto novo: cadastra e registra abertura de estoque se houver saldo
+            sku_val = f"IMP-{code}"
+            new_prod = Product(
+                organization_id=organization_id,
+                category_id=category_id,
+                sku=sku_val,
+                external_code=code,
+                name=item["name"],
+                barcode=barcode,
+                ncm=item["ncm"],
+                unit_of_measure=item["unit_of_measure"],
+                cost_price=cost_price,
+                sale_price=sale_price,
+                reference_price=cost_price,
+                current_stock=new_stock,
+                min_stock=Decimal("2.00"),
+                is_active=True
+            )
+            db.add(new_prod)
+            db.flush()
+
+            # Registra nos mapas em memória para evitar duplicações na mesma planilha
+            prod_by_external_code[code] = new_prod
+            if barcode:
+                prod_by_barcode[barcode] = new_prod
+            prod_by_sku[sku_val.upper()] = new_prod
+            prod_by_name[name_upper] = new_prod
+
+            if new_stock > 0:
+                movement = StockMovement(
+                    organization_id=organization_id,
+                    product_id=new_prod.id,
+                    movement_type="in_initial_inventory",
+                    quantity=new_stock,
+                    unit_cost=cost_price,
+                    balance_after=new_stock,
+                    reference_doc=f"Carga Inicial de Inventário ({inv_date})",
+                    notes="Saldo de abertura importado da planilha de estoque",
+                    created_by_id=user_id
+                )
+                db.add(movement)
+
+            created_products_count += 1
+
+            if len(sample_items) < 30:
+                sample_items.append({
+                    "code": code,
+                    "name": item["name"],
+                    "barcode": barcode,
+                    "ncm": item["ncm"],
+                    "previous_stock": Decimal("0.0000"),
+                    "new_stock": new_stock,
+                    "delta_stock": new_stock,
+                    "action_type": "created",
+                    "cost_price": cost_price,
+                    "sale_price": sale_price
+                })
+
+    db.commit()
+
+    logger.info(
+        f"✅ [INVENTORY IMPORT] Concluído com sucesso: {len(products_list)} itens lidos, "
+        f"{created_products_count} criados, {updated_products_count} atualizados, "
+        f"{sales_identified_count} vendas identificadas ({total_sales_quantity} un), "
+        f"{entries_identified_count} entradas identificadas ({total_entries_quantity} un)."
+    )
+
+    return {
+        "total_products_read": len(products_list),
+        "created_products_count": created_products_count,
+        "updated_products_count": updated_products_count,
+        "created_categories_count": created_categories_count,
+        "sales_identified_count": sales_identified_count,
+        "total_sales_quantity": total_sales_quantity,
+        "entries_identified_count": entries_identified_count,
+        "total_entries_quantity": total_entries_quantity,
+        "total_cost_value": parsed_data.get("total_cost", Decimal("0.00")),
+        "total_sale_value": parsed_data.get("total_sale", Decimal("0.00")),
+        "inventory_date": inv_date,
+        "message": f"Sincronização de estoque concluída: {len(products_list)} produtos processados com sucesso.",
+        "sample_items": sample_items
+    }
+
+
+# Alias para retrocompatibilidade
+import_toolspharma_inventory = import_inventory_spreadsheet
+

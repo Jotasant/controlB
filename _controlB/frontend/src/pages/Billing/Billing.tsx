@@ -5,10 +5,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   ReceiptText, DollarSign, Plus, RefreshCw,
-  TrendingUp, X, FileText, Building2, Layers
+  TrendingUp, FileText, Building2, Layers
 } from 'lucide-react';
 import { billingService, financeService } from '@/services/api';
 import { Invoice, FiscalDocument } from '@/types';
+import { Modal } from '@/components/Modal/Modal';
 import './Billing.scss';
 
 export const Billing: React.FC = () => {
@@ -290,125 +291,119 @@ export const Billing: React.FC = () => {
         </main>
       </div>
 
-      {/* Modal Emitir Fatura */}
-      {isInvoiceModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-box">
-            <div className="modal-head">
-              <h3>Emitir Fatura Comercial</h3>
-              <button className="btn-close-modal" onClick={() => setIsInvoiceModalOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <form onSubmit={handleCreateInvoice}>
-              <div className="modal-content-body">
-                <div className="form-field">
-                  <label>Razão Social / Cliente *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Farmácia Central Ltda"
-                    value={invoiceForm.customer_name}
-                    onChange={(e) => setInvoiceForm({ ...invoiceForm, customer_name: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-field">
-                  <label>CNPJ / CPF do Cliente</label>
-                  <input
-                    type="text"
-                    placeholder="00.000.000/0001-00"
-                    value={invoiceForm.customer_document}
-                    onChange={(e) => setInvoiceForm({ ...invoiceForm, customer_document: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-field flex-1">
-                    <label>Valor dos Produtos (R$) *</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      required
-                      placeholder="0,00"
-                      value={invoiceForm.total_amount}
-                      onChange={(e) => setInvoiceForm({ ...invoiceForm, total_amount: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-field flex-1">
-                    <label>Impostos (R$)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={invoiceForm.tax_amount}
-                      onChange={(e) => setInvoiceForm({ ...invoiceForm, tax_amount: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <div className="form-field flex-1">
-                    <label>Data de Emissão *</label>
-                    <input
-                      type="date"
-                      required
-                      value={invoiceForm.issue_date}
-                      onChange={(e) => setInvoiceForm({ ...invoiceForm, issue_date: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-field flex-1">
-                    <label>Vencimento 1ª Parcela *</label>
-                    <input
-                      type="date"
-                      required
-                      value={invoiceForm.due_date}
-                      onChange={(e) => setInvoiceForm({ ...invoiceForm, due_date: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-field">
-                  <label>Condição de Parcelamento</label>
-                  <select
-                    value={invoiceForm.installments_count}
-                    onChange={(e) => setInvoiceForm({ ...invoiceForm, installments_count: e.target.value })}
-                  >
-                    <option value="1">1x (À Vista / 30 dias)</option>
-                    <option value="2">2x (30/60 dias)</option>
-                    <option value="3">3x (30/60/90 dias)</option>
-                    <option value="4">4x (30/60/90/120 dias)</option>
-                    <option value="6">6x (Mensal)</option>
-                    <option value="12">12x (Mensal)</option>
-                  </select>
-                </div>
-
-                <div className="checkbox-field">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={invoiceForm.generate_receivables_in_finance}
-                      onChange={(e) => setInvoiceForm({ ...invoiceForm, generate_receivables_in_finance: e.target.checked })}
-                    />
-                    <span>Alimentar automaticamente o Contas a Receber no Financeiro</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="modal-foot">
-                <button type="button" className="btn-cancel" onClick={() => setIsInvoiceModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-submit">
-                  Emitir Fatura
-                </button>
-              </div>
-            </form>
+      {/* Modal Emitir Fatura (com suporte a ESC) */}
+      <Modal
+        isOpen={isInvoiceModalOpen}
+        onClose={() => setIsInvoiceModalOpen(false)}
+        title="Emitir Fatura Comercial"
+        subtitle="Geração de faturamento e obrigações a receber"
+        size="md"
+      >
+        <form onSubmit={handleCreateInvoice} className="wizard-form">
+          <div className="form-group">
+            <label>Razão Social / Cliente *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Farmácia Central Ltda"
+              value={invoiceForm.customer_name}
+              onChange={(e) => setInvoiceForm({ ...invoiceForm, customer_name: e.target.value })}
+            />
           </div>
-        </div>
-      )}
+
+          <div className="form-group">
+            <label>CNPJ / CPF do Cliente</label>
+            <input
+              type="text"
+              placeholder="00.000.000/0001-00"
+              value={invoiceForm.customer_document}
+              onChange={(e) => setInvoiceForm({ ...invoiceForm, customer_document: e.target.value })}
+            />
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Valor dos Produtos (R$) *</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                required
+                placeholder="0,00"
+                value={invoiceForm.total_amount}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, total_amount: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Impostos (R$)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={invoiceForm.tax_amount}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, tax_amount: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Data de Emissão *</label>
+              <input
+                type="date"
+                required
+                value={invoiceForm.issue_date}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, issue_date: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Vencimento 1ª Parcela *</label>
+              <input
+                type="date"
+                required
+                value={invoiceForm.due_date}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, due_date: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Condição de Parcelamento</label>
+            <select
+              value={invoiceForm.installments_count}
+              onChange={(e) => setInvoiceForm({ ...invoiceForm, installments_count: e.target.value })}
+            >
+              <option value="1">1x (À Vista / 30 dias)</option>
+              <option value="2">2x (30/60 dias)</option>
+              <option value="3">3x (30/60/90 dias)</option>
+              <option value="4">4x (30/60/90/120 dias)</option>
+              <option value="6">6x (Mensal)</option>
+              <option value="12">12x (Mensal)</option>
+            </select>
+          </div>
+
+          <div className="checkbox-field" style={{ padding: '0.4rem 0' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={invoiceForm.generate_receivables_in_finance}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, generate_receivables_in_finance: e.target.checked })}
+              />
+              <span>Alimentar automaticamente o Contas a Receber no Financeiro</span>
+            </label>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsInvoiceModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              Emitir Fatura
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };

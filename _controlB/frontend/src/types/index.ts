@@ -122,8 +122,12 @@ export interface Product {
   description: string | null;
   unit_of_measure: string;
   reference_price: number;
+  cost_price?: number;
+  sale_price?: number;
 
-  // Rastreabilidade & Validade
+  // Rastreabilidade, Integrações & Validade
+  external_code?: string | null;
+  toolspharma_code?: string | null;
   brand?: string | null;
   barcode?: string | null;
   ncm?: string | null;
@@ -142,6 +146,38 @@ export interface Product {
   created_at: string;
   updated_at: string;
 }
+
+export interface InventoryImportItemDetail {
+  code: string;
+  name: string;
+  barcode?: string | null;
+  ncm?: string | null;
+  previous_stock: number;
+  new_stock: number;
+  delta_stock: number;
+  action_type: 'created' | 'sale_detected' | 'entry_detected' | 'unchanged';
+  cost_price: number;
+  sale_price: number;
+}
+
+export interface InventoryImportSummaryResponse {
+  total_products_read: number;
+  created_products_count: number;
+  updated_products_count: number;
+  created_categories_count: number;
+  sales_identified_count: number;
+  total_sales_quantity: number;
+  entries_identified_count: number;
+  total_entries_quantity: number;
+  total_cost_value: number;
+  total_sale_value: number;
+  inventory_date?: string | null;
+  message: string;
+  sample_items: InventoryImportItemDetail[];
+}
+
+export type ToolsPharmaImportItemDetail = InventoryImportItemDetail;
+export type ToolsPharmaImportSummaryResponse = InventoryImportSummaryResponse;
 
 
 // ==============================================================================
@@ -665,10 +701,22 @@ export interface Lead {
   updated_at: string;
 }
 
+export interface OpportunityQuoteSummary {
+  id: string;
+  quote_number: string;
+  total_amount: number;
+  net_amount: number;
+  status: string;
+  valid_until: string;
+  created_at: string;
+}
+
 export interface Opportunity {
   id: string;
   organization_id: string;
   lead_id?: string | null;
+  customer_id?: string | null;
+  contact_id?: string | null;
   title: string;
   customer_name: string;
   estimated_amount: number;
@@ -680,6 +728,7 @@ export interface Opportunity {
   created_at: string;
   updated_at: string;
   lead?: Lead | null;
+  quotes?: OpportunityQuoteSummary[];
 }
 
 export interface CustomerInteraction {
@@ -696,8 +745,47 @@ export interface CustomerInteraction {
 }
 
 // ==============================================================================
-// 8. VENDAS & FRENTE DE CAIXA (PDV)
+// 8. VENDAS & FRENTE DE CAIXA (PDV), CLIENTES, GESTÃO COMERCIAL E PÓS-VENDA
 // ==============================================================================
+
+export interface Contact {
+  id: string;
+  organization_id: string;
+  full_name: string;
+  email?: string | null;
+  phone?: string | null;
+  mobile?: string | null;
+  document?: string | null;
+  position?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Customer {
+  id: string;
+  organization_id: string;
+  contact_id?: string | null;
+  person_type: 'PJ' | 'PF';
+  document: string;
+  name: string;
+  trade_name?: string | null;
+  state_registration?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address_street?: string | null;
+  address_number?: string | null;
+  address_neighborhood?: string | null;
+  address_city?: string | null;
+  address_state?: string | null;
+  address_zip_code?: string | null;
+  credit_limit: number;
+  is_active: boolean;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface SalesQuoteItem {
   id: string;
@@ -713,16 +801,19 @@ export interface SalesQuoteItem {
 export interface SalesQuote {
   id: string;
   organization_id: string;
+  customer_id?: string | null;
+  opportunity_id?: string | null;
   quote_number: string;
   customer_name: string;
   customer_document?: string | null;
   customer_email?: string | null;
   customer_phone?: string | null;
+  payment_terms?: string | null;
   total_amount: number;
   discount_amount: number;
   net_amount: number;
   valid_until: string;
-  status: 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+  status: 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'CONVERTED' | 'EXPIRED';
   notes?: string | null;
   created_at: string;
   updated_at: string;
@@ -743,6 +834,9 @@ export interface SalesOrderItem {
 export interface SalesOrder {
   id: string;
   organization_id: string;
+  customer_id?: string | null;
+  sales_quote_id?: string | null;
+  opportunity_id?: string | null;
   order_number: string;
   customer_name: string;
   customer_document?: string | null;
@@ -772,6 +866,7 @@ export interface POSSale {
   id: string;
   organization_id: string;
   pos_session_id?: string | null;
+  customer_id?: string | null;
   customer_name: string;
   customer_document?: string | null;
   total_amount: number;
@@ -781,6 +876,16 @@ export interface POSSale {
   status: string;
   created_at: string;
   items: POSSaleItem[];
+}
+
+export interface POSCashMovement {
+  id: string;
+  organization_id: string;
+  pos_session_id: string;
+  movement_type: 'SANGRIA' | 'SUPRIMENTO';
+  amount: number;
+  reason: string;
+  created_at: string;
 }
 
 export interface POSSession {
@@ -793,6 +898,93 @@ export interface POSSession {
   opened_at: string;
   closed_at?: string | null;
   sales?: POSSale[];
+  cash_movements?: POSCashMovement[];
+}
+
+export interface SalesGoal {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  seller_name?: string | null;
+  month: number;
+  year: number;
+  target_amount: number;
+  commission_percent: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PriceTableItem {
+  id?: string;
+  price_table_id?: string;
+  product_id: string;
+  price: number;
+  discount_percent: number;
+  product?: Product | null;
+}
+
+export interface PriceTable {
+  id: string;
+  organization_id: string;
+  name: string;
+  description?: string | null;
+  is_default: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  items?: PriceTableItem[];
+}
+
+export interface SalesReturnItem {
+  id: string;
+  sales_return_id: string;
+  product_id: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  condition: 'GOOD' | 'DAMAGED';
+  product?: Product | null;
+}
+
+export interface SalesReturn {
+  id: string;
+  organization_id: string;
+  sales_order_id?: string | null;
+  pos_sale_id?: string | null;
+  customer_id?: string | null;
+  customer_name: string;
+  return_type: 'DEVOLUCAO' | 'TROCA' | 'CANCELAMENTO';
+  status: 'PENDING' | 'COMPLETED' | 'REJECTED';
+  total_amount: number;
+  reason: string;
+  restock_items: boolean;
+  created_at: string;
+  items: SalesReturnItem[];
+}
+
+export interface TopProductMetric {
+  product_id: string;
+  product_name: string;
+  total_quantity_sold: number;
+  total_revenue: number;
+}
+
+export interface SellerPerformanceMetric {
+  seller_name: string;
+  total_sales_amount: number;
+  sales_count: number;
+  target_amount: number;
+  achievement_percent: number;
+}
+
+export interface SalesAnalytics {
+  total_revenue: number;
+  total_orders_count: number;
+  total_pos_sales_count: number;
+  average_ticket: number;
+  quote_conversion_rate: number;
+  top_selling_products: TopProductMetric[];
+  seller_performance: SellerPerformanceMetric[];
 }
 
 // ==============================================================================
@@ -827,6 +1019,7 @@ export interface Invoice {
   updated_at: string;
   installments: InvoiceInstallment[];
 }
+
 
 
 
