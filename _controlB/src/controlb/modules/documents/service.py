@@ -136,6 +136,358 @@ def record_event(
     return event
 
 
+def _auto_ensure_native_document(
+    db: Session,
+    organization_id: uuid.UUID,
+    document_type: str,
+    native_id: uuid.UUID,
+) -> BusinessDocument | None:
+    norm_type = document_type.strip().upper()
+    
+    if norm_type == "SALES_QUOTE":
+        from controlb.modules.sales.models import SalesQuote, SalesOrder
+        from controlb.modules.crm.models import Opportunity
+        from controlb.modules.inventory.models import StockReservation
+        quote = db.query(SalesQuote).filter(
+            SalesQuote.id == native_id,
+            SalesQuote.organization_id == organization_id
+        ).first()
+        if quote:
+            doc = ensure_document(
+                db,
+                organization_id=organization_id,
+                document_type="SALES_QUOTE",
+                native_id=quote.id,
+                document_number=quote.quote_number,
+                current_status=quote.status,
+                created_by_id=quote.created_by_id,
+                issued_at=quote.created_at,
+            )
+            record_event(
+                db,
+                organization_id=organization_id,
+                document=doc,
+                event_type="CREATED",
+                new_status=quote.status,
+                created_by_id=quote.created_by_id,
+                idempotency_key=f"sales-quote:{quote.id}:created",
+            )
+            if quote.opportunity_id:
+                opp = db.query(Opportunity).filter(
+                    Opportunity.id == quote.opportunity_id,
+                    Opportunity.organization_id == organization_id
+                ).first()
+                if opp:
+                    opp_doc = ensure_document(
+                        db,
+                        organization_id=organization_id,
+                        document_type="OPPORTUNITY",
+                        native_id=opp.id,
+                        document_number=opp.title,
+                        current_status=opp.stage,
+                        created_by_id=opp.created_by_id,
+                        issued_at=opp.created_at,
+                    )
+                    relate_documents(
+                        db,
+                        organization_id=organization_id,
+                        parent_document=opp_doc,
+                        child_document=doc,
+                        relation_type="GENERATED_QUOTE",
+                    )
+            orders = db.query(SalesOrder).filter(
+                SalesOrder.sales_quote_id == quote.id,
+                SalesOrder.organization_id == organization_id
+            ).all()
+            for ord_item in orders:
+                ord_doc = ensure_document(
+                    db,
+                    organization_id=organization_id,
+                    document_type="SALES_ORDER",
+                    native_id=ord_item.id,
+                    document_number=ord_item.order_number,
+                    current_status=ord_item.status,
+                    created_by_id=ord_item.created_by_id,
+                    issued_at=ord_item.created_at,
+                )
+                relate_documents(
+                    db,
+                    organization_id=organization_id,
+                    parent_document=doc,
+                    child_document=ord_doc,
+                    relation_type="CONVERTED_TO",
+                )
+                reservations = db.query(StockReservation).filter(
+                    StockReservation.sales_order_id == ord_item.id,
+                    StockReservation.organization_id == organization_id
+                ).all()
+                for res in reservations:
+                    res_doc = ensure_document(
+                        db,
+                        organization_id=organization_id,
+                        document_type="STOCK_RESERVATION",
+                        native_id=res.id,
+                        document_number=f"RES-{str(res.id)[:8].upper()}",
+                        current_status=res.status,
+                        created_by_id=res.created_by_id,
+                        issued_at=res.created_at,
+                    )
+                    relate_documents(
+                        db,
+                        organization_id=organization_id,
+                        parent_document=ord_doc,
+                        child_document=res_doc,
+                        relation_type="RESERVED_STOCK",
+                    )
+            return doc
+
+    elif norm_type == "SALES_ORDER":
+        from controlb.modules.sales.models import SalesOrder, SalesQuote
+        from controlb.modules.inventory.models import StockReservation
+        order = db.query(SalesOrder).filter(
+            SalesOrder.id == native_id,
+            SalesOrder.organization_id == organization_id
+        ).first()
+        if order:
+            doc = ensure_document(
+                db,
+                organization_id=organization_id,
+                document_type="SALES_ORDER",
+                native_id=order.id,
+                document_number=order.order_number,
+                current_status=order.status,
+                created_by_id=order.created_by_id,
+                issued_at=order.created_at,
+            )
+            record_event(
+                db,
+                organization_id=organization_id,
+                document=doc,
+                event_type="CREATED",
+                new_status=order.status,
+                created_by_id=order.created_by_id,
+                idempotency_key=f"sales-order:{order.id}:created",
+            )
+            if order.sales_quote_id:
+                quote = db.query(SalesQuote).filter(
+                    SalesQuote.id == order.sales_quote_id,
+                    SalesQuote.organization_id == organization_id
+                ).first()
+                if quote:
+                    q_doc = ensure_document(
+                        db,
+                        organization_id=organization_id,
+                        document_type="SALES_QUOTE",
+                        native_id=quote.id,
+                        document_number=quote.quote_number,
+                        current_status=quote.status,
+                        created_by_id=quote.created_by_id,
+                        issued_at=quote.created_at,
+                    )
+                    relate_documents(
+                        db,
+                        organization_id=organization_id,
+                        parent_document=q_doc,
+                        child_document=doc,
+                        relation_type="CONVERTED_TO",
+                    )
+            reservations = db.query(StockReservation).filter(
+                StockReservation.sales_order_id == order.id,
+                StockReservation.organization_id == organization_id
+            ).all()
+            for res in reservations:
+                res_doc = ensure_document(
+                    db,
+                    organization_id=organization_id,
+                    document_type="STOCK_RESERVATION",
+                    native_id=res.id,
+                    document_number=f"RES-{str(res.id)[:8].upper()}",
+                    current_status=res.status,
+                    created_by_id=res.created_by_id,
+                    issued_at=res.created_at,
+                )
+            invoices = db.query(Invoice).filter(
+                Invoice.sales_order_id == order.id,
+                Invoice.organization_id == organization_id
+            ).all()
+            for inv in invoices:
+                inv_doc = ensure_document(
+                    db,
+                    organization_id=organization_id,
+                    document_type="INVOICE",
+                    native_id=inv.id,
+                    document_number=inv.invoice_number,
+                    current_status=inv.status,
+                    created_by_id=inv.created_by_id,
+                    issued_at=inv.created_at,
+                )
+                relate_documents(
+                    db,
+                    organization_id=organization_id,
+                    parent_document=doc,
+                    child_document=inv_doc,
+                    relation_type="INVOICED_BY",
+                )
+            return doc
+
+    elif norm_type == "INVOICE":
+        from controlb.modules.billing.models import Invoice
+        from controlb.modules.sales.models import SalesOrder
+        inv = db.query(Invoice).filter(
+            Invoice.id == native_id,
+            Invoice.organization_id == organization_id
+        ).first()
+        if inv:
+            doc = ensure_document(
+                db,
+                organization_id=organization_id,
+                document_type="INVOICE",
+                native_id=inv.id,
+                document_number=inv.invoice_number,
+                current_status=inv.status,
+                created_by_id=inv.created_by_id,
+                issued_at=inv.created_at,
+            )
+            record_event(
+                db,
+                organization_id=organization_id,
+                document=doc,
+                event_type="CREATED",
+                new_status=inv.status,
+                created_by_id=inv.created_by_id,
+                idempotency_key=f"invoice:{inv.id}:created",
+            )
+            if inv.sales_order_id:
+                order = db.query(SalesOrder).filter(
+                    SalesOrder.id == inv.sales_order_id,
+                    SalesOrder.organization_id == organization_id
+                ).first()
+                if order:
+                    ord_doc = ensure_document(
+                        db,
+                        organization_id=organization_id,
+                        document_type="SALES_ORDER",
+                        native_id=order.id,
+                        document_number=order.order_number,
+                        current_status=order.status,
+                        created_by_id=order.created_by_id,
+                        issued_at=order.created_at,
+                    )
+                    relate_documents(
+                        db,
+                        organization_id=organization_id,
+                        parent_document=ord_doc,
+                        child_document=doc,
+                        relation_type="INVOICED_BY",
+                    )
+            return doc
+
+    elif norm_type == "STOCK_RESERVATION":
+        from controlb.modules.inventory.models import StockReservation
+        from controlb.modules.sales.models import SalesOrder
+        res = db.query(StockReservation).filter(
+            StockReservation.id == native_id,
+            StockReservation.organization_id == organization_id
+        ).first()
+        if res:
+            doc = ensure_document(
+                db,
+                organization_id=organization_id,
+                document_type="STOCK_RESERVATION",
+                native_id=res.id,
+                document_number=f"RES-{str(res.id)[:8].upper()}",
+                current_status=res.status,
+                created_by_id=res.created_by_id,
+                issued_at=res.created_at,
+            )
+            record_event(
+                db,
+                organization_id=organization_id,
+                document=doc,
+                event_type="CREATED",
+                new_status=res.status,
+                created_by_id=res.created_by_id,
+                idempotency_key=f"stock-reservation:{res.id}:created",
+            )
+            if res.sales_order_id:
+                order = db.query(SalesOrder).filter(
+                    SalesOrder.id == res.sales_order_id,
+                    SalesOrder.organization_id == organization_id
+                ).first()
+                if order:
+                    ord_doc = ensure_document(
+                        db,
+                        organization_id=organization_id,
+                        document_type="SALES_ORDER",
+                        native_id=order.id,
+                        document_number=order.order_number,
+                        current_status=order.status,
+                        created_by_id=order.created_by_id,
+                        issued_at=order.created_at,
+                    )
+                    relate_documents(
+                        db,
+                        organization_id=organization_id,
+                        parent_document=ord_doc,
+                        child_document=doc,
+                        relation_type="RESERVED_STOCK",
+                    )
+            return doc
+
+    elif norm_type == "OPPORTUNITY":
+        from controlb.modules.crm.models import Opportunity
+        from controlb.modules.sales.models import SalesQuote
+        opp = db.query(Opportunity).filter(
+            Opportunity.id == native_id,
+            Opportunity.organization_id == organization_id
+        ).first()
+        if opp:
+            doc = ensure_document(
+                db,
+                organization_id=organization_id,
+                document_type="OPPORTUNITY",
+                native_id=opp.id,
+                document_number=opp.title,
+                current_status=opp.stage,
+                created_by_id=opp.created_by_id,
+                issued_at=opp.created_at,
+            )
+            record_event(
+                db,
+                organization_id=organization_id,
+                document=doc,
+                event_type="CREATED",
+                new_status=opp.stage,
+                created_by_id=opp.created_by_id,
+                idempotency_key=f"opportunity:{opp.id}:created",
+            )
+            quotes = db.query(SalesQuote).filter(
+                SalesQuote.opportunity_id == opp.id,
+                SalesQuote.organization_id == organization_id
+            ).all()
+            for q in quotes:
+                q_doc = ensure_document(
+                    db,
+                    organization_id=organization_id,
+                    document_type="SALES_QUOTE",
+                    native_id=q.id,
+                    document_number=q.quote_number,
+                    current_status=q.status,
+                    created_by_id=q.created_by_id,
+                    issued_at=q.created_at,
+                )
+                relate_documents(
+                    db,
+                    organization_id=organization_id,
+                    parent_document=doc,
+                    child_document=q_doc,
+                    relation_type="GENERATED_QUOTE",
+                )
+            return doc
+
+    return None
+
+
 def get_document_chain(
     db: Session,
     *,
@@ -148,6 +500,9 @@ def get_document_chain(
     root = repository.get_document_by_native(
         db, organization_id, document_type.strip().upper(), native_id
     )
+    if not root:
+        root = _auto_ensure_native_document(db, organization_id, document_type, native_id)
+
     if not root:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

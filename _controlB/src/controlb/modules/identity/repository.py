@@ -273,18 +273,37 @@ from controlb.modules.identity.models import Contact
 from controlb.modules.identity.schemas import ContactCreate, ContactUpdate
 
 
-def list_contacts(db: Session, organization_id: uuid.UUID, search: str | None = None) -> list[Contact]:
-    """Lista os contatos de uma organização, com filtro de busca opcional."""
+def list_contacts(
+    db: Session,
+    organization_id: uuid.UUID,
+    search: str | None = None,
+    is_customer: bool | None = None,
+    is_supplier: bool | None = None,
+    is_carrier: bool | None = None,
+    is_active: bool | None = None,
+) -> list[Contact]:
+    """Lista os contatos de uma organização com filtros avançados de papéis e busca."""
     stmt = select(Contact).where(Contact.organization_id == organization_id)
+    if is_customer is not None:
+        stmt = stmt.where(Contact.is_customer == is_customer)
+    if is_supplier is not None:
+        stmt = stmt.where(Contact.is_supplier == is_supplier)
+    if is_carrier is not None:
+        stmt = stmt.where(Contact.is_carrier == is_carrier)
+    if is_active is not None:
+        stmt = stmt.where(Contact.is_active == is_active)
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where(
+            (Contact.name.ilike(term)) |
+            (Contact.trade_name.ilike(term)) |
             (Contact.full_name.ilike(term)) |
             (Contact.email.ilike(term)) |
             (Contact.document.ilike(term)) |
-            (Contact.phone.ilike(term))
+            (Contact.phone.ilike(term)) |
+            (Contact.address_city.ilike(term))
         )
-    stmt = stmt.order_by(Contact.full_name)
+    stmt = stmt.order_by(Contact.name)
     return db.execute(stmt).scalars().all()
 
 
@@ -297,18 +316,42 @@ def get_contact_by_id(db: Session, contact_id: uuid.UUID, organization_id: uuid.
     return db.execute(stmt).scalar_one_or_none()
 
 
+def get_contact_by_document(db: Session, document: str, organization_id: uuid.UUID) -> Contact | None:
+    """Busca um contato pelo documento (CNPJ/CPF) dentro da organização."""
+    stmt = select(Contact).where(
+        Contact.document == document.strip(),
+        Contact.organization_id == organization_id
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
 def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate) -> Contact:
-    """Cria e persiste um novo contato."""
+    """Cria e persiste um novo contato/parceiro unificado."""
     contact = Contact(
         organization_id=organization_id,
-        full_name=data.full_name,
-        email=data.email,
-        phone=data.phone,
-        mobile=data.mobile,
-        document=data.document,
-        position=data.position,
-        notes=data.notes,
-        is_active=data.is_active
+        person_type=data.person_type or "PJ",
+        document=data.document.strip() if data.document else None,
+        name=data.name.strip(),
+        trade_name=data.trade_name.strip() if data.trade_name else None,
+        state_registration=data.state_registration.strip() if data.state_registration else None,
+        full_name=data.full_name.strip() if data.full_name else None,
+        position=data.position.strip() if data.position else None,
+        email=data.email.strip() if data.email else None,
+        phone=data.phone.strip() if data.phone else None,
+        mobile=data.mobile.strip() if data.mobile else None,
+        address_street=data.address_street,
+        address_number=data.address_number,
+        address_neighborhood=data.address_neighborhood,
+        address_city=data.address_city,
+        address_state=data.address_state,
+        address_zip_code=data.address_zip_code,
+        is_customer=data.is_customer,
+        is_supplier=data.is_supplier,
+        is_carrier=data.is_carrier,
+        credit_limit=data.credit_limit,
+        origin_module=data.origin_module or "IDENTITY",
+        is_active=data.is_active,
+        notes=data.notes
     )
     db.add(contact)
     db.commit()
@@ -317,23 +360,51 @@ def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate)
 
 
 def update_contact(db: Session, contact: Contact, data: ContactUpdate) -> Contact:
-    """Atualiza dados cadastrais de um contato."""
-    if data.full_name is not None:
-        contact.full_name = data.full_name
-    if data.email is not None:
-        contact.email = data.email
-    if data.phone is not None:
-        contact.phone = data.phone
-    if data.mobile is not None:
-        contact.mobile = data.mobile
+    """Atualiza dados cadastrais e perfis de um contato."""
+    if data.person_type is not None:
+        contact.person_type = data.person_type
     if data.document is not None:
-        contact.document = data.document
+        contact.document = data.document.strip() if data.document else None
+    if data.name is not None:
+        contact.name = data.name.strip()
+    if data.trade_name is not None:
+        contact.trade_name = data.trade_name.strip() if data.trade_name else None
+    if data.state_registration is not None:
+        contact.state_registration = data.state_registration.strip() if data.state_registration else None
+    if data.full_name is not None:
+        contact.full_name = data.full_name.strip() if data.full_name else None
     if data.position is not None:
-        contact.position = data.position
-    if data.notes is not None:
-        contact.notes = data.notes
+        contact.position = data.position.strip() if data.position else None
+    if data.email is not None:
+        contact.email = data.email.strip() if data.email else None
+    if data.phone is not None:
+        contact.phone = data.phone.strip() if data.phone else None
+    if data.mobile is not None:
+        contact.mobile = data.mobile.strip() if data.mobile else None
+    if data.address_street is not None:
+        contact.address_street = data.address_street
+    if data.address_number is not None:
+        contact.address_number = data.address_number
+    if data.address_neighborhood is not None:
+        contact.address_neighborhood = data.address_neighborhood
+    if data.address_city is not None:
+        contact.address_city = data.address_city
+    if data.address_state is not None:
+        contact.address_state = data.address_state
+    if data.address_zip_code is not None:
+        contact.address_zip_code = data.address_zip_code
+    if data.is_customer is not None:
+        contact.is_customer = data.is_customer
+    if data.is_supplier is not None:
+        contact.is_supplier = data.is_supplier
+    if data.is_carrier is not None:
+        contact.is_carrier = data.is_carrier
+    if data.credit_limit is not None:
+        contact.credit_limit = data.credit_limit
     if data.is_active is not None:
         contact.is_active = data.is_active
+    if data.notes is not None:
+        contact.notes = data.notes
 
     db.commit()
     db.refresh(contact)

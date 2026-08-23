@@ -70,6 +70,31 @@ def update_sales_quote_status(
     )
 
 
+@router.post("/quotes/{quote_id}/cancel", response_model=schemas.SalesQuoteResponse, summary="Cancelar Cotação com Justificativa")
+def cancel_sales_quote(
+    quote_id: uuid.UUID,
+    payload: schemas.SalesQuoteCancelRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:manage"))
+):
+    return service.cancel_sales_quote(
+        db,
+        quote_id,
+        current_user.organization_id,
+        payload.reason,
+        current_user,
+    )
+
+
+@router.post("/quotes/{quote_id}/convert", response_model=schemas.SalesOrderResponse, summary="Converter Orçamento em Pedido de Venda")
+def convert_quote_to_order(
+    quote_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:manage"))
+):
+    return service.convert_quote_to_order(db, quote_id, current_user.organization_id, current_user)
+
+
 @router.delete("/quotes/{quote_id}", status_code=status.HTTP_200_OK, summary="Cancelar Orçamento")
 def delete_sales_quote(
     quote_id: uuid.UUID,
@@ -109,13 +134,33 @@ def create_sales_order(
     return service.create_sales_order(db, current_user.organization_id, current_user, payload)
 
 
-@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Cancelar Pedido de Venda")
-def delete_sales_order(
+@router.patch("/orders/{order_id}/status", response_model=schemas.SalesOrderResponse, summary="Atualizar Status do Pedido de Venda")
+def update_sales_order_status(
+    order_id: uuid.UUID,
+    payload: schemas.SalesOrderUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:manage"))
+):
+    return service.update_sales_order_status(db, order_id, current_user.organization_id, payload, current_user)
+
+
+@router.post("/orders/{order_id}/request-billing", response_model=schemas.SalesOrderResponse, summary="Solicitar Faturamento do Pedido")
+def request_order_billing(
     order_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.delete_sales_order(db, order_id, current_user.organization_id, current_user)
+    return service.request_order_billing(db, order_id, current_user.organization_id, current_user)
+
+
+@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Cancelar Pedido de Venda")
+def delete_sales_order(
+    order_id: uuid.UUID,
+    reason: str | None = Query(None, description="Motivo do cancelamento"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:manage"))
+):
+    return service.delete_sales_order(db, order_id, current_user.organization_id, current_user, reason=reason)
 
 
 

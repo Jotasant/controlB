@@ -58,6 +58,7 @@ class Customer(Base):
     address_zip_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     credit_limit: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    origin_module: Mapped[str] = mapped_column(String(50), default="SALES", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -108,7 +109,8 @@ class SalesQuote(Base):
     
     payment_terms: Mapped[str | None] = mapped_column(String(100), nullable=True)
     valid_until: Mapped[date] = mapped_column(Date, nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="DRAFT", index=True)  # DRAFT, SENT, APPROVED, REJECTED, CONVERTED, EXPIRED
+    status: Mapped[str] = mapped_column(String(50), default="DRAFT", index=True)  # DRAFT, SENT, APPROVED, REJECTED, CONVERTED, EXPIRED, CANCELLED
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
@@ -186,6 +188,7 @@ class SalesOrder(Base):
     delivery_status: Mapped[str] = mapped_column(String(50), default="PENDING")  # PENDING, DISPATCHED, DELIVERED
     billing_status: Mapped[str] = mapped_column(String(50), default="PENDING", index=True)  # PENDING, INVOICED
     status: Mapped[str] = mapped_column(String(50), default="CONFIRMED", index=True)  # DRAFT, CONFIRMED, COMPLETED, CANCELLED
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)

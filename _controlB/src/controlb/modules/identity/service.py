@@ -270,9 +270,25 @@ def delete_role(db: Session, role_id: uuid.UUID):
 from controlb.modules.identity.schemas import ContactCreate, ContactUpdate
 
 
-def list_contacts(db: Session, organization_id: uuid.UUID, search: str | None = None):
-    """Lista contatos institucionais da organização com filtro opcional."""
-    return repository.list_contacts(db, organization_id, search)
+def list_contacts(
+    db: Session,
+    organization_id: uuid.UUID,
+    search: str | None = None,
+    is_customer: bool | None = None,
+    is_supplier: bool | None = None,
+    is_carrier: bool | None = None,
+    is_active: bool | None = None,
+):
+    """Lista contatos/parceiros da organização com filtros de papéis (Odoo res.partner)."""
+    return repository.list_contacts(
+        db,
+        organization_id,
+        search=search,
+        is_customer=is_customer,
+        is_supplier=is_supplier,
+        is_carrier=is_carrier,
+        is_active=is_active
+    )
 
 
 def get_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID):
@@ -287,18 +303,38 @@ def get_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID):
 
 
 def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate):
-    """Cria um novo contato na organização."""
-    if not data.full_name or not data.full_name.strip():
+    """Cria um novo contato/parceiro unificado na organização."""
+    name = (data.name or data.full_name or "").strip()
+    if not name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="O nome completo do contato é obrigatório."
+            detail="A Razão Social ou Nome do contato é obrigatório."
         )
+    data.name = name
+    if not data.full_name:
+        data.full_name = name
+
+    if data.document and data.document.strip():
+        existing = repository.get_contact_by_document(db, data.document, organization_id)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Já existe um contato cadastrado com o documento '{data.document}' ({existing.name})."
+            )
+
     return repository.create_contact(db, organization_id, data)
 
 
 def update_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID, data: ContactUpdate):
     """Atualiza dados cadastrais de um contato."""
     contact = get_contact(db, contact_id, organization_id)
+    if data.document and data.document.strip():
+        existing = repository.get_contact_by_document(db, data.document, organization_id)
+        if existing and existing.id != contact.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Já existe outro contato cadastrado com o documento '{data.document}' ({existing.name})."
+            )
     return repository.update_contact(db, contact, data)
 
 

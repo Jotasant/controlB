@@ -28,6 +28,7 @@ class CustomerBase(BaseModel):
     address_zip_code: str | None = None
     credit_limit: Decimal = Field(default=Decimal("0.00"), ge=0)
     contact_id: uuid.UUID | None = None
+    origin_module: str = "SALES"
     is_active: bool = True
     notes: str | None = None
 
@@ -52,6 +53,7 @@ class CustomerUpdate(BaseModel):
     address_zip_code: str | None = None
     credit_limit: Decimal | None = None
     contact_id: uuid.UUID | None = None
+    origin_module: str | None = None
     is_active: bool | None = None
     notes: str | None = None
 
@@ -118,6 +120,10 @@ class SalesQuoteUpdate(BaseModel):
     items: list[SalesQuoteItemCreate] | None = None
 
 
+class SalesQuoteCancelRequest(BaseModel):
+    reason: str = Field(..., min_length=2, max_length=1000, description="Motivo do cancelamento / desistência")
+
+
 class SalesQuoteResponse(SalesQuoteBase):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -126,6 +132,7 @@ class SalesQuoteResponse(SalesQuoteBase):
     discount_amount: Decimal
     net_amount: Decimal
     status: str
+    cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     items: list[SalesQuoteItemResponse] = []
@@ -171,6 +178,18 @@ class SalesOrderCreate(SalesOrderBase):
     items: list[SalesOrderItemCreate]
 
 
+class SalesOrderUpdate(BaseModel):
+    customer_id: uuid.UUID | None = None
+    customer_name: str | None = None
+    customer_document: str | None = None
+    payment_terms: str | None = None
+    delivery_status: str | None = None
+    billing_status: str | None = None
+    status: str | None = None
+    cancellation_reason: str | None = None
+    notes: str | None = None
+
+
 class SalesOrderResponse(SalesOrderBase):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -180,6 +199,7 @@ class SalesOrderResponse(SalesOrderBase):
     net_amount: Decimal
     billing_status: str
     status: str
+    cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     items: list[SalesOrderItemResponse] = []

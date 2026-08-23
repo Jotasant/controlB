@@ -366,14 +366,36 @@ export const identityService = {
     return response.data;
   },
 
-  async getContacts(searchOrForce?: string | boolean, forceRefresh = false): Promise<import('@/types').Contact[]> {
-    const search = typeof searchOrForce === 'string' ? searchOrForce : undefined;
-    const force = typeof searchOrForce === 'boolean' ? searchOrForce : forceRefresh;
-    const key = `identity:contacts:${search || 'all'}`;
+  async getContacts(
+    options?: { search?: string; is_customer?: boolean; is_supplier?: boolean; is_carrier?: boolean } | string | boolean,
+    forceRefresh = false
+  ): Promise<import('@/types').Contact[]> {
+    let search: string | undefined;
+    let is_customer: boolean | undefined;
+    let is_supplier: boolean | undefined;
+    let is_carrier: boolean | undefined;
+    let force = forceRefresh;
+
+    if (typeof options === 'string') {
+      search = options;
+    } else if (typeof options === 'boolean') {
+      force = options;
+    } else if (options && typeof options === 'object') {
+      search = options.search;
+      is_customer = options.is_customer;
+      is_supplier = options.is_supplier;
+      is_carrier = options.is_carrier;
+    }
+
+    const key = `identity:contacts:${search || 'all'}:${is_customer ?? 'all'}:${is_supplier ?? 'all'}:${is_carrier ?? 'all'}`;
     return cacheManager.fetchWithCache(
       key,
       async () => {
-        const params = search ? { search } : {};
+        const params: Record<string, any> = {};
+        if (search) params.search = search;
+        if (is_customer !== undefined) params.is_customer = is_customer;
+        if (is_supplier !== undefined) params.is_supplier = is_supplier;
+        if (is_carrier !== undefined) params.is_carrier = is_carrier;
         const response = await api.get<import('@/types').Contact[]>('/identity/contacts', { params });
         return Array.isArray(response.data) ? response.data : [];
       },
@@ -1511,6 +1533,24 @@ export const salesService = {
     return response.data;
   },
 
+  async cancelQuote(quoteId: string, reason: string): Promise<import('@/types').SalesQuote> {
+    const response = await api.post<import('@/types').SalesQuote>(`/sales/quotes/${quoteId}/cancel`, { reason });
+    cacheManager.invalidate('sales:quotes');
+    cacheManager.invalidate(`sales:quote:${quoteId}`);
+    cacheManager.invalidate('crm:opportunities');
+    cacheManager.invalidate(`documents:chain:SALES_QUOTE:${quoteId}`);
+    return response.data;
+  },
+
+  async deleteQuote(quoteId: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/sales/quotes/${quoteId}`);
+    cacheManager.invalidate('sales:quotes');
+    cacheManager.invalidate(`sales:quote:${quoteId}`);
+    cacheManager.invalidate('crm:opportunities');
+    cacheManager.invalidate(`documents:chain:SALES_QUOTE:${quoteId}`);
+    return response.data;
+  },
+
   async getOrders(forceRefresh = false): Promise<import('@/types').SalesOrder[]> {
     return cacheManager.fetchWithCache(
       'sales:orders',
@@ -1557,6 +1597,40 @@ export const salesService = {
     cacheManager.invalidate('crm:opportunities');
     cacheManager.invalidate('sales:quotes');
     cacheManager.invalidate('inventory');
+    cacheManager.invalidate('sales:analytics');
+    return response.data;
+  },
+
+  async updateOrderStatus(orderId: string, data: Partial<import('@/types').SalesOrder>): Promise<import('@/types').SalesOrder> {
+    const response = await api.patch<import('@/types').SalesOrder>(`/sales/orders/${orderId}/status`, data);
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate(`sales:order:${orderId}`);
+    cacheManager.invalidate('sales:analytics');
+    cacheManager.invalidate(`documents:chain:SALES_ORDER:${orderId}`);
+    return response.data;
+  },
+
+  async requestOrderBilling(orderId: string): Promise<import('@/types').SalesOrder> {
+    const response = await api.post<import('@/types').SalesOrder>(`/sales/orders/${orderId}/request-billing`);
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate(`sales:order:${orderId}`);
+    cacheManager.invalidate('billing:invoices');
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('sales:analytics');
+    cacheManager.invalidate(`documents:chain:SALES_ORDER:${orderId}`);
+    return response.data;
+  },
+
+  async deleteOrder(orderId: string, reason?: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/sales/orders/${orderId}`, {
+      params: reason ? { reason } : undefined,
+    });
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate(`sales:order:${orderId}`);
+    cacheManager.invalidate('inventory');
+    cacheManager.invalidate('sales:analytics');
+    cacheManager.invalidate(`documents:chain:SALES_ORDER:${orderId}`);
     return response.data;
   },
 
@@ -1704,20 +1778,6 @@ export const salesService = {
     return response.data;
   },
 
-  // --- EXCLUSÃO DE ORÇAMENTOS E PEDIDOS ---
-  async deleteQuote(quoteId: string): Promise<{ message: string }> {
-    const response = await api.delete<{ message: string }>(`/sales/quotes/${quoteId}`);
-    cacheManager.invalidate('sales:quotes');
-    cacheManager.invalidate('sales:analytics');
-    return response.data;
-  },
-
-  async deleteOrder(orderId: string): Promise<{ message: string }> {
-    const response = await api.delete<{ message: string }>(`/sales/orders/${orderId}`);
-    cacheManager.invalidate('sales:orders');
-    cacheManager.invalidate('sales:analytics');
-    return response.data;
-  },
 
   // --- METAS COMERCIAIS ---
   async getSalesGoals(year?: number, forceRefresh = false): Promise<import('@/types').SalesGoal[]> {

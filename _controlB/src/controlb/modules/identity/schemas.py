@@ -8,6 +8,7 @@ Garante tipagem estrita, prevenção de vazamento de senhas e serialização seg
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, EmailStr
 
 
@@ -187,33 +188,96 @@ class BulkDeleteResponse(BaseModel):
 
 
 # ==============================================================================
-# 6. ESQUEMAS DE CONTATO INSTITUCIONAL (Contact)
+# 6. ESQUEMAS DE CONTATO / PARCEIRO UNIFICADO (Contact - Padrão Odoo res.partner)
 # ==============================================================================
 
 class ContactBase(BaseModel):
-    full_name: str
+    person_type: str = "PJ"
+    document: str | None = None
+    name: str | None = None
+    trade_name: str | None = None
+    state_registration: str | None = None
+
+    full_name: str | None = None
+    position: str | None = None
     email: str | None = None
     phone: str | None = None
     mobile: str | None = None
-    document: str | None = None
-    position: str | None = None
-    notes: str | None = None
+
+    address_street: str | None = None
+    address_number: str | None = None
+    address_neighborhood: str | None = None
+    address_city: str | None = None
+    address_state: str | None = None
+    address_zip_code: str | None = None
+
+    is_customer: bool = False
+    is_supplier: bool = False
+    is_carrier: bool = False
+
+    credit_limit: Decimal = Decimal("0.00")
+    origin_module: str = "IDENTITY"
     is_active: bool = True
+    notes: str | None = None
 
 
-class ContactCreate(ContactBase):
-    pass
+class ContactCreate(BaseModel):
+    person_type: str = "PJ"
+    document: str | None = None
+    name: str | None = None
+    trade_name: str | None = None
+    state_registration: str | None = None
+
+    full_name: str | None = None
+    position: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    mobile: str | None = None
+
+    address_street: str | None = None
+    address_number: str | None = None
+    address_neighborhood: str | None = None
+    address_city: str | None = None
+    address_state: str | None = None
+    address_zip_code: str | None = None
+
+    is_customer: bool = False
+    is_supplier: bool = False
+    is_carrier: bool = False
+
+    credit_limit: Decimal = Decimal("0.00")
+    origin_module: str = "IDENTITY"
+    is_active: bool = True
+    notes: str | None = None
 
 
 class ContactUpdate(BaseModel):
+    person_type: str | None = None
+    document: str | None = None
+    name: str | None = None
+    trade_name: str | None = None
+    state_registration: str | None = None
+
     full_name: str | None = None
+    position: str | None = None
     email: str | None = None
     phone: str | None = None
     mobile: str | None = None
-    document: str | None = None
-    position: str | None = None
-    notes: str | None = None
+
+    address_street: str | None = None
+    address_number: str | None = None
+    address_neighborhood: str | None = None
+    address_city: str | None = None
+    address_state: str | None = None
+    address_zip_code: str | None = None
+
+    is_customer: bool | None = None
+    is_supplier: bool | None = None
+    is_carrier: bool | None = None
+
+    credit_limit: Decimal | None = None
     is_active: bool | None = None
+    notes: str | None = None
 
 
 class ContactResponse(ContactBase):

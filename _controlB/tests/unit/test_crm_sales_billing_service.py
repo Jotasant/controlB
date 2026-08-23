@@ -998,3 +998,366 @@ def test_crm_lead_conversion_to_customer_and_opportunity_quote_flow(db: Session,
     db.refresh(opp)
     assert opp.stage == "WON"
 
+
+def test_order_status_update_and_request_billing_lifecycle(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product
+):
+    # 1. Criar cliente
+    customer = sales_service.create_customer(
+        db,
+        mock_org.id,
+        sales_schemas.CustomerCreate(
+            name="Cliente Faturamento Teste",
+            person_type="PJ",
+            document="11223344000199",
+            credit_limit=Decimal("50000.00")
+        )
+    )
+
+    # 2. Criar pedido direto
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_id=customer.id,
+            customer_name=customer.name,
+            payment_terms="30 DDL",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("10"),
+                    unit_price=Decimal("50.00"),
+                    discount_amount=Decimal("0.00")
+                )
+            ]
+        )
+    )
+    assert order.status == "CONFIRMED"
+    assert order.delivery_status == "PENDING"
+    assert order.billing_status == "PENDING"
+    assert order.net_amount == Decimal("500.00")
+
+    # 3. Atualizar status de entrega para DISPATCHED
+    updated_order = sales_service.update_sales_order_status(
+        db,
+        order.id,
+        mock_org.id,
+        sales_schemas.SalesOrderUpdate(delivery_status="DISPATCHED"),
+        mock_user
+    )
+    assert updated_order.delivery_status == "DISPATCHED"
+
+    # 4. Solicitar faturamento do pedido
+    billed_order = sales_service.request_order_billing(
+        db,
+        order.id,
+        mock_org.id,
+        mock_user
+    )
+    assert billed_order.billing_status == "INVOICED"
+
+    # 5. Validação da cadeia documental
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="SALES_ORDER",
+        native_id=order.id
+    )
+    assert chain.root_document_id is not None
+    assert len(chain.documents) >= 2
+    assert any(d.document_type == "INVOICE" for d in chain.documents)
+
+
+def test_opportunity_quote_synchronous_chain_and_filtering(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product
+):
+    # 1. Cria cliente
+    customer = sales_service.create_customer(
+        db,
+        mock_org.id,
+        sales_schemas.CustomerCreate(
+            name="Cliente Rastreabilidade Teste",
+            person_type="PJ",
+            document="99887766000155"
+        )
+    )
+
+    # 2. Cria Oportunidade no CRM
+    opp1 = crm_service.create_opportunity(
+        db,
+        mock_org.id,
+        crm_schemas.OpportunityCreate(
+            customer_id=customer.id,
+            title="Projeto Expansão TI",
+            customer_name=customer.name,
+            estimated_amount=Decimal("15000.00"),
+            stage="QUALIFICATION"
+        )
+    )
+    opp2 = crm_service.create_opportunity(
+        db,
+        mock_org.id,
+        crm_schemas.OpportunityCreate(
+            customer_id=customer.id,
+            title="Projeto Reforma Elétrica",
+            customer_name=customer.name,
+            estimated_amount=Decimal("20000.00"),
+            stage="QUALIFICATION"
+        )
+    )
+
+    # 3. Cria Cotação vinculada à Oportunidade 1
+    quote1 = sales_service.create_sales_quote(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesQuoteCreate(
+            customer_id=customer.id,
+            opportunity_id=opp1.id,
+            customer_name=customer.name,
+            items=[
+                sales_schemas.SalesQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("10"),
+                    unit_price=Decimal("100.00")
+                )
+            ]
+        )
+    )
+    assert quote1.opportunity_id == opp1.id
+
+    # 4. Verifica se a oportunidade 1 avançou para PROPOSAL automaticamente
+    db.refresh(opp1)
+    assert opp1.stage == "PROPOSAL"
+
+    # 5. Verifica se o grafo documental amarrou OPPORTUNITY -> SALES_QUOTE
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="OPPORTUNITY",
+        native_id=opp1.id
+    )
+    assert chain.root_document_id is not None
+    assert len(chain.documents) == 2
+    types = [d.document_type for d in chain.documents]
+    assert "OPPORTUNITY" in types
+    assert "SALES_QUOTE" in types
+    assert any(r.relation_type == "GENERATED_QUOTE" for r in chain.relations)
+
+    # 6. Cria Cotação vinculada à Oportunidade 2
+    quote2 = sales_service.create_sales_quote(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesQuoteCreate(
+            customer_id=customer.id,
+            opportunity_id=opp2.id,
+            customer_name=customer.name,
+            items=[
+                sales_schemas.SalesQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("5"),
+                    unit_price=Decimal("200.00")
+                )
+            ]
+        )
+    )
+
+    # 7. Valida que list_opportunity_quotations filtra ESTRITAMENTE pela oportunidade informada
+    quotes_opp1 = crm_service.list_opportunity_quotations(db, mock_org.id, opp1.id)
+    assert len(quotes_opp1) == 1
+    assert quotes_opp1[0].id == quote1.id
+
+    quotes_opp2 = crm_service.list_opportunity_quotations(db, mock_org.id, opp2.id)
+    assert len(quotes_opp2) == 1
+    assert quotes_opp2[0].id == quote2.id
+
+
+def test_sales_quote_cancellation_with_reason_and_audit(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product
+):
+    # 1. Cria cliente e oportunidade
+    customer = sales_service.create_customer(
+        db,
+        mock_org.id,
+        sales_schemas.CustomerCreate(
+            name="Cliente Cancelamento Teste",
+            person_type="PJ",
+            document="88776655000144"
+        )
+    )
+    opp = crm_service.create_opportunity(
+        db,
+        mock_org.id,
+        crm_schemas.OpportunityCreate(
+            customer_id=customer.id,
+            title="Aquisição de Servidores",
+            customer_name=customer.name,
+            estimated_amount=Decimal("30000.00"),
+            stage="QUALIFICATION"
+        )
+    )
+
+    # 2. Cria Cotação
+    quote = sales_service.create_sales_quote(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesQuoteCreate(
+            customer_id=customer.id,
+            opportunity_id=opp.id,
+            customer_name=customer.name,
+            items=[
+                sales_schemas.SalesQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("3"),
+                    unit_price=Decimal("5000.00")
+                )
+            ]
+        )
+    )
+    assert quote.status == "DRAFT"
+
+    # 3. Cancela Cotação em DRAFT com motivo
+    cancelled_quote = sales_service.cancel_sales_quote(
+        db,
+        quote.id,
+        mock_org.id,
+        reason="Cliente optou por computação em nuvem em vez de servidores locais",
+        current_user=mock_user
+    )
+    assert cancelled_quote.status == "CANCELLED"
+    assert cancelled_quote.cancellation_reason == "Cliente optou por computação em nuvem em vez de servidores locais"
+
+    # 4. Verifica reavaliação de estágio da Oportunidade (move para NEGOTIATION pois não há outras cotações ativas)
+    db.refresh(opp)
+    assert opp.stage == "NEGOTIATION"
+
+    # 5. Verifica evento de auditoria no grafo transversal
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="SALES_QUOTE",
+        native_id=quote.id
+    )
+    assert any(ev.event_type == "CANCELLED" for ev in chain.events)
+
+    # 6. Teste de proteção: não pode cancelar cotação já cancelada
+    with pytest.raises(HTTPException) as exc:
+        sales_service.cancel_sales_quote(
+            db,
+            quote.id,
+            mock_org.id,
+            reason="Tentativa duplicada",
+            current_user=mock_user
+        )
+    assert exc.value.status_code == 409
+
+
+def test_identity_contact_partner_odoo_pattern_and_role_filtering(db, mock_org, mock_user):
+    """
+    Testa o modelo unificado de Contatos (Padrão Odoo res.partner) no Identity:
+    1. Cadastro de contato como Cliente (is_customer=True, origin_module='SALES')
+    2. Cadastro de contato como Fornecedor (is_supplier=True, origin_module='PURCHASES')
+    3. Cadastro de parceiro híbrido (Cliente + Fornecedor)
+    4. Filtragem especializada por papéis de módulo (is_customer vs is_supplier)
+    5. Busca por múltiplos campos e proteção contra documento duplicado
+    """
+    from controlb.modules.identity import service as identity_service, schemas as identity_schemas
+
+    # 1. Cria Contato Cliente
+    client_contact = identity_service.create_contact(
+        db,
+        mock_org.id,
+        identity_schemas.ContactCreate(
+            person_type="PJ",
+            document="11222333000199",
+            name="Tech Alpha Corp",
+            trade_name="Alpha Tech",
+            email="contato@alpha.com",
+            phone="1199998888",
+            is_customer=True,
+            is_supplier=False,
+            origin_module="SALES",
+            notes="Cliente corporativo de Vendas"
+        )
+    )
+    assert client_contact.is_customer is True
+    assert client_contact.is_supplier is False
+    assert client_contact.origin_module == "SALES"
+
+    # 2. Cria Contato Fornecedor
+    supplier_contact = identity_service.create_contact(
+        db,
+        mock_org.id,
+        identity_schemas.ContactCreate(
+            person_type="PJ",
+            document="99888777000111",
+            name="Distribuidora de Peças Beta Ltda",
+            email="vendas@betapecas.com",
+            is_customer=False,
+            is_supplier=True,
+            origin_module="PURCHASES",
+            notes="Fornecedor de matéria-prima"
+        )
+    )
+    assert supplier_contact.is_customer is False
+    assert supplier_contact.is_supplier is True
+    assert supplier_contact.origin_module == "PURCHASES"
+
+    # 3. Cria Parceiro Híbrido (Cliente & Fornecedor)
+    hybrid_contact = identity_service.create_contact(
+        db,
+        mock_org.id,
+        identity_schemas.ContactCreate(
+            person_type="PJ",
+            document="55444333000122",
+            name="Mega Indústria & Comércio S.A.",
+            is_customer=True,
+            is_supplier=True,
+            origin_module="IDENTITY"
+        )
+    )
+    assert hybrid_contact.is_customer is True
+    assert hybrid_contact.is_supplier is True
+
+    # 4. Valida filtragem por papel de módulo
+    all_customers = identity_service.list_contacts(db, mock_org.id, is_customer=True)
+    customer_ids = {c.id for c in all_customers}
+    assert client_contact.id in customer_ids
+    assert hybrid_contact.id in customer_ids
+    assert supplier_contact.id not in customer_ids  # Fornecedor puro NÃO aparece na lista de clientes!
+
+    all_suppliers = identity_service.list_contacts(db, mock_org.id, is_supplier=True)
+    supplier_ids = {s.id for s in all_suppliers}
+    assert supplier_contact.id in supplier_ids
+    assert hybrid_contact.id in supplier_ids
+    assert client_contact.id not in supplier_ids  # Cliente puro NÃO aparece na lista de fornecedores!
+
+    # 5. Valida busca por texto em múltiplos campos
+    search_results = identity_service.list_contacts(db, mock_org.id, search="Alpha")
+    assert len(search_results) == 1
+    assert search_results[0].id == client_contact.id
+
+    # 6. Teste de unicidade de documento por organização
+    with pytest.raises(HTTPException) as exc:
+        identity_service.create_contact(
+            db,
+            mock_org.id,
+            identity_schemas.ContactCreate(
+                name="Duplicata Alpha",
+                document="11222333000199"
+            )
+        )
+    assert exc.value.status_code == 409
+

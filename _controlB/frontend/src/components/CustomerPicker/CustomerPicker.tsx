@@ -65,11 +65,12 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
     setError(null);
     try {
       const loaded = await salesService.getCustomers(search || undefined, force);
-      setCustomers((current) => {
-        const merged = new Map(current.map((customer) => [customer.id, customer]));
-        loaded.forEach((customer) => merged.set(customer.id, customer));
-        return Array.from(merged.values());
-      });
+      const list = Array.isArray(loaded) ? loaded : [];
+      if (initialCustomer && !list.some((c) => c.id === initialCustomer.id)) {
+        setCustomers([initialCustomer, ...list]);
+      } else {
+        setCustomers(list);
+      }
     } catch (requestError) {
       setError(formatApiError(requestError, 'Não foi possível carregar os clientes.'));
     } finally {
@@ -78,7 +79,7 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
   };
 
   useEffect(() => {
-    void loadCustomers();
+    void loadCustomers(undefined, true);
   }, []);
 
   useEffect(() => {
@@ -223,7 +224,21 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
                     {customer.person_type === 'PF' ? <UserRound size={14} /> : <Building2 size={14} />}
                   </span>
                   <span>
-                    <strong>{displayName(customer)}</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <strong>{displayName(customer)}</strong>
+                      {customer.origin_module && (
+                        <span style={{
+                          fontSize: '0.68rem',
+                          padding: '1px 5px',
+                          borderRadius: '3px',
+                          background: 'rgba(255, 107, 0, 0.15)',
+                          color: '#ff7700',
+                          fontWeight: 600
+                        }}>
+                          {customer.origin_module === 'SALES' ? 'Vendas' : customer.origin_module === 'CRM' ? 'CRM' : 'Identity'}
+                        </span>
+                      )}
+                    </div>
                     <small>{customer.document} · {customer.email || customer.phone || customer.name}</small>
                   </span>
                   {customer.id === value && <Check size={14} />}

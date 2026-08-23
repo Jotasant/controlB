@@ -15,18 +15,19 @@ import {
   ShoppingBag, FileText, RefreshCw, Search,
   Trash2, Users, Plus, Target, DollarSign,
   TrendingUp, Undo2, ChevronRight, Award, BarChart3,
-  Package, CheckCircle2, Layers, Edit, Filter, ArrowUpRight, GitBranch
+  Package, CheckCircle2, Layers, Filter, ArrowUpRight, GitBranch,
+  Truck, Check
 } from 'lucide-react';
 import {
   Bar, BarChart, CartesianGrid, ResponsiveContainer,
   Tooltip, XAxis, YAxis
 } from 'recharts';
 import {
-  salesService, inventoryService, identityService, documentService, formatApiError
+  salesService, inventoryService, documentService, formatApiError
 } from '@/services/api';
 import {
   SalesOrder, SalesQuote, Product,
-  Customer, Contact, SalesGoal, PriceTable, SalesReturn, SalesAnalytics,
+  Customer, SalesGoal, PriceTable, SalesReturn, SalesAnalytics,
   BusinessDocumentChain
 } from '@/types';
 import { formatCurrency, formatQuantity } from '@/utils/formatters';
@@ -34,12 +35,16 @@ import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal, ConfirmModalType } from '@/components/ConfirmModal/ConfirmModal';
 import { Can } from '@/components/Can';
 import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline';
+import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
+import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
+import { OrderModal } from '@/components/OrderModal/OrderModal';
 import { useToast } from '@/components/Toast/ToastContext';
 import './Sales.scss';
 
 type ActiveSalesTab =
   | 'quotes'
   | 'orders'
+  | 'deliveries'
   | 'customers'
   | 'commercial'
   | 'post_sales'
@@ -55,7 +60,6 @@ export const Sales: React.FC = () => {
   const [orders, setOrders] = useState<SalesOrder[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
   const [salesGoals, setSalesGoals] = useState<SalesGoal[]>([]);
   const [priceTables, setPriceTables] = useState<PriceTable[]>([]);
   const [salesReturns, setSalesReturns] = useState<SalesReturn[]>([]);
@@ -127,57 +131,23 @@ export const Sales: React.FC = () => {
   // ESTADOS: 1. COTAÇÕES & PROPOSTAS COMERCIAIS
   // =========================================================================
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState<boolean>(false);
-  const [quoteCustomerName, setQuoteCustomerName] = useState<string>('');
-  const [quoteCustomerDocument, setQuoteCustomerDocument] = useState<string>('');
-  const [quoteValidUntil, setQuoteValidUntil] = useState<string>('');
-  const [quotePaymentTerms, setQuotePaymentTerms] = useState<string>('30 DDL');
-  const [quoteNotes, setQuoteNotes] = useState<string>('');
-  const [quoteItems, setQuoteItems] = useState<Array<{
-    product_id: string;
-    quantity: number;
-    unit_price: number;
-    discount_amount: number;
-    notes?: string;
-  }>>([]);
+  const [editingQuote, setEditingQuote] = useState<SalesQuote | null>(null);
+  const [quoteToCancel, setQuoteToCancel] = useState<SalesQuote | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState<string>('');
+  const [isCancellingQuote, setIsCancellingQuote] = useState<boolean>(false);
 
   // =========================================================================
   // ESTADOS: 2. PEDIDOS DE VENDA
   // =========================================================================
   const [isOrderModalOpen, setIsOrderModalOpen] = useState<boolean>(false);
-  const [orderCustomerName, setOrderCustomerName] = useState<string>('');
-  const [orderCustomerDocument, setOrderCustomerDocument] = useState<string>('');
-  const [orderPaymentTerms, setOrderPaymentTerms] = useState<string>('À Vista');
-  const [orderDeliveryStatus, setOrderDeliveryStatus] = useState<string>('PENDING');
-  const [orderNotes, setOrderNotes] = useState<string>('');
-  const [orderItems, setOrderItems] = useState<Array<{
-    product_id: string;
-    quantity: number;
-    unit_price: number;
-    discount_amount: number;
-    notes?: string;
-  }>>([]);
+  const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
+  const [billingOrderId, setBillingOrderId] = useState<string | null>(null);
 
   // =========================================================================
   // ESTADOS: 3. CLIENTES (PF / PJ)
   // =========================================================================
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
-  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
-  const [custPersonType, setCustPersonType] = useState<'PJ' | 'PF'>('PJ');
-  const [custName, setCustName] = useState<string>('');
-  const [custTradeName, setCustTradeName] = useState<string>('');
-  const [custDocument, setCustDocument] = useState<string>('');
-  const [custStateReg, setCustStateReg] = useState<string>('');
-  const [custEmail, setCustEmail] = useState<string>('');
-  const [custPhone, setCustPhone] = useState<string>('');
-  const [custCreditLimit, setCustCreditLimit] = useState<string>('50000.00');
-  const [custStreet, setCustStreet] = useState<string>('');
-  const [custNumber, setCustNumber] = useState<string>('');
-  const [custNeighborhood, setCustNeighborhood] = useState<string>('');
-  const [custCity, setCustCity] = useState<string>('');
-  const [custState, setCustState] = useState<string>('SP');
-  const [custZipCode, setCustZipCode] = useState<string>('');
-  const [custContactId, setCustContactId] = useState<string>('');
-  const [custNotes, setCustNotes] = useState<string>('');
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
 
   // =========================================================================
   // ESTADOS: 4. GESTÃO COMERCIAL (METAS & TABELAS DE PREÇOS)
@@ -277,13 +247,12 @@ export const Sales: React.FC = () => {
     try {
       const [
         quotesRes, ordersRes, productsRes, customersRes,
-        contactsRes, goalsRes, priceTablesRes, returnsRes, analyticsRes
+        goalsRes, priceTablesRes, returnsRes, analyticsRes
       ] = await Promise.all([
         salesService.getQuotes(force),
         salesService.getOrders(force),
         inventoryService.getProducts(undefined, force),
         salesService.getCustomers('', force),
-        identityService.getContacts(force),
         salesService.getSalesGoals(yearFilter, force),
         salesService.getPriceTables(force),
         salesService.getSalesReturns(force),
@@ -294,7 +263,6 @@ export const Sales: React.FC = () => {
       setOrders(ordersRes || []);
       setProducts(productsRes || []);
       setCustomers(customersRes || []);
-      setContacts(contactsRes || []);
       setSalesGoals(goalsRes || []);
       setPriceTables(priceTablesRes || []);
       setSalesReturns(returnsRes || []);
@@ -313,79 +281,9 @@ export const Sales: React.FC = () => {
   // =========================================================================
   // HANDLERS: COTAÇÕES & PROPOSTAS COMERCIAIS
   // =========================================================================
-  const handleOpenQuoteModal = () => {
-    setModalError(null);
-    setQuoteCustomerName('');
-    setQuoteCustomerDocument('');
-    setQuoteValidUntil('');
-    setQuotePaymentTerms('30 DDL');
-    setQuoteNotes('');
-    if (products.length > 0) {
-      setQuoteItems([{
-        product_id: products[0].id,
-        quantity: 1,
-        unit_price: safeNumber(products[0].reference_price) || 10.00,
-        discount_amount: 0
-      }]);
-    } else {
-      setQuoteItems([]);
-    }
+  const handleOpenQuoteModal = (quote?: SalesQuote) => {
+    setEditingQuote(quote || null);
     setIsQuoteModalOpen(true);
-  };
-
-  const handleAddQuoteItem = () => {
-    if (products.length > 0) {
-      setQuoteItems([
-        ...quoteItems,
-        {
-          product_id: products[0].id,
-          quantity: 1,
-          unit_price: safeNumber(products[0].reference_price) || 10.00,
-          discount_amount: 0
-        }
-      ]);
-    }
-  };
-
-  const handleRemoveQuoteItem = (index: number) => {
-    setQuoteItems(quoteItems.filter((_, idx) => idx !== index));
-  };
-
-  const handleSaveQuote = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quoteCustomerName.trim()) {
-      setModalError("Informe o nome do cliente.");
-      return;
-    }
-    if (quoteItems.length === 0) {
-      setModalError("Adicione pelo menos um item à proposta comercial.");
-      return;
-    }
-
-    setIsSaving(true);
-    setModalError(null);
-    try {
-      await salesService.createQuote({
-        customer_name: quoteCustomerName.trim(),
-        customer_document: quoteCustomerDocument.trim() || undefined,
-        valid_until: quoteValidUntil || undefined,
-        notes: quoteNotes.trim() ? `${quoteNotes.trim()} | Condição: ${quotePaymentTerms}` : `Condição: ${quotePaymentTerms}`,
-        items: quoteItems.map(it => ({
-          product_id: it.product_id,
-          quantity: it.quantity,
-          unit_price: it.unit_price,
-          discount_amount: it.discount_amount,
-          notes: it.notes
-        }))
-      });
-      setIsQuoteModalOpen(false);
-      triggerSuccess("Cotação comercial emitida com sucesso!");
-      loadAllData();
-    } catch (err: any) {
-      setModalError(formatApiError(err, "Erro ao salvar proposta comercial."));
-    } finally {
-      setIsSaving(false);
-    }
   };
 
   const handleConvertToOrder = (quote: SalesQuote) => {
@@ -436,81 +334,63 @@ export const Sales: React.FC = () => {
   };
 
   // =========================================================================
-  // HANDLERS: PEDIDOS DE VENDA
+  // HANDLERS: PEDIDOS DE VENDA & WORKFLOW
   // =========================================================================
-  const handleOpenOrderModal = () => {
-    setModalError(null);
-    setOrderCustomerName('');
-    setOrderCustomerDocument('');
-    setOrderPaymentTerms('À Vista');
-    setOrderDeliveryStatus('PENDING');
-    setOrderNotes('');
-    if (products.length > 0) {
-      setOrderItems([{
-        product_id: products[0].id,
-        quantity: 1,
-        unit_price: safeNumber(products[0].reference_price) || 10.00,
-        discount_amount: 0
-      }]);
-    } else {
-      setOrderItems([]);
-    }
+  const handleOpenOrderModal = (order?: SalesOrder) => {
+    setEditingOrder(order || null);
     setIsOrderModalOpen(true);
   };
 
-  const handleAddOrderItem = () => {
-    if (products.length > 0) {
-      setOrderItems([
-        ...orderItems,
-        {
-          product_id: products[0].id,
-          quantity: 1,
-          unit_price: safeNumber(products[0].reference_price) || 10.00,
-          discount_amount: 0
-        }
-      ]);
-    }
-  };
-
-  const handleRemoveOrderItem = (index: number) => {
-    setOrderItems(orderItems.filter((_, idx) => idx !== index));
-  };
-
-  const handleSaveOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!orderCustomerName.trim()) {
-      setModalError("Informe o nome do cliente.");
-      return;
-    }
-    if (orderItems.length === 0) {
-      setModalError("Adicione pelo menos um produto ao pedido.");
-      return;
-    }
-
-    setIsSaving(true);
-    setModalError(null);
+  const handleUpdateQuoteStatus = async (quote: SalesQuote, newStatus: string) => {
     try {
-      await salesService.createOrder({
-        customer_name: orderCustomerName.trim(),
-        customer_document: orderCustomerDocument.trim() || undefined,
-        payment_terms: orderPaymentTerms,
-        delivery_status: orderDeliveryStatus,
-        notes: orderNotes.trim() || undefined,
-        items: orderItems.map(it => ({
-          product_id: it.product_id,
-          quantity: it.quantity,
-          unit_price: it.unit_price,
-          discount_amount: it.discount_amount,
-          notes: it.notes
-        }))
-      });
-      setIsOrderModalOpen(false);
-      triggerSuccess("Pedido de venda cadastrado com sucesso!");
+      await salesService.updateQuoteStatus(quote.id, newStatus);
+      triggerSuccess(`Status da cotação #${quote.quote_number} alterado para ${newStatus}.`);
       loadAllData();
     } catch (err: any) {
-      setModalError(formatApiError(err, "Erro ao salvar pedido de venda."));
+      toast.error(formatApiError(err, "Erro ao alterar status da cotação."));
+    }
+  };
+
+  const handleConfirmCancelQuote = async () => {
+    if (!quoteToCancel || !cancelReasonInput.trim()) {
+      toast.error('Informe o motivo do cancelamento / desistência.');
+      return;
+    }
+    setIsCancellingQuote(true);
+    try {
+      await salesService.cancelQuote(quoteToCancel.id, cancelReasonInput.trim());
+      triggerSuccess(`Cotação #${quoteToCancel.quote_number} cancelada com sucesso.`);
+      setQuoteToCancel(null);
+      setCancelReasonInput('');
+      loadAllData(true);
+    } catch (err: any) {
+      toast.error(formatApiError(err, 'Erro ao cancelar cotação'));
     } finally {
-      setIsSaving(false);
+      setIsCancellingQuote(false);
+    }
+  };
+
+  const handleRequestBilling = async (order: SalesOrder) => {
+    if (billingOrderId !== null) return;
+    setBillingOrderId(order.id);
+    try {
+      await salesService.requestOrderBilling(order.id);
+      triggerSuccess(`Faturamento do Pedido #${order.order_number} gerado com sucesso! Títulos a receber criados no Financeiro.`);
+      loadAllData();
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Erro ao solicitar faturamento do pedido."));
+    } finally {
+      setBillingOrderId(null);
+    }
+  };
+
+  const handleUpdateOrderStatus = async (order: SalesOrder, data: Partial<SalesOrder>) => {
+    try {
+      await salesService.updateOrderStatus(order.id, data);
+      triggerSuccess(`Pedido #${order.order_number} atualizado com sucesso.`);
+      loadAllData();
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Erro ao atualizar pedido."));
     }
   };
 
@@ -596,90 +476,8 @@ export const Sales: React.FC = () => {
   // HANDLERS: CLIENTES (PF / PJ)
   // =========================================================================
   const handleOpenCustomerModal = (customer?: Customer) => {
-    setModalError(null);
-    if (customer) {
-      setEditingCustomerId(customer.id);
-      setCustPersonType(customer.person_type as 'PJ' | 'PF');
-      setCustName(customer.name);
-      setCustTradeName(customer.trade_name || '');
-      setCustDocument(customer.document);
-      setCustStateReg(customer.state_registration || '');
-      setCustEmail(customer.email || '');
-      setCustPhone(customer.phone || '');
-      setCustCreditLimit(String(customer.credit_limit || '50000.00'));
-      setCustStreet(customer.address_street || '');
-      setCustNumber(customer.address_number || '');
-      setCustNeighborhood(customer.address_neighborhood || '');
-      setCustCity(customer.address_city || '');
-      setCustState(customer.address_state || 'SP');
-      setCustZipCode(customer.address_zip_code || '');
-      setCustContactId(customer.contact_id || '');
-      setCustNotes(customer.notes || '');
-    } else {
-      setEditingCustomerId(null);
-      setCustPersonType('PJ');
-      setCustName('');
-      setCustTradeName('');
-      setCustDocument('');
-      setCustStateReg('');
-      setCustEmail('');
-      setCustPhone('');
-      setCustCreditLimit('50000.00');
-      setCustStreet('');
-      setCustNumber('');
-      setCustNeighborhood('');
-      setCustCity('');
-      setCustState('SP');
-      setCustZipCode('');
-      setCustContactId('');
-      setCustNotes('');
-    }
+    setEditingCustomer(customer || null);
     setIsCustomerModalOpen(true);
-  };
-
-  const handleSaveCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!custName.trim() || !custDocument.trim()) {
-      setModalError("Nome/Razão Social e CPF/CNPJ são campos obrigatórios.");
-      return;
-    }
-
-    setIsSaving(true);
-    setModalError(null);
-    try {
-      const payload: any = {
-        person_type: custPersonType,
-        document: custDocument.trim(),
-        name: custName.trim(),
-        trade_name: custTradeName.trim() || undefined,
-        state_registration: custStateReg.trim() || undefined,
-        email: custEmail.trim() || undefined,
-        phone: custPhone.trim() || undefined,
-        credit_limit: safeNumber(custCreditLimit),
-        address_street: custStreet.trim() || undefined,
-        address_number: custNumber.trim() || undefined,
-        address_neighborhood: custNeighborhood.trim() || undefined,
-        address_city: custCity.trim() || undefined,
-        address_state: custState.trim() || undefined,
-        address_zip_code: custZipCode.trim() || undefined,
-        contact_id: custContactId || undefined,
-        notes: custNotes.trim() || undefined
-      };
-
-      if (editingCustomerId) {
-        await salesService.updateCustomer(editingCustomerId, payload);
-        triggerSuccess("Cadastro de cliente atualizado com sucesso!");
-      } else {
-        await salesService.createCustomer(payload);
-        triggerSuccess("Novo cliente cadastrado com sucesso!");
-      }
-      setIsCustomerModalOpen(false);
-      loadAllData();
-    } catch (err: any) {
-      setModalError(formatApiError(err, "Erro ao salvar cliente."));
-    } finally {
-      setIsSaving(false);
-    }
   };
 
   const handleDeleteCustomer = (customer: Customer) => {
@@ -973,6 +771,17 @@ export const Sales: React.FC = () => {
               <span className="nav-badge">{orders.length}</span>
             </button>
 
+            <button
+              className={`nav-item ${activeTab === 'deliveries' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('deliveries'); setSearchTerm(''); setStatusFilter('ALL'); }}
+            >
+              <div className="nav-item-content">
+                <Truck size={16} />
+                <span>Entregas & Expedição</span>
+              </div>
+              <span className="nav-badge">{orders.filter(o => o.delivery_status !== 'DELIVERED' && o.delivery_status !== 'CANCELLED').length}</span>
+            </button>
+
             <span className="menu-group-label">Relacionamento & Clientes</span>
 
             <button
@@ -1042,6 +851,7 @@ export const Sales: React.FC = () => {
                 <span className="current">
                   {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
                   {activeTab === 'orders' && 'Pedidos de Venda'}
+                  {activeTab === 'deliveries' && 'Entregas & Logística de Expedição'}
                   {activeTab === 'customers' && 'Base Centralizada de Clientes'}
                   {activeTab === 'commercial' && 'Gestão Comercial, Metas & Preços'}
                   {activeTab === 'post_sales' && 'Pós-Venda & Reestocagem no Kardex'}
@@ -1050,7 +860,8 @@ export const Sales: React.FC = () => {
               </div>
               <h1 className="ui-page-header__title">
                 {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
-                {activeTab === 'orders' && 'Pedidos de Venda'}
+                {activeTab === 'orders' && 'Pedidos de Venda Executáveis'}
+                {activeTab === 'deliveries' && 'Painel de Entregas & Expedição'}
                 {activeTab === 'customers' && 'Clientes (Pessoa Jurídica / Física)'}
                 {activeTab === 'commercial' && 'Gestão de Metas & Tabelas de Preços'}
                 {activeTab === 'post_sales' && 'Pós-Venda & Trocas / Devoluções'}
@@ -1064,13 +875,13 @@ export const Sales: React.FC = () => {
               </button>
 
               {activeTab === 'quotes' && (
-                <button className="btn-primary ui-button ui-button--primary" onClick={handleOpenQuoteModal}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={() => handleOpenQuoteModal()}>
                   <Plus size={16} /> Nova Cotação
                 </button>
               )}
 
               {activeTab === 'orders' && (
-                <button className="btn-primary ui-button ui-button--primary" onClick={handleOpenOrderModal}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={() => handleOpenOrderModal()}>
                   <Plus size={16} /> Novo Pedido
                 </button>
               )}
@@ -1120,6 +931,7 @@ export const Sales: React.FC = () => {
                   <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                     <option value="ALL">Todos os Status</option>
                     <option value="DRAFT">Rascunho</option>
+                    <option value="SENT">Enviado ao Cliente</option>
                     <option value="APPROVED">Aprovado</option>
                     <option value="CONVERTED">Convertido em Pedido</option>
                     <option value="REJECTED">Rejeitado</option>
@@ -1137,7 +949,7 @@ export const Sales: React.FC = () => {
                       <th>Validade</th>
                       <th>Total Líquido</th>
                       <th>Status</th>
-                      <th>Ações</th>
+                      <th>Ações Comerciais</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1149,7 +961,12 @@ export const Sales: React.FC = () => {
                       </tr>
                     ) : (
                       filteredQuotes.map(q => (
-                        <tr key={q.id}>
+                        <tr
+                          key={q.id}
+                          onClick={() => handleOpenQuoteModal(q)}
+                          style={{ cursor: 'pointer' }}
+                          title="Clique na linha para abrir/visualizar a cotação"
+                        >
                           <td><strong>#{q.quote_number}</strong></td>
                           <td>
                             <div className="cell-client">
@@ -1164,38 +981,107 @@ export const Sales: React.FC = () => {
                             <span className={`status-pill ui-status ${
                               q.status === 'APPROVED' ? 'success' :
                               q.status === 'CONVERTED' ? 'info' :
-                              q.status === 'REJECTED' ? 'danger' : 'warning'
+                              q.status === 'SENT' ? 'warning' :
+                              q.status === 'CANCELLED' ? 'danger' :
+                              q.status === 'REJECTED' ? 'danger' : 'neutral'
                             }`}>
                               {q.status === 'CONVERTED' ? 'Convertido' :
                                q.status === 'APPROVED' ? 'Aprovado' :
+                               q.status === 'SENT' ? 'Enviado' :
+                               q.status === 'CANCELLED' ? 'Cancelado' :
                                q.status === 'DRAFT' ? 'Rascunho' : q.status}
                             </span>
                           </td>
                           <td>
-                            <div className="table-actions ui-table-actions">
-                              <button
-                                type="button"
-                                className="table-action-btn ui-table-action"
-                                onClick={() => void openDocumentTimeline('SALES_QUOTE', q.id, `Cotação #${q.quote_number}`)}
-                                title="Ver cadeia documental"
-                                aria-label={`Ver cadeia da cotação ${q.quote_number}`}
-                              >
-                                <GitBranch size={14} /> Rastrear
-                              </button>
+                            <div className="table-actions ui-table-actions" onClick={(e) => e.stopPropagation()}>
+                              {q.status === 'DRAFT' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action"
+                                    onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(q, 'SENT'); }}
+                                    title="Marcar como enviada ao cliente"
+                                  >
+                                    📤 Enviar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action primary"
+                                    onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(q, 'APPROVED'); }}
+                                    title="Aprovar cotação"
+                                  >
+                                    ✅ Aprovar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action danger"
+                                    onClick={(e) => { e.stopPropagation(); setQuoteToCancel(q); setCancelReasonInput(''); }}
+                                    title="Cancelar cotação"
+                                  >
+                                    ❌ Cancelar
+                                  </button>
+                                </>
+                              )}
+                              {q.status === 'SENT' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action primary"
+                                    onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(q, 'APPROVED'); }}
+                                    title="Aceitar e aprovar proposta"
+                                  >
+                                    ✅ Aceitar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action danger"
+                                    onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(q, 'REJECTED'); }}
+                                    title="Recusar proposta"
+                                  >
+                                    ❌ Recusar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action danger"
+                                    onClick={(e) => { e.stopPropagation(); setQuoteToCancel(q); setCancelReasonInput(''); }}
+                                    title="Cancelar cotação por desistência"
+                                  >
+                                    ❌ Cancelar
+                                  </button>
+                                </>
+                              )}
                               {q.status === 'APPROVED' && (
-                                <button
-                                  type="button"
-                                  className="table-action-btn ui-table-action primary"
-                                  onClick={() => handleConvertToOrder(q)}
-                                  title="Converter em Pedido de Venda"
-                                >
-                                  <ArrowUpRight size={14} /> Converter
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action primary"
+                                    onClick={(e) => { e.stopPropagation(); handleConvertToOrder(q); }}
+                                    title="Converter em Pedido de Venda oficial"
+                                  >
+                                    <ArrowUpRight size={14} /> <strong>Converter em Pedido</strong>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action danger"
+                                    onClick={(e) => { e.stopPropagation(); setQuoteToCancel(q); setCancelReasonInput(''); }}
+                                    title="Cancelar cotação aprovada por desistência"
+                                  >
+                                    ❌ Cancelar
+                                  </button>
+                                </>
                               )}
                               <button
                                 type="button"
+                                className="table-action-btn ui-table-action"
+                                onClick={(e) => { e.stopPropagation(); void openDocumentTimeline('SALES_QUOTE', q.id, `Cotação #${q.quote_number}`); }}
+                                title="Ver cadeia documental completa"
+                              >
+                                <GitBranch size={14} /> Rastrear
+                              </button>
+                              <button
+                                type="button"
                                 className="table-action-btn ui-table-action danger"
-                                onClick={() => handleDeleteQuote(q)}
+                                onClick={(e) => { e.stopPropagation(); handleDeleteQuote(q); }}
                                 title="Excluir Cotação"
                               >
                                 <Trash2 size={14} />
@@ -1230,7 +1116,6 @@ export const Sales: React.FC = () => {
                   <Filter size={14} />
                   <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                     <option value="ALL">Todos os Status</option>
-                    <option value="DRAFT">Rascunho</option>
                     <option value="CONFIRMED">Confirmado</option>
                     <option value="COMPLETED">Faturado / Concluído</option>
                     <option value="CANCELLED">Cancelado</option>
@@ -1245,23 +1130,29 @@ export const Sales: React.FC = () => {
                       <th>Pedido</th>
                       <th>Cliente</th>
                       <th>Emissão</th>
-                      <th>Entrega</th>
+                      <th>Condição</th>
+                      <th>Estoque / Execução</th>
                       <th>Faturamento</th>
-                      <th>Total</th>
-                      <th>Status</th>
-                      <th>Ações</th>
+                      <th>Total Líquido</th>
+                      <th>Status Geral</th>
+                      <th>Ações Operacionais</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredOrders.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state ui-empty-state">
+                        <td colSpan={9} className="empty-state ui-empty-state">
                           Nenhum pedido de venda encontrado.
                         </td>
                       </tr>
                     ) : (
                       filteredOrders.map(o => (
-                        <tr key={o.id}>
+                        <tr
+                          key={o.id}
+                          onClick={() => handleOpenOrderModal(o)}
+                          style={{ cursor: 'pointer' }}
+                          title="Clique na linha para abrir/editar o pedido"
+                        >
                           <td><strong>#{o.order_number}</strong></td>
                           <td>
                             <div className="cell-client">
@@ -1270,11 +1161,13 @@ export const Sales: React.FC = () => {
                             </div>
                           </td>
                           <td>{new Date(o.created_at).toLocaleDateString('pt-BR')}</td>
+                          <td>{o.payment_terms || 'À Vista'}</td>
                           <td>
                             <span className={`status-pill ui-status ${
                               o.delivery_status === 'CANCELLED' ? 'danger' :
                               o.delivery_status === 'DELIVERED' ? 'success' :
-                              o.delivery_status === 'DISPATCHED' || o.delivery_status === 'RESERVED' ? 'info' : 'warning'
+                              o.delivery_status === 'DISPATCHED' ? 'info' :
+                              o.delivery_status === 'RESERVED' ? 'info' : 'warning'
                             }`}>
                               {o.delivery_status === 'CANCELLED' ? 'Cancelado' :
                                o.delivery_status === 'DELIVERED' ? 'Entregue' :
@@ -1294,50 +1187,234 @@ export const Sales: React.FC = () => {
                               o.status === 'CONFIRMED' ? 'info' :
                               o.status === 'CANCELLED' ? 'danger' : 'warning'
                             }`}>
-                              {o.status}
+                              {o.status === 'COMPLETED' ? 'Concluído' :
+                               o.status === 'CONFIRMED' ? 'Confirmado' :
+                               o.status === 'CANCELLED' ? 'Cancelado' : o.status}
                             </span>
                           </td>
                           <td>
-                            <div className="table-actions ui-table-actions">
+                            <div className="table-actions ui-table-actions" onClick={(e) => e.stopPropagation()}>
+                              {/* Ação 1: Reserva de Estoque */}
                               <Can permission="inventory:move">
                                 {o.status === 'CONFIRMED' && o.delivery_status === 'PENDING' && (
                                   <button
                                     type="button"
                                     className="table-action-btn ui-table-action primary"
-                                    onClick={() => void handleReserveOrderStock(o)}
+                                    onClick={(e) => { e.stopPropagation(); void handleReserveOrderStock(o); }}
                                     disabled={reservingOrderId !== null}
-                                    aria-busy={reservingOrderId === o.id}
-                                    title="Reservar estoque para o pedido"
-                                    aria-label={`Reservar estoque do pedido ${o.order_number}`}
+                                    title="Reservar estoque fisicamente no Kardex"
                                   >
                                     <Package size={14} />
-                                    {reservingOrderId === o.id ? 'Reservando...' : 'Reservar estoque'}
+                                    {reservingOrderId === o.id ? 'Reservando...' : 'Reservar'}
                                   </button>
                                 )}
                               </Can>
+
+                              {/* Ação 2: Faturamento Direto */}
+                              {o.billing_status === 'PENDING' && o.status !== 'CANCELLED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action primary"
+                                  onClick={(e) => { e.stopPropagation(); void handleRequestBilling(o); }}
+                                  disabled={billingOrderId === o.id}
+                                  title="Emitir fatura e gerar contas a receber no Financeiro"
+                                >
+                                  <DollarSign size={14} />
+                                  {billingOrderId === o.id ? 'Faturando...' : 'Faturar'}
+                                </button>
+                              )}
+
+                              {/* Ação 3: Expedição e Entrega */}
+                              {o.delivery_status === 'RESERVED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action"
+                                  onClick={(e) => { e.stopPropagation(); handleUpdateOrderStatus(o, { delivery_status: 'DISPATCHED' }); }}
+                                  title="Marcar pedido como despachado / em trânsito"
+                                >
+                                  <Truck size={14} /> Despachar
+                                </button>
+                              )}
+
+                              {o.delivery_status === 'DISPATCHED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action success"
+                                  onClick={(e) => { e.stopPropagation(); handleUpdateOrderStatus(o, { delivery_status: 'DELIVERED', status: 'COMPLETED' }); }}
+                                  title="Confirmar entrega e concluir pedido"
+                                >
+                                  <Check size={14} /> Entregue
+                                </button>
+                              )}
+
+                              {/* Ação 4: Rastrear Cadeia */}
                               <button
                                 type="button"
                                 className="table-action-btn ui-table-action"
-                                onClick={() => void openDocumentTimeline('SALES_ORDER', o.id, `Pedido #${o.order_number}`)}
-                                title="Ver cadeia documental"
-                                aria-label={`Ver cadeia do pedido ${o.order_number}`}
+                                onClick={(e) => { e.stopPropagation(); void openDocumentTimeline('SALES_ORDER', o.id, `Pedido #${o.order_number}`); }}
+                                title="Ver cadeia documental ponta a ponta"
                               >
                                 <GitBranch size={14} /> Rastrear
                               </button>
-                              <button
-                                type="button"
-                                className="table-action-btn ui-table-action danger"
-                                onClick={() => handleDeleteOrder(o)}
-                                title="Cancelar pedido"
-                                aria-label={`Cancelar pedido ${o.order_number}`}
-                              >
-                                <Trash2 size={14} />
-                              </button>
+
+                              {/* Ação 5: Cancelar */}
+                              {o.status !== 'CANCELLED' && o.status !== 'COMPLETED' && o.billing_status !== 'INVOICED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action danger"
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteOrder(o); }}
+                                  title="Cancelar pedido"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
                       ))
                     )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* =============================================================== */}
+          {/* NOVA ABA: ENTREGAS & EXPEDIÇÃO (LOGÍSTICA)                      */}
+          {/* =============================================================== */}
+          {activeTab === 'deliveries' && (
+            <div className="tab-pane">
+              <div className="toolbar ui-toolbar">
+                <div className="search-box ui-search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por número do pedido ou cliente para entrega..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <div className="filter-group ui-filter-group">
+                  <Filter size={14} />
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    <option value="ALL">Todas as Entregas</option>
+                    <option value="PENDING">Aguardando Reserva</option>
+                    <option value="RESERVED">Pronto para Despacho</option>
+                    <option value="DISPATCHED">Em Trânsito</option>
+                    <option value="DELIVERED">Entregue</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
+                  <thead>
+                    <tr>
+                      <th>Pedido</th>
+                      <th>Cliente</th>
+                      <th>Endereço / Observações de Entrega</th>
+                      <th>Status da Entrega</th>
+                      <th>Faturamento</th>
+                      <th>Emissão</th>
+                      <th>Ações de Logística</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orders
+                      .filter(o => {
+                        if (statusFilter !== 'ALL' && o.delivery_status !== statusFilter) return false;
+                        if (searchTerm) {
+                          const term = searchTerm.toLowerCase();
+                          return o.order_number.toLowerCase().includes(term) || o.customer_name.toLowerCase().includes(term);
+                        }
+                        return true;
+                      })
+                      .map(o => (
+                        <tr
+                          key={o.id}
+                          onClick={() => handleOpenOrderModal(o)}
+                          style={{ cursor: 'pointer' }}
+                          title="Clique na linha para abrir/visualizar o pedido"
+                        >
+                          <td><strong>#{o.order_number}</strong></td>
+                          <td>
+                            <div className="cell-client">
+                              <span className="client-name">{o.customer_name}</span>
+                              {o.customer_document && <span className="client-doc">{o.customer_document}</span>}
+                            </div>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                              {o.notes || 'Endereço cadastral do cliente'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-pill ui-status ${
+                              o.delivery_status === 'CANCELLED' ? 'danger' :
+                              o.delivery_status === 'DELIVERED' ? 'success' :
+                              o.delivery_status === 'DISPATCHED' ? 'info' :
+                              o.delivery_status === 'RESERVED' ? 'info' : 'warning'
+                            }`}>
+                              {o.delivery_status === 'CANCELLED' ? 'Cancelado' :
+                               o.delivery_status === 'DELIVERED' ? 'Entregue' :
+                               o.delivery_status === 'DISPATCHED' ? 'Em Trânsito' :
+                               o.delivery_status === 'RESERVED' ? 'Pronto para Envio' : 'Aguardando Reserva'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-pill ui-status ${o.billing_status === 'INVOICED' ? 'success' : 'warning'}`}>
+                              {o.billing_status === 'INVOICED' ? 'Faturado' : 'Aguardando'}
+                            </span>
+                          </td>
+                          <td>{new Date(o.created_at).toLocaleDateString('pt-BR')}</td>
+                          <td>
+                            <div className="table-actions ui-table-actions" onClick={(e) => e.stopPropagation()}>
+                              {o.delivery_status === 'PENDING' && o.status === 'CONFIRMED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action primary"
+                                  onClick={(e) => { e.stopPropagation(); void handleReserveOrderStock(o); }}
+                                  disabled={reservingOrderId !== null}
+                                  title="Reservar produtos para expedição"
+                                >
+                                  <Package size={14} /> Reservar
+                                </button>
+                              )}
+
+                              {o.delivery_status === 'RESERVED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action primary"
+                                  onClick={(e) => { e.stopPropagation(); handleUpdateOrderStatus(o, { delivery_status: 'DISPATCHED' }); }}
+                                  title="Despachar entrega"
+                                >
+                                  <Truck size={14} /> Despachar
+                                </button>
+                              )}
+
+                              {o.delivery_status === 'DISPATCHED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action success"
+                                  onClick={(e) => { e.stopPropagation(); handleUpdateOrderStatus(o, { delivery_status: 'DELIVERED', status: 'COMPLETED' }); }}
+                                  title="Confirmar que o cliente recebeu a mercadoria"
+                                >
+                                  <Check size={14} /> Confirmar Entrega
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                className="table-action-btn ui-table-action"
+                                onClick={(e) => { e.stopPropagation(); void openDocumentTimeline('SALES_ORDER', o.id, `Pedido #${o.order_number}`); }}
+                                title="Ver linha do tempo documental"
+                              >
+                                <GitBranch size={14} /> Rastrear
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
@@ -1391,7 +1468,12 @@ export const Sales: React.FC = () => {
                       </tr>
                     ) : (
                       filteredCustomers.map(c => (
-                        <tr key={c.id}>
+                        <tr
+                          key={c.id}
+                          onClick={() => handleOpenCustomerModal(c)}
+                          style={{ cursor: 'pointer' }}
+                          title="Clique na linha para abrir/editar os dados do cliente"
+                        >
                           <td>
                             <span className={`person-badge ${c.person_type.toLowerCase()}`}>
                               {c.person_type}
@@ -1413,19 +1495,11 @@ export const Sales: React.FC = () => {
                           <td>{c.address_city ? `${c.address_city}/${c.address_state}` : '-'}</td>
                           <td><strong>{fmtCurrency(c.credit_limit)}</strong></td>
                           <td>
-                            <div className="table-actions ui-table-actions">
-                              <button
-                                type="button"
-                                className="table-action-btn ui-table-action"
-                                onClick={() => handleOpenCustomerModal(c)}
-                                title="Editar Cliente"
-                              >
-                                <Edit size={14} />
-                              </button>
+                            <div className="table-actions ui-table-actions" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
                                 className="table-action-btn ui-table-action danger"
-                                onClick={() => handleDeleteCustomer(c)}
+                                onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(c); }}
                                 title="Excluir Cliente"
                               >
                                 <Trash2 size={14} />
@@ -1853,333 +1927,47 @@ export const Sales: React.FC = () => {
       {/* MODAIS DO MÓDULO DE VENDAS                                          */}
       {/* =================================================================== */}
 
-      {/* Modal 1: Nova Cotação / Proposta Comercial */}
-      <Modal
+      {/* Modal 1: Cotação Comercial Unificada */}
+      <QuoteModal
         isOpen={isQuoteModalOpen}
-        onClose={() => setIsQuoteModalOpen(false)}
-        title="Nova Cotação / Proposta Comercial"
-        subtitle="Emissão de proposta comercial formal com alçada e condições"
-        size="lg"
-      >
-        <form onSubmit={handleSaveQuote} className="wizard-form ui-form">
-          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
-          <div className="form-row">
-            <div className="form-group flex-2">
-              <label>Nome do Cliente *</label>
-              <input
-                type="text"
-                required
-                placeholder="Ex: Laboratório Santa Maria Ltda"
-                value={quoteCustomerName}
-                onChange={(e) => setQuoteCustomerName(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>Condição Comercial</label>
-              <select value={quotePaymentTerms} onChange={(e) => setQuotePaymentTerms(e.target.value)}>
-                <option value="À Vista">À Vista</option>
-                <option value="30 DDL">30 DDL</option>
-                <option value="30/60 DDL">30/60 DDL</option>
-                <option value="PIX">PIX</option>
-              </select>
-            </div>
-            <div className="form-group flex-1">
-              <label>Validade da Proposta</label>
-              <input
-                type="date"
-                value={quoteValidUntil}
-                onChange={(e) => setQuoteValidUntil(e.target.value)}
-              />
-            </div>
-          </div>
+        onClose={() => {
+          setIsQuoteModalOpen(false);
+          setEditingQuote(null);
+        }}
+        quote={editingQuote}
+        onSuccess={() => {
+          triggerSuccess(editingQuote ? "Cotação comercial atualizada com sucesso!" : "Cotação comercial emitida com sucesso!");
+          loadAllData(true);
+        }}
+      />
 
-          <div className="form-items-section ui-form__section">
-            <div className="section-title-row ui-form__section-header">
-              <h4>Itens do Orçamento</h4>
-              <button type="button" className="btn-secondary sm ui-button ui-button--secondary ui-button--sm" onClick={handleAddQuoteItem}>
-                <Plus size={13} /> Adicionar Produto
-              </button>
-            </div>
-
-            {quoteItems.map((item, idx) => (
-              <div key={idx} className="dynamic-item-row ui-form__item-row">
-                <div className="form-group flex-3">
-                  <select
-                    value={item.product_id}
-                    onChange={(e) => {
-                      const pid = e.target.value;
-                      const prod = products.find(p => p.id === pid);
-                      const updated = [...quoteItems];
-                      updated[idx].product_id = pid;
-                      if (prod) updated[idx].unit_price = safeNumber(prod.reference_price) || 10.00;
-                      setQuoteItems(updated);
-                    }}
-                  >
-                    {products.map(p => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="form-group flex-1">
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Qtd"
-                    value={item.quantity}
-                    onChange={(e) => {
-                      const updated = [...quoteItems];
-                      updated[idx].quantity = Math.max(1, parseInt(e.target.value) || 1);
-                      setQuoteItems(updated);
-                    }}
-                  />
-                </div>
-                <div className="form-group flex-1">
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Preço"
-                    value={item.unit_price}
-                    onChange={(e) => {
-                      const updated = [...quoteItems];
-                      updated[idx].unit_price = safeNumber(e.target.value);
-                      setQuoteItems(updated);
-                    }}
-                  />
-                </div>
-                <button type="button" className="btn-del-item ui-form__remove" onClick={() => handleRemoveQuoteItem(idx)}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-
-          <div className="modal-footer ui-form__actions">
-            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsQuoteModalOpen(false)}>
-              Cancelar
-            </button>
-            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
-              {isSaving ? 'Salvando...' : 'Salvar Cotação'}
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Modal 2: Novo Pedido de Venda */}
-      <Modal
+      {/* Modal 2: Novo Pedido de Venda Canônico (Wizard Multietapas) */}
+      <OrderModal
         isOpen={isOrderModalOpen}
-        onClose={() => setIsOrderModalOpen(false)}
-        title="Novo Pedido de Venda"
-        subtitle="Cadastro direto de pedido comercial"
-        size="lg"
-      >
-        <form onSubmit={handleSaveOrder} className="wizard-form ui-form">
-          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
-          <div className="form-row">
-            <div className="form-group flex-2">
-              <label>Cliente *</label>
-              <input
-                type="text"
-                required
-                placeholder="Nome / Razão Social"
-                value={orderCustomerName}
-                onChange={(e) => setOrderCustomerName(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>Condição de Pgto</label>
-              <select value={orderPaymentTerms} onChange={(e) => setOrderPaymentTerms(e.target.value)}>
-                <option value="À Vista">À Vista</option>
-                <option value="30 DDL">30 DDL</option>
-                <option value="30/60 DDL">30/60 DDL</option>
-                <option value="PIX">PIX</option>
-                <option value="Cartão">Cartão</option>
-              </select>
-            </div>
-            <div className="form-group flex-1">
-              <label>Status Entrega</label>
-              <select value={orderDeliveryStatus} onChange={(e) => setOrderDeliveryStatus(e.target.value)}>
-                <option value="PENDING">Pendente</option>
-                <option value="DISPATCHED">Em Trânsito</option>
-                <option value="DELIVERED">Entregue</option>
-              </select>
-            </div>
-          </div>
+        onClose={() => {
+          setIsOrderModalOpen(false);
+          setEditingOrder(null);
+        }}
+        order={editingOrder}
+        onSuccess={() => {
+          triggerSuccess(editingOrder ? "Pedido atualizado com sucesso!" : "Pedido de venda emitido com sucesso!");
+          loadAllData(true);
+        }}
+      />
 
-          <div className="form-items-section ui-form__section">
-            <div className="section-title-row ui-form__section-header">
-              <h4>Produtos do Pedido</h4>
-              <button type="button" className="btn-secondary sm ui-button ui-button--secondary ui-button--sm" onClick={handleAddOrderItem}>
-                <Plus size={13} /> Adicionar Produto
-              </button>
-            </div>
-
-            {orderItems.map((item, idx) => (
-              <div key={idx} className="dynamic-item-row ui-form__item-row">
-                <div className="form-group flex-3">
-                  <select
-                    value={item.product_id}
-                    onChange={(e) => {
-                      const pid = e.target.value;
-                      const prod = products.find(p => p.id === pid);
-                      const updated = [...orderItems];
-                      updated[idx].product_id = pid;
-                      if (prod) updated[idx].unit_price = safeNumber(prod.reference_price) || 10.00;
-                      setOrderItems(updated);
-                    }}
-                  >
-                    {products.map(p => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="form-group flex-1">
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Qtd"
-                    value={item.quantity}
-                    onChange={(e) => {
-                      const updated = [...orderItems];
-                      updated[idx].quantity = Math.max(1, parseInt(e.target.value) || 1);
-                      setOrderItems(updated);
-                    }}
-                  />
-                </div>
-                <div className="form-group flex-1">
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Preço"
-                    value={item.unit_price}
-                    onChange={(e) => {
-                      const updated = [...orderItems];
-                      updated[idx].unit_price = safeNumber(e.target.value);
-                      setOrderItems(updated);
-                    }}
-                  />
-                </div>
-                <button type="button" className="btn-del-item ui-form__remove" onClick={() => handleRemoveOrderItem(idx)}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-
-          <div className="modal-footer ui-form__actions">
-            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsOrderModalOpen(false)}>
-              Cancelar
-            </button>
-            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
-              {isSaving ? 'Salvando...' : 'Salvar Pedido'}
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Modal 3: Cadastro / Edição de Cliente */}
-      <Modal
+      {/* Modal 3: Cadastro / Edição de Cliente Unificado */}
+      <CustomerModal
         isOpen={isCustomerModalOpen}
-        onClose={() => setIsCustomerModalOpen(false)}
-        title={editingCustomerId ? "Editar Cliente" : "Novo Cliente (PJ / PF)"}
-        subtitle="Cadastro centralizado para Vendas, CRM, Faturamento e Identity"
-        size="lg"
-      >
-        <form onSubmit={handleSaveCustomer} className="wizard-form ui-form">
-          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
-          <div className="form-row">
-            <div className="form-group flex-1">
-              <label>Tipo de Pessoa *</label>
-              <select value={custPersonType} onChange={(e) => setCustPersonType(e.target.value as any)}>
-                <option value="PJ">Pessoa Jurídica (PJ)</option>
-                <option value="PF">Pessoa Física (PF)</option>
-              </select>
-            </div>
-            <div className="form-group flex-2">
-              <label>{custPersonType === 'PJ' ? 'Razão Social *' : 'Nome Completo *'}</label>
-              <input
-                type="text"
-                required
-                value={custName}
-                onChange={(e) => setCustName(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>{custPersonType === 'PJ' ? 'CNPJ *' : 'CPF *'}</label>
-              <input
-                type="text"
-                required
-                value={custDocument}
-                onChange={(e) => setCustDocument(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group flex-2">
-              <label>Nome Fantasia</label>
-              <input
-                type="text"
-                value={custTradeName}
-                onChange={(e) => setCustTradeName(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>Inscrição Estadual</label>
-              <input
-                type="text"
-                value={custStateReg}
-                onChange={(e) => setCustStateReg(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>Limite de Crédito (R$)</label>
-              <input
-                type="number"
-                step="0.01"
-                value={custCreditLimit}
-                onChange={(e) => setCustCreditLimit(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group flex-1">
-              <label>E-mail Comercial</label>
-              <input
-                type="email"
-                value={custEmail}
-                onChange={(e) => setCustEmail(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>Telefone / WhatsApp</label>
-              <input
-                type="text"
-                value={custPhone}
-                onChange={(e) => setCustPhone(e.target.value)}
-              />
-            </div>
-            <div className="form-group flex-1">
-              <label>Contato Identity</label>
-              <select value={custContactId} onChange={(e) => setCustContactId(e.target.value)}>
-                <option value="">Nenhum contato vinculado</option>
-                {contacts.map(ct => (
-                  <option key={ct.id} value={ct.id}>{ct.full_name} ({ct.email || ct.phone || 'S/ dados'})</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="modal-footer ui-form__actions">
-            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsCustomerModalOpen(false)}>
-              Cancelar
-            </button>
-            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
-              {isSaving ? 'Salvando...' : 'Salvar Cliente'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+        onClose={() => {
+          setIsCustomerModalOpen(false);
+          setEditingCustomer(null);
+        }}
+        customer={editingCustomer}
+        onSuccess={() => {
+          triggerSuccess(editingCustomer ? "Cliente atualizado com sucesso!" : "Cliente cadastrado com sucesso!");
+          loadAllData(true);
+        }}
+      />
 
       {/* Modal 4: Nova Meta Comercial */}
       <Modal
@@ -2490,6 +2278,53 @@ export const Sales: React.FC = () => {
         type={confirmModal.type}
         confirmText={confirmModal.confirmText}
       />
+
+      {/* MODAL DE JUSTIFICATIVA DE CANCELAMENTO DE COTAÇÃO */}
+      {quoteToCancel && (
+        <Modal
+          isOpen={Boolean(quoteToCancel)}
+          onClose={() => setQuoteToCancel(null)}
+          title="Cancelar Cotação Comercial"
+          subtitle={`Informe o motivo do cancelamento / desistência da cotação #${quoteToCancel.quote_number}`}
+          size="md"
+        >
+          <div style={{ padding: '0.5rem 0' }}>
+            <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
+                Motivo do Cancelamento / Desistência *
+              </label>
+              <textarea
+                rows={3}
+                required
+                placeholder="Ex: Cliente optou por proposta concorrente / Cancelamento do projeto / Sem orçamento no momento"
+                value={cancelReasonInput}
+                onChange={(e) => setCancelReasonInput(e.target.value)}
+                className="ui-input"
+                style={{ width: '100%', resize: 'vertical' }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="ui-button ui-button--secondary"
+                onClick={() => setQuoteToCancel(null)}
+                disabled={isCancellingQuote}
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                className="ui-button ui-button--danger"
+                style={{ background: '#ef4444', color: '#fff' }}
+                onClick={handleConfirmCancelQuote}
+                disabled={isCancellingQuote || !cancelReasonInput.trim()}
+              >
+                {isCancellingQuote ? 'Cancelando...' : 'Confirmar Cancelamento'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

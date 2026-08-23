@@ -11,7 +11,7 @@ Disponibiliza os endpoints RESTful para:
 """
 
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/identity", tags=["Identity"])
 
 
 # ==============================================================================
-# 1. ENDPOINTS DE AUTENTICAÇÃO E PERFIL DO USUÁRIO LOGADO
+# 1. AUTENTICAÇÃO E PERFIL DO USUÁRIO LOGADO
 # ==============================================================================
 
 @router.post("/token")
@@ -252,14 +252,26 @@ def bulk_delete_organizations(
 # 6. ENDPOINTS DE CONTATOS INSTITUCIONAIS (Contact)
 # ==============================================================================
 
-@router.get("/contacts", response_model=list[schemas.ContactResponse], summary="Listar Contatos")
+@router.get("/contacts", response_model=list[schemas.ContactResponse], summary="Listar Contatos / Parceiros Unificados")
 def list_contacts(
-    search: str | None = None,
+    search: str | None = Query(None, description="Busca por nome, razão social, documento, e-mail ou telefone"),
+    is_customer: bool | None = Query(None, description="Filtrar perfil Cliente"),
+    is_supplier: bool | None = Query(None, description="Filtrar perfil Fornecedor"),
+    is_carrier: bool | None = Query(None, description="Filtrar perfil Transportadora"),
+    is_active: bool | None = Query(None, description="Filtrar por status ativo"),
     db: Session = Depends(get_db),
     current_user = Depends(service.get_current_user)
 ):
-    """Retorna contatos institucionais cadastrados para a organização do usuário."""
-    return service.list_contacts(db, current_user.organization_id, search)
+    """Retorna contatos e parceiros unificados (Odoo res.partner) cadastrados para a organização do usuário."""
+    return service.list_contacts(
+        db,
+        current_user.organization_id,
+        search=search,
+        is_customer=is_customer,
+        is_supplier=is_supplier,
+        is_carrier=is_carrier,
+        is_active=is_active
+    )
 
 
 @router.get("/contacts/{contact_id}", response_model=schemas.ContactResponse, summary="Obter Contato")

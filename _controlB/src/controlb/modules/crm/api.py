@@ -198,7 +198,7 @@ def list_opportunity_quotations(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.list_opportunity_quotations(db, opp_id, current_user.organization_id)
+    return service.list_opportunity_quotations(db, current_user.organization_id, opp_id)
 
 
 @router.post("/opportunities/{opp_id}/create-quote", summary="Gerar Cotação/Orçamento no Módulo de Vendas a partir de Oportunidade")

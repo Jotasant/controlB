@@ -32,6 +32,7 @@ export default defineConfig({
       '/sales': 'http://localhost:8000',
       '/billing': 'http://localhost:8000',
       '/finance': 'http://localhost:8000',
+      '/documents': 'http://localhost:8000',
       '/docs': 'http://localhost:8000',
       '/openapi.json': 'http://localhost:8000',
       '/health': 'http://localhost:8000',

@@ -212,7 +212,7 @@ def create_sales_quote(
             detail="A cotação deve conter pelo menos um item.",
         )
 
-    _validate_commercial_references(
+    customer, opportunity = _validate_commercial_references(
         db,
         organization_id,
         customer_id=payload.customer_id,
@@ -280,6 +280,40 @@ def create_sales_quote(
         status_value=saved_quote.status,
         created_by_id=current_user.id,
     )
+
+    if opportunity:
+        opp_doc = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            document_type="OPPORTUNITY",
+            native_id=opportunity.id,
+            document_number=opportunity.title,
+            current_status=opportunity.stage,
+            created_by_id=opportunity.assigned_to_id or current_user.id,
+            issued_at=opportunity.created_at,
+        )
+        documents_service.relate_documents(
+            db,
+            organization_id=organization_id,
+            parent_document=opp_doc,
+            child_document=quote_document,
+            relation_type="GENERATED_QUOTE",
+        )
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=opp_doc,
+            event_type="QUOTE_CREATED",
+            previous_status=opportunity.stage,
+            new_status="PROPOSAL" if opportunity.stage in ("QUALIFICATION", "PROSPECTING", "DISCOVERY") else opportunity.stage,
+            created_by_id=current_user.id,
+            event_metadata={"quote_id": str(saved_quote.id), "quote_number": saved_quote.quote_number},
+            idempotency_key=f"opportunity:{opportunity.id}:quote:{saved_quote.id}",
+        )
+        if opportunity.stage in ("QUALIFICATION", "PROSPECTING", "DISCOVERY"):
+            opportunity.stage = "PROPOSAL"
+            db.add(opportunity)
+
     db.flush()
     return saved_quote
 
@@ -434,6 +468,64 @@ def update_sales_quote_status(
             f"sales-quote:{quote.id}:status:{previous_status.lower()}:{normalized_status.lower()}"
         ),
     )
+    db.flush()
+    return quote
+
+
+def cancel_sales_quote(
+    db: Session,
+    quote_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    reason: str,
+    current_user: User,
+) -> models.SalesQuote:
+    _validate_current_user_tenant(current_user, organization_id)
+    quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
+    if not quote:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+
+    if quote.status in ("CANCELLED", "REJECTED", "EXPIRED"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A cotação já se encontra no status {quote.status}.",
+        )
+    if quote.status == "CONVERTED":
+        existing_orders = repository.list_orders_by_quote_id(db, quote.id, organization_id)
+        if existing_orders and any(o.status != "CANCELLED" for o in existing_orders):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A cotação já foi convertida em um Pedido de Venda ativo. Cancele primeiro o pedido de venda correspondente.",
+            )
+
+    previous_status = quote.status
+    quote_document = _ensure_quote_document(db, quote, organization_id)
+    quote.status = "CANCELLED"
+    quote.cancellation_reason = reason.strip()
+
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=quote_document,
+        event_type="CANCELLED",
+        previous_status=previous_status,
+        new_status="CANCELLED",
+        created_by_id=current_user.id,
+        event_metadata={"quote_id": str(quote.id), "reason": quote.cancellation_reason},
+        idempotency_key=f"sales-quote:{quote.id}:cancel:{datetime.now(timezone.utc).timestamp()}",
+    )
+
+    if quote.opportunity_id:
+        from controlb.modules.crm import repository as crm_repo
+        opp = crm_repo.get_opportunity_by_id(db, quote.opportunity_id, organization_id)
+        if opp and opp.stage not in ("WON", "LOST"):
+            other_active_quotes = [
+                q for q in repository.list_quotes(db, organization_id)
+                if q.opportunity_id == opp.id and q.id != quote.id and q.status in ("DRAFT", "SENT", "APPROVED")
+            ]
+            if not other_active_quotes:
+                opp.stage = "NEGOTIATION"
+                db.add(opp)
+
     db.flush()
     return quote
 
@@ -709,6 +801,7 @@ def delete_sales_order(
     order_id: uuid.UUID,
     organization_id: uuid.UUID,
     current_user: User,
+    reason: str | None = None,
 ):
     _validate_current_user_tenant(current_user, organization_id)
     order = repository.get_order_by_id_for_update(db, order_id, organization_id)
@@ -744,6 +837,9 @@ def delete_sales_order(
     )
     order.status = "CANCELLED"
     order.delivery_status = "CANCELLED"
+    if reason:
+        order.cancellation_reason = reason.strip()
+
     documents_service.record_event(
         db,
         organization_id=organization_id,
@@ -752,11 +848,139 @@ def delete_sales_order(
         previous_status=previous_status,
         new_status="CANCELLED",
         created_by_id=current_user.id,
-        event_metadata={"order_id": str(order.id)},
+        event_metadata={"order_id": str(order.id), "reason": order.cancellation_reason},
         idempotency_key=f"sales-order:{order.id}:cancelled",
     )
     db.flush()
     return {"message": "Pedido de venda cancelado com sucesso."}
+
+
+def update_sales_order_status(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    payload: schemas.SalesOrderUpdate,
+    current_user: User,
+) -> models.SalesOrder:
+    _validate_current_user_tenant(current_user, organization_id)
+    order = repository.get_order_by_id_for_update(db, order_id, organization_id)
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
+
+    previous_status = order.status
+    order_document = _ensure_order_document(db, order, organization_id)
+
+    if payload.status is not None:
+        norm_status = payload.status.strip().upper()
+        if norm_status in {"DRAFT", "CONFIRMED", "COMPLETED", "CANCELLED"}:
+            order.status = norm_status
+
+    if payload.delivery_status is not None:
+        norm_deliv = payload.delivery_status.strip().upper()
+        if norm_deliv in {"PENDING", "RESERVED", "DISPATCHED", "DELIVERED", "CANCELLED"}:
+            order.delivery_status = norm_deliv
+
+    if payload.billing_status is not None:
+        norm_bill = payload.billing_status.strip().upper()
+        if norm_bill in {"PENDING", "INVOICED"}:
+            order.billing_status = norm_bill
+
+    if payload.notes is not None:
+        order.notes = payload.notes
+
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="STATUS_CHANGED",
+        previous_status=previous_status,
+        new_status=order.status,
+        created_by_id=current_user.id,
+        event_metadata={
+            "delivery_status": order.delivery_status,
+            "billing_status": order.billing_status,
+        },
+        idempotency_key=f"sales-order:{order.id}:status:{order.status}:{order.delivery_status}:{order.billing_status}:{uuid.uuid4().hex[:6]}",
+    )
+    db.flush()
+    return order
+
+
+def request_order_billing(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+) -> models.SalesOrder:
+    _validate_current_user_tenant(current_user, organization_id)
+    order = repository.get_order_by_id_for_update(db, order_id, organization_id)
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
+
+    if order.billing_status == "INVOICED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este pedido de venda já foi faturado.",
+        )
+    if order.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Não é possível faturar um pedido cancelado.",
+        )
+
+    from controlb.modules.billing import service as billing_service, schemas as billing_schemas
+    
+    invoice = billing_service.create_invoice(
+        db,
+        organization_id,
+        current_user,
+        billing_schemas.InvoiceCreate(
+            sales_order_id=order.id,
+            customer_name=order.customer_name,
+            customer_document=order.customer_document,
+            total_amount=order.net_amount,
+            tax_amount=Decimal("0.00"),
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=30),
+            installments_count=1,
+            notes=f"Faturamento gerado a partir do Pedido #{order.order_number}",
+            generate_receivables_in_finance=True,
+        )
+    )
+
+    order.billing_status = "INVOICED"
+    order_document = _ensure_order_document(db, order, organization_id)
+    
+    inv_doc = documents_service.ensure_document(
+        db,
+        organization_id=organization_id,
+        document_type="INVOICE",
+        native_id=invoice.id,
+        document_number=invoice.invoice_number,
+        current_status=invoice.status,
+        created_by_id=current_user.id,
+        issued_at=invoice.created_at,
+    )
+    documents_service.relate_documents(
+        db,
+        organization_id=organization_id,
+        parent_document=order_document,
+        child_document=inv_doc,
+        relation_type="INVOICED_BY",
+    )
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="INVOICED",
+        previous_status=order.status,
+        new_status=order.status,
+        created_by_id=current_user.id,
+        event_metadata={"invoice_id": str(invoice.id), "invoice_number": invoice.invoice_number},
+        idempotency_key=f"sales-order:{order.id}:invoiced:{invoice.id}",
+    )
+    db.flush()
+    return order
 
 
 

@@ -116,21 +116,28 @@ def create_lead(db: Session, organization_id: uuid.UUID, payload: schemas.LeadCr
         if not cust:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente especificado não encontrado no módulo de Vendas.")
     else:
-        # Criação obrigatória/automática do Cliente em Vendas e Contato no Identity
+        customer_name = payload.company_name.strip() if payload.company_name else payload.name.strip()
+        person_type = payload.person_type or ("PJ" if payload.company_name else "PF")
+
+        # Criação obrigatória/automática do Cliente em Vendas e Contato no Identity (Odoo Partner Pattern)
         contact = identity_service.create_contact(
             db,
             organization_id,
             identity_schemas.ContactCreate(
+                person_type=person_type,
+                name=customer_name,
+                trade_name=payload.name.strip() if payload.company_name else None,
                 full_name=payload.name.strip(),
+                document=payload.document.strip() if payload.document else None,
                 email=payload.email.strip() if payload.email else None,
                 phone=payload.phone.strip() if payload.phone else None,
                 position="Contato Comercial (Lead)",
+                is_customer=True,
+                origin_module="CRM",
                 notes=f"Origem Lead CRM: {payload.source}"
             )
         )
         doc = payload.document.strip() if payload.document else f"LEAD-{uuid.uuid4().hex[:8].upper()}"
-        customer_name = payload.company_name.strip() if payload.company_name else payload.name.strip()
-        person_type = payload.person_type or ("PJ" if payload.company_name else "PF")
 
         cust = sales_service.create_customer(
             db,
@@ -351,15 +358,20 @@ def convert_lead_to_customer(
     from controlb.modules.identity import service as identity_service, schemas as identity_schemas
     from controlb.modules.sales import service as sales_service, schemas as sales_schemas
 
-    # 1. Cria Contato no Identity
+    # 1. Cria Contato no Identity (Padrão Odoo Partner)
     contact = identity_service.create_contact(
         db,
         organization_id,
         identity_schemas.ContactCreate(
+            person_type="PJ" if lead.company_name else "PF",
+            name=lead.company_name or lead.name,
+            trade_name=lead.name if lead.company_name else None,
             full_name=lead.name,
             email=lead.email,
             phone=lead.phone,
             position="Contato Comercial (Lead)",
+            is_customer=True,
+            origin_module="CRM",
             notes=f"Origem Lead CRM: {lead.source}"
         )
     )
@@ -380,6 +392,7 @@ def convert_lead_to_customer(
             email=lead.email,
             phone=lead.phone,
             contact_id=contact.id,
+            origin_module="CRM",
             notes=f"Convertido a partir do Lead CRM #{str(lead.id)[:8]} ({lead.source})"
         )
     )
@@ -391,14 +404,14 @@ def convert_lead_to_customer(
 
 def list_opportunity_quotations(
     db: Session,
-    opp_id: uuid.UUID,
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID,
+    opp_id: uuid.UUID
 ):
     opp = repository.get_opportunity_by_id(db, opp_id, organization_id)
     if not opp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oportunidade não encontrada.")
-    from controlb.modules.sales import repository as sales_repo
-    return sales_repo.list_quotes(db, organization_id)
+    from controlb.modules.sales import service as sales_service
+    return sales_service.list_sales_quotes(db, organization_id, opportunity_id=opp_id)
 
 
 def create_quote_from_opportunity(

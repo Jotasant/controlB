@@ -830,14 +830,29 @@ export interface CustomerInteraction {
 export interface Contact {
   id: string;
   organization_id: string;
-  full_name: string;
+  person_type?: 'PJ' | 'PF';
+  document?: string | null;
+  name?: string;
+  trade_name?: string | null;
+  state_registration?: string | null;
+  full_name?: string | null;
+  position?: string | null;
   email?: string | null;
   phone?: string | null;
   mobile?: string | null;
-  document?: string | null;
-  position?: string | null;
-  notes?: string | null;
+  address_street?: string | null;
+  address_number?: string | null;
+  address_neighborhood?: string | null;
+  address_city?: string | null;
+  address_state?: string | null;
+  address_zip_code?: string | null;
+  is_customer: boolean;
+  is_supplier: boolean;
+  is_carrier: boolean;
+  credit_limit?: number;
+  origin_module?: string;
   is_active: boolean;
+  notes?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -860,6 +875,7 @@ export interface Customer {
   address_state?: string | null;
   address_zip_code?: string | null;
   credit_limit: number;
+  origin_module?: string;
   is_active: boolean;
   notes?: string | null;
   created_at: string;
@@ -904,7 +920,8 @@ export interface SalesQuote {
   freight_amount?: number;
   net_amount: number;
   valid_until: string;
-  status: 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'CONVERTED' | 'EXPIRED';
+  status: 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'CONVERTED' | 'EXPIRED' | 'CANCELLED';
+  cancellation_reason?: string | null;
   notes?: string | null;
   created_at: string;
   updated_at: string;
@@ -938,6 +955,7 @@ export interface SalesOrder {
   delivery_status: 'PENDING' | 'RESERVED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELLED';
   billing_status: 'PENDING' | 'INVOICED';
   status: 'DRAFT' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+  cancellation_reason?: string | null;
   notes?: string | null;
   created_at: string;
   updated_at: string;

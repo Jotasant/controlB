@@ -27,12 +27,15 @@ import {
   ShieldCheck, Star, CheckCheck,
   Briefcase, CreditCard,
   User, UserCheck, Calendar, Sparkles,
-  FileCheck, History, ExternalLink
+  FileCheck, ExternalLink, GitBranch
 } from 'lucide-react';
-import { crmService, salesService, inventoryService, formatApiError } from '@/services/api';
-import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction } from '@/types';
+import { crmService, salesService, inventoryService, documentService, formatApiError } from '@/services/api';
+import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction, BusinessDocumentChain } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
 import { CustomerPicker } from '@/components/CustomerPicker';
+import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
+import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
+import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline';
 import { useToast } from '@/components/Toast/ToastContext';
 import './CRM.scss';
 
@@ -139,6 +142,36 @@ export const CRM: React.FC = () => {
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState<boolean>(false);
   const [selectedOppForQuote, setSelectedOppForQuote] = useState<Opportunity | null>(null);
 
+  // Rastreabilidade & Timeline Documental Transversal
+  const [isDocumentTimelineOpen, setIsDocumentTimelineOpen] = useState<boolean>(false);
+  const [documentTimelineLoading, setDocumentTimelineLoading] = useState<boolean>(false);
+  const [documentTimelineError, setDocumentTimelineError] = useState<string | null>(null);
+  const [documentChain, setDocumentChain] = useState<BusinessDocumentChain | null>(null);
+  const [documentTimelineLabel, setDocumentTimelineLabel] = useState<string>('');
+
+  const openDocumentTimeline = async (
+    documentType: 'OPPORTUNITY' | 'SALES_QUOTE' | 'SALES_ORDER',
+    nativeId: string,
+    label: string
+  ) => {
+    setDocumentTimelineLabel(label);
+    setDocumentTimelineError(null);
+    setDocumentChain(null);
+    setIsDocumentTimelineOpen(true);
+    setDocumentTimelineLoading(true);
+
+    try {
+      const chain = await documentService.getChain(documentType, nativeId, true);
+      setDocumentChain(chain);
+    } catch (err: unknown) {
+      const message = formatApiError(err, 'Não foi possível consultar a cadeia deste documento.');
+      setDocumentTimelineError(message);
+      toast.error(message, 'Rastreabilidade indisponível');
+    } finally {
+      setDocumentTimelineLoading(false);
+    }
+  };
+
   // Form Lead
   const [leadForm, setLeadForm] = useState({
     customer_id: '',
@@ -163,7 +196,7 @@ export const CRM: React.FC = () => {
   const [isSavingStage, setIsSavingStage] = useState<boolean>(false);
 
   // Proposal Studio Workspace State (Formulário Avançado de Propostas Comerciais)
-  const [proposalActiveTab, setProposalActiveTab] = useState<'general' | 'customer' | 'items' | 'terms' | 'approvals'>('general');
+  const [proposalActiveTab, setProposalActiveTab] = useState<'general' | 'customer' | 'quotes' | 'items' | 'terms' | 'approvals'>('general');
   const [proposalForm, setProposalForm] = useState({
     quote_number: 'PR-2026-0187',
     title: '',
@@ -198,29 +231,15 @@ export const CRM: React.FC = () => {
   const [tagInput, setTagInput] = useState<string>('');
   const [activeQuoteId, setActiveQuoteId] = useState<string | null>(null);
 
+  // Cliente vinculado à oportunidade e Wizard de Cadastro de Cliente (Módulo de Vendas)
+  const [linkedCustomer, setLinkedCustomer] = useState<Customer | null>(null);
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
+  const [isCustomerPickerModalOpen, setIsCustomerPickerModalOpen] = useState<boolean>(false);
+
   // Cotações vinculadas à oportunidade e Formulário Próprio de Cotação
   const [oppQuotations, setOppQuotations] = useState<SalesQuote[]>([]);
   const [isDedicatedQuoteModalOpen, setIsDedicatedQuoteModalOpen] = useState<boolean>(false);
-  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
-  const [quoteFormState, setQuoteFormState] = useState({
-    title: '',
-    quote_number: '',
-    valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-    delivery_deadline: '15 dias úteis',
-    payment_terms: 'Faturado 30 DDL',
-    notes: '',
-    tax_amount: 0,
-    freight_amount: 0,
-    is_main_for_opp: true,
-    items: [] as Array<{
-      product_id: string;
-      product_name?: string;
-      quantity: number;
-      unit_price: number;
-      discount_amount: number;
-      notes?: string;
-    }>
-  });
+  const [editingQuote, setEditingQuote] = useState<SalesQuote | null>(null);
 
   // Itens da Proposta Principal
   const [quoteItems, setQuoteItems] = useState<Array<{
@@ -234,10 +253,10 @@ export const CRM: React.FC = () => {
   const [isSavingQuote, setIsSavingQuote] = useState<boolean>(false);
   const [isAddingSidebarActivity, setIsAddingSidebarActivity] = useState<boolean>(false);
   const [sidebarActivityForm, setSidebarActivityForm] = useState({
-    type: 'CALL',
+    type: 'NOTE' as 'NOTE' | 'WHATSAPP' | 'CALL' | 'MEETING' | 'EMAIL',
     summary: '',
     date: new Date().toISOString().split('T')[0],
-    time: '10:00'
+    time: new Date().toTimeString().slice(0, 5)
   });
 
   // ===========================================================================
@@ -450,6 +469,26 @@ export const CRM: React.FC = () => {
       } else {
         setActiveQuoteId(null);
         initDefaultItems();
+      }
+
+      if (opp.customer_id) {
+        salesService.getCustomer(opp.customer_id, true).then(cust => {
+          if (cust) {
+            setLinkedCustomer(cust);
+            setProposalForm(prev => ({
+              ...prev,
+              customer_id: cust.id,
+              customer_name: cust.trade_name || cust.name,
+              customer_document: cust.document || prev.customer_document,
+              customer_email: cust.email || prev.customer_email,
+              customer_phone: cust.phone || prev.customer_phone
+            }));
+          }
+        }).catch(() => {
+          setLinkedCustomer(null);
+        });
+      } else {
+        setLinkedCustomer(null);
       }
 
       setProposalForm({
@@ -963,195 +1002,17 @@ export const CRM: React.FC = () => {
     return Math.max(0, sub + tax + freight);
   }, [proposalItemsSubtotal, proposalTotalDiscount, proposalForm.tax_amount, proposalForm.freight_amount]);
 
-  // Cálculos dinâmicos do Formulário Próprio de Cotação
-  const quoteFormSubtotal = useMemo(() => {
-    return quoteFormState.items.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
-  }, [quoteFormState.items]);
 
-  const quoteFormDiscount = useMemo(() => {
-    return quoteFormState.items.reduce((acc, it) => acc + (it.discount_amount || 0), 0);
-  }, [quoteFormState.items]);
-
-  const quoteFormTotal = useMemo(() => {
-    const sub = quoteFormSubtotal - quoteFormDiscount;
-    const tax = Number(quoteFormState.tax_amount) || 0;
-    const freight = Number(quoteFormState.freight_amount) || 0;
-    return Math.max(0, sub + tax + freight);
-  }, [quoteFormSubtotal, quoteFormDiscount, quoteFormState.tax_amount, quoteFormState.freight_amount]);
 
   // Handlers do Formulário Dedicado de Cotação
   const handleOpenNewQuoteModal = () => {
-    const versionNum = (oppQuotations.length || 0) + 1;
-    const newQuoteNum = `ORC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    setEditingQuoteId(null);
-    setQuoteFormState({
-      title: `Proposta Comercial v${versionNum} - ${proposalForm.title || selectedOpp?.title || 'Novo Fornecimento'}`,
-      quote_number: newQuoteNum,
-      valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      delivery_deadline: proposalForm.delivery_deadline || '15 dias úteis',
-      payment_terms: proposalForm.payment_method || 'Faturado 30 DDL',
-      notes: proposalForm.notes || '',
-      tax_amount: proposalForm.tax_amount || 0,
-      freight_amount: proposalForm.freight_amount || 0,
-      is_main_for_opp: true,
-      items: quoteItems.length > 0 ? quoteItems.map(it => ({ ...it })) : (products.length > 0 ? [{
-        product_id: products[0].id,
-        product_name: products[0].name,
-        quantity: 1,
-        unit_price: Number(products[0].sale_price || products[0].reference_price) || 100,
-        discount_amount: 0,
-        notes: ''
-      }] : [])
-    });
+    setEditingQuote(null);
     setIsDedicatedQuoteModalOpen(true);
   };
 
   const handleOpenEditQuoteModal = (quote: SalesQuote) => {
-    setEditingQuoteId(quote.id);
-    setQuoteFormState({
-      title: (quote as any).title || `Proposta ${quote.quote_number}`,
-      quote_number: quote.quote_number,
-      valid_until: quote.valid_until ? quote.valid_until.split('T')[0] : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      delivery_deadline: (quote as any).delivery_deadline || '15 dias úteis',
-      payment_terms: quote.payment_terms || 'Faturado 30 DDL',
-      notes: quote.notes || '',
-      tax_amount: (quote as any).tax_amount || 0,
-      freight_amount: (quote as any).freight_amount || 0,
-      is_main_for_opp: activeQuoteId === quote.id,
-      items: quote.items && quote.items.length > 0 ? quote.items.map((it: any) => ({
-        product_id: it.product_id,
-        product_name: it.product?.name,
-        quantity: it.quantity,
-        unit_price: it.unit_price,
-        discount_amount: it.discount_amount || 0,
-        notes: it.notes || ''
-      })) : (quoteItems.length > 0 ? quoteItems.map(it => ({ ...it })) : [])
-    });
+    setEditingQuote(quote);
     setIsDedicatedQuoteModalOpen(true);
-  };
-
-  const handleQuoteFormItemChange = (index: number, field: string, value: any) => {
-    setQuoteFormState(prev => {
-      const nextItems = [...prev.items];
-      const item = { ...nextItems[index] };
-      if (field === 'product_id') {
-        item.product_id = value;
-        const p = products.find(prod => prod.id === value);
-        if (p) {
-          item.product_name = p.name;
-          item.unit_price = Number(p.sale_price || p.reference_price) || 10.0;
-        }
-      } else if (field === 'quantity') {
-        item.quantity = Math.max(1, parseFloat(value) || 1);
-      } else if (field === 'unit_price') {
-        item.unit_price = Math.max(0, parseFloat(value) || 0);
-      } else if (field === 'discount_amount') {
-        item.discount_amount = Math.max(0, parseFloat(value) || 0);
-      } else if (field === 'notes') {
-        item.notes = value;
-      }
-      nextItems[index] = item;
-      return { ...prev, items: nextItems };
-    });
-  };
-
-  const handleAddQuoteFormItem = () => {
-    if (products.length === 0) {
-      toast.warning("Cadastre produtos no estoque antes de adicionar itens.", "Catálogo Vazio");
-      return;
-    }
-    const def = products[0];
-    setQuoteFormState(prev => ({
-      ...prev,
-      items: [
-        ...prev.items,
-        {
-          product_id: def.id,
-          product_name: def.name,
-          quantity: 1,
-          unit_price: Number(def.sale_price || def.reference_price) || 10.0,
-          discount_amount: 0,
-          notes: ''
-        }
-      ]
-    }));
-  };
-
-  const handleRemoveQuoteFormItem = (index: number) => {
-    setQuoteFormState(prev => ({
-      ...prev,
-      items: prev.items.filter((_, i) => i !== index)
-    }));
-  };
-
-  const handleSaveQuoteModal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedOpp) return;
-    if (!quoteFormState.items || quoteFormState.items.length === 0) {
-      toast.warning("Adicione pelo menos um item à cotação.");
-      return;
-    }
-
-    setIsSavingQuote(true);
-    try {
-      const itemsPayload = quoteFormState.items.map(it => ({
-        product_id: it.product_id,
-        quantity: Number(it.quantity) || 1,
-        unit_price: Number(it.unit_price) || 0,
-        discount_amount: Number(it.discount_amount) || 0,
-        notes: it.notes || ''
-      }));
-
-      let savedQuote: SalesQuote;
-      if (editingQuoteId) {
-        savedQuote = await salesService.updateQuote(editingQuoteId, {
-          payment_terms: quoteFormState.payment_terms,
-          valid_until: quoteFormState.valid_until,
-          notes: quoteFormState.notes,
-          items: itemsPayload
-        } as any);
-        setOppQuotations(prev => prev.map(q => q.id === editingQuoteId ? savedQuote : q));
-        toast.success(`Cotação '${savedQuote.quote_number}' atualizada com sucesso!`, "Cotação Salva");
-      } else {
-        savedQuote = await salesService.createQuote({
-          customer_id: selectedOpp.customer_id || undefined,
-          opportunity_id: selectedOpp.id,
-          customer_name: selectedOpp.customer_name,
-          payment_terms: quoteFormState.payment_terms,
-          valid_until: quoteFormState.valid_until,
-          notes: quoteFormState.notes,
-          items: itemsPayload
-        });
-        setOppQuotations(prev => [savedQuote, ...prev]);
-        toast.success(`Cotação '${savedQuote.quote_number}' criada com sucesso!`, "Cotação Criada");
-      }
-
-      if (quoteFormState.is_main_for_opp) {
-        setActiveQuoteId(savedQuote.id);
-        setQuoteItems(quoteFormState.items);
-        const sub = quoteFormState.items.reduce((acc, it) => acc + ((it.quantity * it.unit_price) - (it.discount_amount || 0)), 0);
-        const total = sub + (Number(quoteFormState.tax_amount) || 0) + (Number(quoteFormState.freight_amount) || 0);
-        setProposalForm(prev => ({
-          ...prev,
-          payment_method: quoteFormState.payment_terms,
-          valid_until: quoteFormState.valid_until,
-          delivery_deadline: quoteFormState.delivery_deadline,
-          tax_amount: quoteFormState.tax_amount,
-          freight_amount: quoteFormState.freight_amount
-        }));
-        await crmService.updateOpportunity(selectedOpp.id, {
-          estimated_amount: total
-        });
-        setOpportunities(prev => prev.map(o => o.id === selectedOpp.id ? { ...o, estimated_amount: total } : o));
-        setSelectedOpp(prev => prev ? { ...prev, estimated_amount: total } : null);
-      }
-
-      setIsDedicatedQuoteModalOpen(false);
-    } catch (err: any) {
-      toast.error(formatApiError(err, "Falha ao salvar cotação comercial."));
-    } finally {
-      setIsSavingQuote(false);
-    }
   };
 
   const handleSetMainQuote = async (quote: SalesQuote) => {
@@ -1179,6 +1040,55 @@ export const CRM: React.FC = () => {
     } catch (err: any) {
       toast.error(formatApiError(err, "Erro ao definir cotação principal."));
     }
+  };
+
+  // Handlers do Wizard de Cadastro e Vinculação de Clientes (Módulo de Vendas)
+  const handleOpenEditCustomerModal = () => {
+    setIsCustomerModalOpen(true);
+  };
+
+  const handleOpenNewCustomerModal = () => {
+    setLinkedCustomer(null);
+    setIsCustomerModalOpen(true);
+  };
+
+
+
+  const handleLinkCustomerFromPicker = async (cust: Customer | null) => {
+    if (!cust) return;
+    setLinkedCustomer(cust);
+    setProposalForm(prev => ({
+      ...prev,
+      customer_id: cust.id,
+      customer_name: cust.trade_name || cust.name,
+      customer_document: cust.document || '',
+      customer_email: cust.email || '',
+      customer_phone: cust.phone || ''
+    }));
+
+    const targetOppId = selectedOpp?.id || selectedOppForQuote?.id;
+    if (targetOppId) {
+      try {
+        await crmService.updateOpportunity(targetOppId, {
+          customer_id: cust.id,
+          customer_name: cust.trade_name || cust.name
+        });
+        setOpportunities(prev => prev.map(o => o.id === targetOppId ? {
+          ...o,
+          customer_id: cust.id,
+          customer_name: cust.trade_name || cust.name
+        } : o));
+        setSelectedOpp(prev => prev ? {
+          ...prev,
+          customer_id: cust.id,
+          customer_name: cust.trade_name || cust.name
+        } : null);
+        toast.success(`Cliente '${cust.name}' vinculado a esta oportunidade!`, "Cliente Vinculado");
+      } catch (err: any) {
+        toast.error(formatApiError(err, "Erro ao vincular cliente à oportunidade."));
+      }
+    }
+    setIsCustomerPickerModalOpen(false);
   };
 
   const handleSaveProposal = async (e?: React.FormEvent) => {
@@ -1331,14 +1241,14 @@ export const CRM: React.FC = () => {
       }
       setIsAddingSidebarActivity(false);
       setSidebarActivityForm({
-        type: 'CALL',
+        type: 'NOTE',
         summary: '',
         date: new Date().toISOString().split('T')[0],
-        time: '10:00'
+        time: new Date().toTimeString().slice(0, 5)
       });
-      toast.success("Follow-up registrado com sucesso!", "Atividade Agendada");
+      toast.success("Atualização registrada no histórico da proposta!", "Follow-up Registrado");
     } catch (err: any) {
-      toast.error(formatApiError(err, "Falha ao registrar follow-up."));
+      toast.error(formatApiError(err, "Falha ao registrar atualização."));
     }
   };
 
@@ -3539,6 +3449,17 @@ export const CRM: React.FC = () => {
                   >
                     <Copy size={14} />
                   </button>
+                  {selectedOpp && (
+                    <button
+                      type="button"
+                      className="btn-action-icon"
+                      onClick={() => void openDocumentTimeline('OPPORTUNITY', selectedOpp.id, selectedOpp.title)}
+                      title="Ver cadeia documental completa da oportunidade até a entrega"
+                    >
+                      <GitBranch size={14} />
+                      <span>Rastrear</span>
+                    </button>
+                  )}
                 </div>
 
                 <button
@@ -3943,96 +3864,132 @@ export const CRM: React.FC = () => {
                 {proposalActiveTab === 'customer' && (
                   <div className="opp-tab-content">
                     
-                    {/* Card de Dados Cadastrais */}
-                    <div className="form-section-card">
-                      <div className="card-header">
-                        <Building2 size={16} className="card-header-icon" />
-                        <div>
-                          <h4>Dados Cadastrais do Cliente</h4>
-                          <p>Informações de contato e faturamento corporativo</p>
+                    {/* Card Executivo de Dados do Cliente (Módulo de Vendas) */}
+                    <div className="form-section-card customer-executive-card">
+                      <div className="card-header customer-card-header">
+                        <div className="customer-header-left">
+                          <div className="customer-avatar-badge">
+                            {linkedCustomer?.person_type === 'PF' ? <User size={20} /> : <Building2 size={20} />}
+                          </div>
+                          <div>
+                            <div className="customer-title-row">
+                              <h4>{linkedCustomer?.name || proposalForm.customer_name || 'Cliente da Oportunidade'}</h4>
+                              {linkedCustomer?.trade_name && (
+                                <span className="customer-trade-pill">({linkedCustomer.trade_name})</span>
+                              )}
+                              <span className="customer-status-badge">
+                                {linkedCustomer?.person_type === 'PF' ? 'Pessoa Física (PF)' : 'Pessoa Jurídica (PJ)'}
+                              </span>
+                              <span className="customer-sync-badge">
+                                Sincronizado com Vendas
+                              </span>
+                            </div>
+                            <p className="customer-sub-text">
+                              Cadastro centralizado de clientes e faturamento corporativo
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="customer-header-actions">
+                          <button
+                            type="button"
+                            className="btn-customer-action btn-edit-customer"
+                            onClick={handleOpenEditCustomerModal}
+                            title="Editar dados cadastrais do cliente"
+                          >
+                            <Edit3 size={14} />
+                            <span>Editar Cliente</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-customer-action btn-switch-customer"
+                            onClick={() => setIsCustomerPickerModalOpen(true)}
+                            title="Trocar cliente vinculado selecionando da base comercial"
+                          >
+                            <RefreshCw size={14} />
+                            <span>Trocar Cliente</span>
+                          </button>
                         </div>
                       </div>
 
                       <div className="card-body">
-                        <div className="form-grid-2">
-                          <div className="form-group">
-                            <label>Razão Social / Nome Fantasia</label>
-                            <div className="input-with-icon-box">
-                              <Building2 size={15} className="input-prefix-icon" />
-                              <input
-                                type="text"
-                                className="ui-input has-prefix-icon"
-                                value={proposalForm.customer_name}
-                                onChange={(e) => setProposalForm({ ...proposalForm, customer_name: e.target.value })}
-                              />
+                        <div className="customer-executive-grid">
+                          <div className="customer-field-card">
+                            <span className="field-label">
+                              <FileText size={13} />
+                              <span>CNPJ / CPF</span>
+                            </span>
+                            <strong className="field-value document-value">
+                              {linkedCustomer?.document || proposalForm.customer_document || 'Não informado'}
+                            </strong>
+                          </div>
+
+                          <div className="customer-field-card">
+                            <span className="field-label">
+                              <Mail size={13} />
+                              <span>E-mail Comercial</span>
+                            </span>
+                            <span className="field-value email-value">
+                              {(linkedCustomer?.email || proposalForm.customer_email) ? (
+                                <a href={`mailto:${linkedCustomer?.email || proposalForm.customer_email}`}>
+                                  {linkedCustomer?.email || proposalForm.customer_email}
+                                </a>
+                              ) : (
+                                <span className="text-muted">Não informado</span>
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="customer-field-card">
+                            <span className="field-label">
+                              <Phone size={13} />
+                              <span>Telefone / WhatsApp</span>
+                            </span>
+                            <div className="field-value phone-value-box">
+                              <span>{linkedCustomer?.phone || proposalForm.customer_phone || 'Não informado'}</span>
+                              {(linkedCustomer?.phone || proposalForm.customer_phone) && (
+                                <button
+                                  type="button"
+                                  className="btn-wa-direct"
+                                  onClick={() => handleOpenWhatsApp(linkedCustomer?.phone || proposalForm.customer_phone, linkedCustomer?.name || proposalForm.customer_name)}
+                                  title="Iniciar conversa no WhatsApp"
+                                >
+                                  <MessageSquare size={13} />
+                                  <span>WhatsApp</span>
+                                </button>
+                              )}
                             </div>
                           </div>
 
-                          <div className="form-group">
-                            <label>CNPJ / CPF</label>
-                            <div className="input-with-icon-box">
-                              <FileText size={15} className="input-prefix-icon" />
-                              <input
-                                type="text"
-                                className="ui-input has-prefix-icon"
-                                placeholder="00.000.000/0000-00"
-                                value={proposalForm.customer_document}
-                                onChange={(e) => setProposalForm({ ...proposalForm, customer_document: e.target.value })}
-                              />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="form-grid-3" style={{ marginTop: '0.85rem' }}>
-                          <div className="form-group">
-                            <label>E-mail Comercial</label>
-                            <div className="input-with-icon-box">
-                              <Mail size={15} className="input-prefix-icon" />
-                              <input
-                                type="email"
-                                className="ui-input has-prefix-icon"
-                                placeholder="contato@empresa.com.br"
-                                value={proposalForm.customer_email}
-                                onChange={(e) => setProposalForm({ ...proposalForm, customer_email: e.target.value })}
-                              />
-                            </div>
+                          <div className="customer-field-card">
+                            <span className="field-label">
+                              <User size={13} />
+                              <span>Contato Principal</span>
+                            </span>
+                            <strong className="field-value">
+                              {proposalForm.contact_person || (linkedCustomer as any)?.contact_name || 'Carlos Mendes (Comprador)'}
+                            </strong>
                           </div>
 
-                          <div className="form-group">
-                            <label>Telefone / WhatsApp</label>
-                            <div className="input-with-action">
-                              <div className="input-with-icon-box" style={{ flex: 1 }}>
-                                <Phone size={15} className="input-prefix-icon" />
-                                <input
-                                  type="text"
-                                  className="ui-input has-prefix-icon"
-                                  placeholder="(11) 99999-9999"
-                                  value={proposalForm.customer_phone}
-                                  onChange={(e) => setProposalForm({ ...proposalForm, customer_phone: e.target.value })}
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                className="btn-phone-quick"
-                                onClick={() => handleOpenWhatsApp(proposalForm.customer_phone, proposalForm.customer_name)}
-                                title="Abrir conversa no WhatsApp"
-                              >
-                                <MessageSquare size={15} />
-                              </button>
-                            </div>
+                          <div className="customer-field-card">
+                            <span className="field-label">
+                              <Building2 size={13} />
+                              <span>Praça / Localização</span>
+                            </span>
+                            <span className="field-value">
+                              {(linkedCustomer as any)?.address_city ? `${(linkedCustomer as any).address_city} - ${(linkedCustomer as any).address_state || 'SP'}` : 'São Paulo / SP'}
+                            </span>
                           </div>
 
-                          <div className="form-group">
-                            <label>Contato Principal</label>
-                            <div className="input-with-icon-box">
-                              <User size={15} className="input-prefix-icon" />
-                              <input
-                                type="text"
-                                className="ui-input has-prefix-icon"
-                                value={proposalForm.contact_person}
-                                onChange={(e) => setProposalForm({ ...proposalForm, contact_person: e.target.value })}
-                              />
-                            </div>
+                          <div className="customer-field-card">
+                            <span className="field-label">
+                              <ShieldCheck size={13} />
+                              <span>Status Cadastral</span>
+                            </span>
+                            <span className="field-value status-active">
+                              <CheckCircle2 size={13} />
+                              <span>Ativo no Módulo de Vendas</span>
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -4212,6 +4169,15 @@ export const CRM: React.FC = () => {
                                     >
                                       <ExternalLink size={13} />
                                       <span>Editar Cotação</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-edit-quote"
+                                      onClick={() => void openDocumentTimeline('SALES_QUOTE', q.id, `Cotação #${q.quote_number}`)}
+                                      title="Ver rastreabilidade completa desta cotação"
+                                    >
+                                      <GitBranch size={13} />
+                                      <span>Rastrear</span>
                                     </button>
                                   </div>
                                 </div>
@@ -4691,8 +4657,8 @@ export const CRM: React.FC = () => {
                 {/* Header da Sidebar */}
                 <div className="sidebar-header-bar">
                   <div className="header-title-box">
-                    <Clock size={16} className="title-icon" />
-                    <h4>Follow-ups & Atividades</h4>
+                    <MessageSquare size={16} className="title-icon" />
+                    <h4>Follow-ups & Atualizações</h4>
                   </div>
                   <button
                     type="button"
@@ -4700,20 +4666,20 @@ export const CRM: React.FC = () => {
                     onClick={() => setIsAddingSidebarActivity(!isAddingSidebarActivity)}
                   >
                     <Plus size={13} />
-                    <span>{isAddingSidebarActivity ? 'Fechar' : 'Nova Ação'}</span>
+                    <span>{isAddingSidebarActivity ? 'Fechar' : 'Nova Atualização'}</span>
                   </button>
                 </div>
 
-                {/* Inline Activity Scheduler Form */}
+                {/* Composer de Atualizações / Follow-ups da Proposta */}
                 {isAddingSidebarActivity && (
                   <form onSubmit={handleSaveSidebarActivity} className="modern-inline-activity-card">
                     <div className="activity-type-chips">
                       {[
-                        { id: 'CALL', label: 'Ligação', icon: Phone },
+                        { id: 'NOTE', label: 'Nota', icon: FileText },
                         { id: 'WHATSAPP', label: 'WhatsApp', icon: MessageSquare },
+                        { id: 'CALL', label: 'Ligação', icon: Phone },
                         { id: 'MEETING', label: 'Reunião', icon: Users },
-                        { id: 'EMAIL', label: 'E-mail', icon: Mail },
-                        { id: 'NOTE', label: 'Nota', icon: FileText }
+                        { id: 'EMAIL', label: 'E-mail', icon: Mail }
                       ].map(t => {
                         const Icon = t.icon;
                         const isSelected = sidebarActivityForm.type === t.id;
@@ -4731,54 +4697,61 @@ export const CRM: React.FC = () => {
                       })}
                     </div>
 
-                    <div className="input-with-icon-box">
-                      <FileText size={14} className="input-prefix-icon" />
-                      <input
-                        type="text"
-                        placeholder="Resumo da ação (ex: Ligar para alinhar proposta)..."
+                    <div className="update-textarea-wrap">
+                      <textarea
+                        rows={3}
+                        className="update-composer-textarea"
+                        placeholder={
+                          sidebarActivityForm.type === 'NOTE' ? "Escreva uma anotação ou ocorrência da proposta (ex: Cliente aguardando validação interna)..." :
+                          sidebarActivityForm.type === 'WHATSAPP' ? "O que foi conversado ou acordado via WhatsApp..." :
+                          sidebarActivityForm.type === 'CALL' ? "Resumo do alinhamento realizado por telefone..." :
+                          sidebarActivityForm.type === 'MEETING' ? "Principais pontos discutidos na reunião..." :
+                          "Assunto e detalhes do e-mail enviado/recebido..."
+                        }
                         value={sidebarActivityForm.summary}
                         onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, summary: e.target.value })}
-                        className="ui-input has-prefix-icon sm"
                         required
                       />
                     </div>
 
-                    <div className="date-time-row">
-                      <div className="input-with-icon-box">
-                        <Calendar size={14} className="input-prefix-icon" />
-                        <input
-                          type="date"
-                          value={sidebarActivityForm.date}
-                          onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, date: e.target.value })}
-                          className="ui-input has-prefix-icon sm"
-                        />
+                    <div className="update-composer-meta-row">
+                      <div className="composer-date-group">
+                        <div className="input-with-icon-box">
+                          <Calendar size={13} className="input-prefix-icon" />
+                          <input
+                            type="date"
+                            value={sidebarActivityForm.date}
+                            onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, date: e.target.value })}
+                            className="ui-input has-prefix-icon sm"
+                          />
+                        </div>
+                        <div className="input-with-icon-box">
+                          <Clock size={13} className="input-prefix-icon" />
+                          <input
+                            type="time"
+                            value={sidebarActivityForm.time}
+                            onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, time: e.target.value })}
+                            className="ui-input has-prefix-icon sm"
+                          />
+                        </div>
                       </div>
-                      <div className="input-with-icon-box">
-                        <Clock size={14} className="input-prefix-icon" />
-                        <input
-                          type="time"
-                          value={sidebarActivityForm.time}
-                          onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, time: e.target.value })}
-                          className="ui-input has-prefix-icon sm"
-                        />
-                      </div>
-                    </div>
 
-                    <div className="activity-card-actions">
-                      <button
-                        type="button"
-                        className="btn-cancel-action"
-                        onClick={() => setIsAddingSidebarActivity(false)}
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="submit"
-                        className="btn-submit-action"
-                      >
-                        <Plus size={13} />
-                        <span>Agendar Ação</span>
-                      </button>
+                      <div className="activity-card-actions">
+                        <button
+                          type="button"
+                          className="btn-cancel-action"
+                          onClick={() => setIsAddingSidebarActivity(false)}
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="btn-submit-action"
+                        >
+                          <Plus size={13} />
+                          <span>Registrar</span>
+                        </button>
+                      </div>
                     </div>
                   </form>
                 )}
@@ -4786,8 +4759,8 @@ export const CRM: React.FC = () => {
                 {/* Próxima Ação Destaque */}
                 <div className="modern-spotlight-card">
                   <div className="spotlight-top">
-                    <span className="spotlight-tag">Próxima Ação</span>
-                    <span className="priority-tag">Prioritária</span>
+                    <span className="spotlight-tag">Último Andamento</span>
+                    <span className="priority-tag">Em Negociação</span>
                   </div>
                   <div className="spotlight-content">
                     <div className="icon-wrapper">
@@ -4795,16 +4768,16 @@ export const CRM: React.FC = () => {
                     </div>
                     <div className="info-wrapper">
                       <strong>Follow-up com Decisor</strong>
-                      <span className="due-time">{fmtDate(proposalForm.expected_closing_date)} às 10:00</span>
-                      <span className="agent-text">{proposalForm.responsible_name}</span>
+                      <span className="due-time">{fmtDate(proposalForm.expected_closing_date)}</span>
+                      <span className="agent-text">Resp: {proposalForm.responsible_name}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Linha do Tempo Conectada */}
+                {/* Linha do Tempo de Atualizações */}
                 <div className="modern-timeline-container">
                   <div className="timeline-title-row">
-                    <span>Histórico de Atividades</span>
+                    <span>Histórico de Atualizações</span>
                     <span className="count-tag">{oppInteractions.length}</span>
                   </div>
 
@@ -4829,33 +4802,10 @@ export const CRM: React.FC = () => {
                         </div>
                       ))
                     ) : (
-                      <>
-                        <div className="timeline-entry">
-                          <div className="timeline-node call">
-                            <Phone size={12} />
-                          </div>
-                          <div className="timeline-card">
-                            <div className="card-top">
-                              <span className="card-title">Alinhamento Comercial Inicial</span>
-                              <span className="card-time">Hoje</span>
-                            </div>
-                            <p className="card-details">Apresentação dos serviços e levantamento de necessidades.</p>
-                          </div>
-                        </div>
-
-                        <div className="timeline-entry">
-                          <div className="timeline-node mail">
-                            <Mail size={12} />
-                          </div>
-                          <div className="timeline-card">
-                            <div className="card-top">
-                              <span className="card-title">Envio da Proposta Comercial</span>
-                              <span className="card-time">{fmtDate(proposalForm.creation_date)}</span>
-                            </div>
-                            <p className="card-details">Proposta formal enviada com escopo e condições.</p>
-                          </div>
-                        </div>
-                      </>
+                      <div className="empty-timeline-hint">
+                        <p>Nenhuma atualização registrada ainda.</p>
+                        <span>Clique em <strong>+ Nova Atualização</strong> acima para registrar contatos, notas ou alinhamentos desta proposta.</span>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -4939,282 +4889,140 @@ export const CRM: React.FC = () => {
       )}
 
       {/* =================================================================== */}
-      {/* MODAL DEDICADO DE COTAÇÃO / PROPOSTA COMERCIAL (FASE 3)              */}
+      {/* MODAL DEDICADO DE COTAÇÃO / PROPOSTA COMERCIAL (UNIFICADO)          */}
       {/* =================================================================== */}
-      {isDedicatedQuoteModalOpen && (
+      <QuoteModal
+        isOpen={isDedicatedQuoteModalOpen}
+        onClose={() => {
+          setIsDedicatedQuoteModalOpen(false);
+          setEditingQuote(null);
+        }}
+        quote={editingQuote}
+        fixedCustomerId={selectedOpp?.customer_id || linkedCustomer?.id || null}
+        fixedOpportunityId={selectedOpp?.id || null}
+        fixedCustomerName={selectedOpp?.customer_name || linkedCustomer?.name || ''}
+        onSuccess={async (_savedQuote) => {
+          if (selectedOpp) {
+            try {
+              const quotes = await crmService.getOpportunityQuotations(selectedOpp.id, true);
+              setOppQuotations(quotes);
+              await loadCRMData();
+            } catch (e) {
+              console.error("Erro ao sincronizar cotações:", e);
+            }
+          }
+        }}
+      />
+
+      {/* ========================================================================= */}
+      {/* MODAL / WIZARD DEDICADO: CADASTRO DO CLIENTE (UNIFICADO MÓDULO DE VENDAS)  */}
+      {/* ========================================================================= */}
+      <CustomerModal
+        isOpen={isCustomerModalOpen}
+        onClose={() => setIsCustomerModalOpen(false)}
+        customer={linkedCustomer}
+        onSuccess={async (savedCust) => {
+          setLinkedCustomer(savedCust);
+          setProposalForm(prev => ({
+            ...prev,
+            customer_id: savedCust.id,
+            customer_name: savedCust.trade_name || savedCust.name,
+            customer_document: savedCust.document || '',
+            customer_email: savedCust.email || '',
+            customer_phone: savedCust.phone || ''
+          }));
+
+          const targetOppId = selectedOpp?.id || selectedOppForQuote?.id;
+          if (targetOppId) {
+            try {
+              await crmService.updateOpportunity(targetOppId, {
+                customer_id: savedCust.id,
+                customer_name: savedCust.trade_name || savedCust.name
+              });
+              setOpportunities(prev => prev.map(o => o.id === targetOppId ? {
+                ...o,
+                customer_id: savedCust.id,
+                customer_name: savedCust.trade_name || savedCust.name
+              } : o));
+              setSelectedOpp(prev => prev ? {
+                ...prev,
+                customer_id: savedCust.id,
+                customer_name: savedCust.trade_name || savedCust.name
+              } : null);
+            } catch (err: any) {
+              console.error("Erro ao sincronizar oportunidade com cliente:", err);
+            }
+          }
+        }}
+      />
+
+      {/* ========================================================================= */}
+      {/* 6. MODAL / WIZARD: SELECIONAR / VINCULAR CLIENTE DA BASE COMERCIAL        */}
+      {/* ========================================================================= */}
+      {isCustomerPickerModalOpen && (
         <Modal
-          isOpen={isDedicatedQuoteModalOpen}
-          onClose={() => setIsDedicatedQuoteModalOpen(false)}
-          title={editingQuoteId ? `Editar Cotação (${quoteFormState.quote_number})` : `Nova Cotação Comercial`}
-          subtitle={`Vinculada ao negócio '${selectedOpp?.title || proposalForm.title}'`}
-          size="lg"
+          isOpen={isCustomerPickerModalOpen}
+          onClose={() => setIsCustomerPickerModalOpen(false)}
+          title="Vincular Cliente do Módulo de Vendas"
+          subtitle="Selecione um cliente existente ou cadastre um novo para associar à proposta"
+          size="md"
         >
-          <form onSubmit={handleSaveQuoteModal} className="dedicated-quote-modal-form">
-            
-            {/* 1. Cabeçalho & Metadados da Cotação */}
-            <div className="quote-modal-section">
-              <div className="section-title-row">
-                <FileCheck size={16} className="sec-icon" />
-                <h4>Dados Gerais do Orçamento</h4>
-              </div>
-              <div className="quote-form-grid-3">
-                <div className="form-group grid-span-2">
-                  <label>Título da Versão / Proposta *</label>
-                  <div className="input-with-icon-box">
-                    <FileText size={15} className="input-prefix-icon" />
-                    <input
-                      type="text"
-                      value={quoteFormState.title}
-                      onChange={(e) => setQuoteFormState({ ...quoteFormState, title: e.target.value })}
-                      className="ui-input has-prefix-icon"
-                      placeholder="Ex: Proposta Comercial v2 - Com 5% de desconto"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Número do Orçamento</label>
-                  <div className="input-with-icon-box">
-                    <Tag size={15} className="input-prefix-icon" />
-                    <input
-                      type="text"
-                      value={quoteFormState.quote_number}
-                      className="ui-input has-prefix-icon readonly-input"
-                      readOnly
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Validade da Proposta</label>
-                  <div className="input-with-icon-box">
-                    <Calendar size={15} className="input-prefix-icon" />
-                    <input
-                      type="date"
-                      value={quoteFormState.valid_until}
-                      onChange={(e) => setQuoteFormState({ ...quoteFormState, valid_until: e.target.value })}
-                      className="ui-input has-prefix-icon"
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Prazo de Entrega</label>
-                  <div className="input-with-icon-box">
-                    <Clock size={15} className="input-prefix-icon" />
-                    <input
-                      type="text"
-                      value={quoteFormState.delivery_deadline}
-                      onChange={(e) => setQuoteFormState({ ...quoteFormState, delivery_deadline: e.target.value })}
-                      className="ui-input has-prefix-icon"
-                      placeholder="Ex: 15 dias úteis"
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Condição de Pagamento</label>
-                  <div className="select-with-icon-box">
-                    <CreditCard size={15} className="input-prefix-icon" />
-                    <select
-                      value={quoteFormState.payment_terms}
-                      onChange={(e) => setQuoteFormState({ ...quoteFormState, payment_terms: e.target.value })}
-                      className="custom-styled-select has-prefix-icon"
-                    >
-                      <option value="À Vista / PIX (5% desc)">À Vista / PIX (5% desc)</option>
-                      <option value="Faturado 15 DDL">Faturado 15 DDL</option>
-                      <option value="Faturado 30 DDL">Faturado 30 DDL</option>
-                      <option value="Faturado 30/60 DDL">Faturado 30/60 DDL</option>
-                      <option value="30% entrada + 2x boleto">30% entrada + 2x boleto</option>
-                      <option value="Cartão de Crédito até 10x">Cartão de Crédito até 10x</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 2. Tabela de Itens e Produtos da Cotação */}
-            <div className="quote-modal-section">
-              <div className="section-header-flex">
-                <div className="section-title-row">
-                  <Package size={16} className="sec-icon" />
-                  <h4>Produtos & Serviços Cotados ({quoteFormState.items.length})</h4>
-                </div>
-                <button
-                  type="button"
-                  className="btn-add-item-sm ui-button ui-button--primary ui-button--sm"
-                  onClick={handleAddQuoteFormItem}
-                >
-                  <Plus size={13} />
-                  <span>Adicionar Produto</span>
-                </button>
-              </div>
-
-              <div className="quote-modal-table-wrap">
-                <table className="quote-modal-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '45%' }}>Item / Produto do Almoxarifado</th>
-                      <th style={{ width: '15%', textAlign: 'center' }}>Qtd</th>
-                      <th style={{ width: '18%', textAlign: 'right' }}>Preço Unitário</th>
-                      <th style={{ width: '15%', textAlign: 'right' }}>Desconto (R$)</th>
-                      <th style={{ width: '17%', textAlign: 'right' }}>Total do Item</th>
-                      <th style={{ width: '50px' }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {quoteFormState.items.map((item, idx) => {
-                      const itemTotal = (item.quantity * item.unit_price) - (item.discount_amount || 0);
-                      return (
-                        <tr key={idx}>
-                          <td>
-                            <select
-                              value={item.product_id}
-                              onChange={(e) => handleQuoteFormItemChange(idx, 'product_id', e.target.value)}
-                              className="custom-styled-select table-select"
-                            >
-                              {products.map(p => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name} {p.sku ? `(${p.sku})` : ''} - {fmtCurrency(p.sale_price || p.reference_price)}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={item.quantity}
-                              onChange={(e) => handleQuoteFormItemChange(idx, 'quantity', e.target.value)}
-                              className="ui-input table-input text-center"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.unit_price}
-                              onChange={(e) => handleQuoteFormItemChange(idx, 'unit_price', e.target.value)}
-                              className="ui-input table-input text-right"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.discount_amount}
-                              onChange={(e) => handleQuoteFormItemChange(idx, 'discount_amount', e.target.value)}
-                              className="ui-input table-input text-right"
-                            />
-                          </td>
-                          <td className="text-right">
-                            <strong className="item-total-cell">{fmtCurrency(itemTotal)}</strong>
-                          </td>
-                          <td className="text-center">
-                            <button
-                              type="button"
-                              className="btn-remove-row"
-                              onClick={() => handleRemoveQuoteFormItem(idx)}
-                              title="Remover item"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* 3. Resumo Financeiro & Condições */}
-            <div className="quote-modal-section quote-bottom-grid">
-              <div className="quote-notes-col">
-                <label>Observações & Condições Específicas desta Proposta</label>
-                <textarea
-                  rows={4}
-                  value={quoteFormState.notes}
-                  onChange={(e) => setQuoteFormState({ ...quoteFormState, notes: e.target.value })}
-                  className="ui-input full-textarea"
-                  placeholder="Instruções de fornecimento, escopo de garantia, prazos especiais ou detalhes acordados nesta versão..."
-                />
-                <label className="custom-checkbox-row" style={{ marginTop: '0.75rem' }}>
-                  <input
-                    type="checkbox"
-                    checked={quoteFormState.is_main_for_opp}
-                    onChange={(e) => setQuoteFormState({ ...quoteFormState, is_main_for_opp: e.target.checked })}
-                  />
-                  <span>Definir esta cotação e seus itens como o valor principal da oportunidade</span>
-                </label>
-              </div>
-
-              <div className="quote-summary-col">
-                <div className="summary-box">
-                  <div className="summary-row">
-                    <span>Subtotal dos Produtos:</span>
-                    <strong>{fmtCurrency(quoteFormSubtotal)}</strong>
-                  </div>
-                  <div className="summary-row text-discount">
-                    <span>Desconto Total:</span>
-                    <strong>- {fmtCurrency(quoteFormDiscount)}</strong>
-                  </div>
-                  <div className="summary-row">
-                    <span>Impostos / Tributos:</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={quoteFormState.tax_amount}
-                      onChange={(e) => setQuoteFormState({ ...quoteFormState, tax_amount: parseFloat(e.target.value) || 0 })}
-                      className="mini-sum-input"
-                    />
-                  </div>
-                  <div className="summary-row">
-                    <span>Frete / Instalação:</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={quoteFormState.freight_amount}
-                      onChange={(e) => setQuoteFormState({ ...quoteFormState, freight_amount: parseFloat(e.target.value) || 0 })}
-                      className="mini-sum-input"
-                    />
-                  </div>
-                  <div className="summary-row total-highlight">
-                    <span>Valor Total da Proposta:</span>
-                    <span className="final-sum-val">{fmtCurrency(quoteFormTotal)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Rodapé de Ações */}
-            <div className="modal-footer ui-form__actions">
+          <div className="customer-picker-modal-body" style={{ padding: '1rem 0' }}>
+            <p style={{ fontSize: '0.825rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+              Pesquise pelo nome, razão social, CNPJ ou e-mail na base mestre de Vendas:
+            </p>
+            <CustomerPicker
+              value={proposalForm.customer_id}
+              onChange={handleLinkCustomerFromPicker}
+              allowCreate={true}
+            />
+            <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button
                 type="button"
                 className="btn-secondary ui-button ui-button--secondary"
-                onClick={() => setIsDedicatedQuoteModalOpen(false)}
+                onClick={() => {
+                  setIsCustomerPickerModalOpen(false);
+                  handleOpenNewCustomerModal();
+                }}
               >
-                Cancelar
+                <Plus size={14} />
+                <span>Cadastrar Novo Cliente</span>
               </button>
               <button
-                type="submit"
-                className="btn-primary ui-button ui-button--primary"
-                disabled={isSavingQuote}
+                type="button"
+                className="btn-secondary ui-button ui-button--secondary"
+                onClick={() => setIsCustomerPickerModalOpen(false)}
               >
-                <CheckCircle2 size={16} />
-                <span>{isSavingQuote ? 'Salvando...' : (editingQuoteId ? 'Salvar Alterações da Cotação' : 'Gerar e Salvar Cotação')}</span>
+                Fechar
               </button>
             </div>
-
-          </form>
+          </div>
         </Modal>
       )}
+
+      {/* MODAL DE RASTREABILIDADE DOCUMENTAL TRANSVERSAL */}
+      <Modal
+        isOpen={isDocumentTimelineOpen}
+        onClose={() => setIsDocumentTimelineOpen(false)}
+        title={`Cadeia documental · ${documentTimelineLabel}`}
+        subtitle="Rastreabilidade entre os documentos realmente vinculados de ponta a ponta"
+        size="lg"
+      >
+        {documentTimelineLoading ? (
+          <div className="ui-document-timeline-loading" role="status" style={{ padding: '2rem', textAlign: 'center' }}>
+            <RefreshCw size={20} className="spinner" />
+            <p style={{ marginTop: '0.75rem', color: 'var(--text-secondary)' }}>Consultando documentos relacionados no grafo...</p>
+          </div>
+        ) : documentTimelineError ? (
+          <div className="modal-alert-error" role="alert" style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderRadius: '8px' }}>
+            {documentTimelineError}
+          </div>
+        ) : documentChain ? (
+          <DocumentTimeline chain={documentChain} />
+        ) : (
+          <div className="ui-empty-state" style={{ padding: '2rem', textAlign: 'center' }}>Nenhuma cadeia documental disponível.</div>
+        )}
+      </Modal>
     </div>
   );
 };
