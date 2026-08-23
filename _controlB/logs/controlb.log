@@ -7244,3 +7244,389 @@ WHERE bank_transaction.organization_id = %(organization_id_1)s::UUID AND bank_tr
 [2026-08-23 11:20:51] [INFO   ] [controlb:358] [MainThread] - 📦 [INVENTORY] Movimentação em 'Omeprazol 20mg' (MED-OME-0001): 15.0000 -> 12.0000 None [out_loss] por user 5ae61511-2472-46c5-8d9a-231996d133ad
 [2026-08-23 11:20:51] [INFO   ] [controlb:865] [MainThread] - 🚚 [INVENTORY ENTRY] Recebimento de PO em 'Paracetamol 750mg': +50.00 -> Novo Saldo: 60.0000 None
 [2026-08-23 11:20:51] [INFO   ] [controlb:358] [MainThread] - 📦 [INVENTORY] Movimentação em 'Amoxicilina 500mg' (MED-AMX-0001): 20.0000 -> 120.0000 None [in_invoice] por user 7df2fead-3f73-4785-bd18-951807712176
+[2026-08-23 11:21:54] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /inventory/products - IP: 172.17.0.1
+[2026-08-23 11:21:54] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /inventory/categories - IP: 172.17.0.1
+[2026-08-23 11:21:54] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /inventory/movements - IP: 172.17.0.1
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - select pg_catalog.version()
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [raw sql] {}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - select current_schema()
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [raw sql] {}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - show standard_conforming_strings
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [raw sql] {}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00060s] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00094s] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00050s] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00123s] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.001404s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.001566s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00128s] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.001413s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.001541s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT product_category.id, product_category.organization_id, product_category.name, product_category.code, product_category.description, product_category.is_active, product_category.created_at, product_category.updated_at 
+FROM product_category 
+WHERE product_category.organization_id = %(organization_id_1)s::UUID ORDER BY product_category.name ASC
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT product.id, product.organization_id, product.category_id, product.sku, product.name, product.description, product.unit_of_measure, product.reference_price, product.cost_price, product.sale_price, product.external_code, product.brand, product.barcode, product.ncm, product.is_perishable, product.requires_batch, product.shelf_life_days, product.current_stock, product.min_stock, product.max_stock, product.storage_location, product.is_active, product.created_at, product.updated_at 
+FROM product 
+WHERE product.organization_id = %(organization_id_1)s::UUID ORDER BY product.name ASC
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT stock_movement.id, stock_movement.organization_id, stock_movement.product_id, stock_movement.movement_type, stock_movement.quantity, stock_movement.unit_cost, stock_movement.balance_after, stock_movement.reference_doc, stock_movement.invoice_attachment, stock_movement.notes, stock_movement.created_by_id, stock_movement.created_at 
+FROM stock_movement 
+WHERE stock_movement.organization_id = %(organization_id_1)s::UUID ORDER BY stock_movement.created_at DESC 
+ LIMIT %(param_1)s::INTEGER
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00138s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00035s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e'), 'param_1': 100}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00244s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:54] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /inventory/products -> Status 200 (238.53ms)
+[2026-08-23 11:21:54] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /inventory/products HTTP/1.1" 200
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:54] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /inventory/categories -> Status 200 (209.75ms)
+[2026-08-23 11:21:54] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /inventory/categories HTTP/1.1" 200
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:54] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /inventory/products - IP: 172.17.0.1
+[2026-08-23 11:21:54] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /inventory/categories - IP: 172.17.0.1
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.05234s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.05307s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.04617s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.0463s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.04136s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.0415s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT product.id, product.organization_id, product.category_id, product.sku, product.name, product.description, product.unit_of_measure, product.reference_price, product.cost_price, product.sale_price, product.external_code, product.brand, product.barcode, product.ncm, product.is_perishable, product.requires_batch, product.shelf_life_days, product.current_stock, product.min_stock, product.max_stock, product.storage_location, product.is_active, product.created_at, product.updated_at 
+FROM product 
+WHERE product.organization_id = %(organization_id_1)s::UUID ORDER BY product.name ASC
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT product_category.id, product_category.organization_id, product_category.name, product_category.code, product_category.description, product_category.is_active, product_category.created_at, product_category.updated_at 
+FROM product_category 
+WHERE product_category.organization_id = %(organization_id_1)s::UUID ORDER BY product_category.name ASC
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.03073s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.03203s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:54] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /inventory/products -> Status 200 (13.80ms)
+[2026-08-23 11:21:54] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /inventory/products HTTP/1.1" 200
+[2026-08-23 11:21:54] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /inventory/categories -> Status 200 (12.20ms)
+[2026-08-23 11:21:54] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /inventory/categories HTTP/1.1" 200
+[2026-08-23 11:21:54] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /inventory/movements -> Status 200 (225.61ms)
+[2026-08-23 11:21:54] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /inventory/movements HTTP/1.1" 200
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:54] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /inventory/movements - IP: 172.17.0.1
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.06914s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.06231s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.05695s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT stock_movement.id, stock_movement.organization_id, stock_movement.product_id, stock_movement.movement_type, stock_movement.quantity, stock_movement.unit_cost, stock_movement.balance_after, stock_movement.reference_doc, stock_movement.invoice_attachment, stock_movement.notes, stock_movement.created_by_id, stock_movement.created_at 
+FROM stock_movement 
+WHERE stock_movement.organization_id = %(organization_id_1)s::UUID ORDER BY stock_movement.created_at DESC 
+ LIMIT %(param_1)s::INTEGER
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.04368s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e'), 'param_1': 100}
+[2026-08-23 11:21:54] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /inventory/movements -> Status 200 (12.32ms)
+[2026-08-23 11:21:54] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /inventory/movements HTTP/1.1" 200
+[2026-08-23 11:21:54] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/requests - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/quotations - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/orders - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/cost-centers - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/suggestions - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/suppliers - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.014s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.016s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.017s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.01s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.01s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.011s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.006s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.006s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.006s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT purchase_request.id, purchase_request.organization_id, purchase_request.requester_id, purchase_request.cost_center_id, purchase_request.request_number, purchase_request.justification, purchase_request.status, purchase_request.total_estimated_amount, purchase_request.required_date, purchase_request.created_at, purchase_request.updated_at 
+FROM purchase_request 
+WHERE purchase_request.organization_id = %(organization_id_1)s::UUID ORDER BY purchase_request.created_at DESC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT purchase_order.id, purchase_order.organization_id, purchase_order.purchase_request_id, purchase_order.supplier_id, purchase_order.buyer_id, purchase_order.cost_center_id, purchase_order.order_number, purchase_order.status, purchase_order.payment_terms, purchase_order.freight_type, purchase_order.freight_amount, purchase_order.discount_amount, purchase_order.expected_delivery_date, purchase_order.notes, purchase_order.total_amount, purchase_order.invoice_number, purchase_order.invoice_attachment, purchase_order.received_at, purchase_order.received_by_id, purchase_order.is_active, purchase_order.created_at, purchase_order.updated_at, purchase_order.supplier_quote_id 
+FROM purchase_order 
+WHERE purchase_order.organization_id = %(organization_id_1)s::UUID ORDER BY purchase_order.created_at DESC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT quotation_process.id, quotation_process.organization_id, quotation_process.purchase_request_id, quotation_process.quotation_number, quotation_process.status, quotation_process.notes, quotation_process.is_active, quotation_process.created_at, quotation_process.updated_at 
+FROM quotation_process 
+WHERE quotation_process.organization_id = %(organization_id_1)s::UUID ORDER BY quotation_process.created_at DESC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00134s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00064s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00226s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/orders -> Status 200 (46.06ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/orders HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/requests -> Status 200 (88.99ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/requests HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/orders - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/requests - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.062s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.061s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.062s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.063s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/quotations -> Status 200 (57.72ms)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.063s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/quotations HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.058s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.058s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/quotations - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.055s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.057s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.064s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.065s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.066s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT purchase_order.id, purchase_order.organization_id, purchase_order.purchase_request_id, purchase_order.supplier_id, purchase_order.buyer_id, purchase_order.cost_center_id, purchase_order.order_number, purchase_order.status, purchase_order.payment_terms, purchase_order.freight_type, purchase_order.freight_amount, purchase_order.discount_amount, purchase_order.expected_delivery_date, purchase_order.notes, purchase_order.total_amount, purchase_order.invoice_number, purchase_order.invoice_attachment, purchase_order.received_at, purchase_order.received_by_id, purchase_order.is_active, purchase_order.created_at, purchase_order.updated_at, purchase_order.supplier_quote_id 
+FROM purchase_order 
+WHERE purchase_order.organization_id = %(organization_id_1)s::UUID ORDER BY purchase_order.created_at DESC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.064s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.064s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT purchase_request.id, purchase_request.organization_id, purchase_request.requester_id, purchase_request.cost_center_id, purchase_request.request_number, purchase_request.justification, purchase_request.status, purchase_request.total_estimated_amount, purchase_request.required_date, purchase_request.created_at, purchase_request.updated_at 
+FROM purchase_request 
+WHERE purchase_request.organization_id = %(organization_id_1)s::UUID ORDER BY purchase_request.created_at DESC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.05364s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.08s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.05535s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.066s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.075s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/orders -> Status 200 (27.00ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/orders HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/requests -> Status 200 (27.35ms)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.07s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/requests HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT quotation_process.id, quotation_process.organization_id, quotation_process.purchase_request_id, quotation_process.quotation_number, quotation_process.status, quotation_process.notes, quotation_process.is_active, quotation_process.created_at, quotation_process.updated_at 
+FROM quotation_process 
+WHERE quotation_process.organization_id = %(organization_id_1)s::UUID ORDER BY quotation_process.created_at DESC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT supplier.id, supplier.organization_id, supplier.name, supplier.trade_name, supplier.cnpj_cpf, supplier.state_registration, supplier.contact_name, supplier.segments, supplier.payment_terms, supplier.min_order_amount, supplier.anvisa_license, supplier.notes, supplier.email, supplier.phone, supplier.address, supplier.city, supplier.state, supplier.zip_code, supplier.country, supplier.is_active, supplier.created_at, supplier.updated_at 
+FROM supplier 
+WHERE supplier.organization_id = %(organization_id_1)s::UUID ORDER BY supplier.name
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT product.id, product.organization_id, product.category_id, product.sku, product.name, product.description, product.unit_of_measure, product.reference_price, product.cost_price, product.sale_price, product.external_code, product.brand, product.barcode, product.ncm, product.is_perishable, product.requires_batch, product.shelf_life_days, product.current_stock, product.min_stock, product.max_stock, product.storage_location, product.is_active, product.created_at, product.updated_at 
+FROM product 
+WHERE product.organization_id = %(organization_id_1)s::UUID AND product.is_active = true AND product.current_stock <= product.min_stock ORDER BY product.current_stock ASC, product.name ASC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.06369s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00258s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00112s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT cost_center.id, cost_center.organization_id, cost_center.code, cost_center.name, cost_center.description, cost_center.manager_id, cost_center.is_active, cost_center.created_at, cost_center.updated_at 
+FROM cost_center 
+WHERE cost_center.organization_id = %(organization_id_1)s::UUID ORDER BY cost_center.code
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [generated in 0.00101s] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/quotations -> Status 200 (26.17ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/quotations HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/suggestions -> Status 200 (97.32ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/suggestions HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/suggestions - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.111s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.105s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.1s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/suppliers -> Status 200 (109.68ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/suppliers HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/cost-centers -> Status 200 (110.97ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/cost-centers HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT product.id, product.organization_id, product.category_id, product.sku, product.name, product.description, product.unit_of_measure, product.reference_price, product.cost_price, product.sale_price, product.external_code, product.brand, product.barcode, product.ncm, product.is_perishable, product.requires_batch, product.shelf_life_days, product.current_stock, product.min_stock, product.max_stock, product.storage_location, product.is_active, product.created_at, product.updated_at 
+FROM product 
+WHERE product.organization_id = %(organization_id_1)s::UUID AND product.is_active = true AND product.current_stock <= product.min_stock ORDER BY product.current_stock ASC, product.name ASC
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.02763s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/cost-centers - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:66] [MainThread] - ➡️ [HTTP IN] GET /purchasing/suppliers - IP: 172.17.0.1
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/suggestions -> Status 200 (16.25ms)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2712] [AnyIO worker thread] - BEGIN (implicit)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/suggestions HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.126s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT "user".id, "user".organization_id, "user".role_id, "user".email, "user".full_name, "user".hashed_password, "user".is_active, "user".created_at, "user".updated_at 
+FROM "user" 
+WHERE "user".id = %(id_1)s::UUID
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.126s ago] {'id_1': UUID('6afacca9-d53d-4b70-9592-ae6cac6f6c1f')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role.id AS role_id, role.organization_id AS role_organization_id, role.name AS role_name, role.description AS role_description, role.is_active AS role_is_active, role.created_at AS role_created_at, role.updated_at AS role_updated_at 
+FROM role 
+WHERE role.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.121s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.121s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT role_1.id AS role_1_id, permission.id AS permission_id, permission.code AS permission_code, permission.name AS permission_name, permission.module AS permission_module, permission.description AS permission_description, permission.is_active AS permission_is_active, permission.created_at AS permission_created_at, permission.updated_at AS permission_updated_at 
+FROM role AS role_1 JOIN role_permission AS role_permission_1 ON role_1.id = role_permission_1.role_id JOIN permission ON permission.id = role_permission_1.permission_id 
+WHERE role_1.id IN (%(primary_keys_1)s::UUID)
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.116s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 3.117s ago] {'primary_keys_1': UUID('383616f5-e92b-4e2f-b4b7-1adb4d60eb5b')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT supplier.id, supplier.organization_id, supplier.name, supplier.trade_name, supplier.cnpj_cpf, supplier.state_registration, supplier.contact_name, supplier.segments, supplier.payment_terms, supplier.min_order_amount, supplier.anvisa_license, supplier.notes, supplier.email, supplier.phone, supplier.address, supplier.city, supplier.state, supplier.zip_code, supplier.country, supplier.is_active, supplier.created_at, supplier.updated_at 
+FROM supplier 
+WHERE supplier.organization_id = %(organization_id_1)s::UUID ORDER BY supplier.name
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - SELECT cost_center.id, cost_center.organization_id, cost_center.code, cost_center.name, cost_center.description, cost_center.manager_id, cost_center.is_active, cost_center.created_at, cost_center.updated_at 
+FROM cost_center 
+WHERE cost_center.organization_id = %(organization_id_1)s::UUID ORDER BY cost_center.code
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.04506s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:1848] [AnyIO worker thread] - [cached since 0.04126s ago] {'organization_id_1': UUID('2be91233-1ba4-41a4-9580-628fd013747e')}
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/suppliers -> Status 200 (18.24ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/suppliers HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
+[2026-08-23 11:21:57] [INFO   ] [controlb:74] [MainThread] - ⬅️ [HTTP OUT] GET /purchasing/cost-centers -> Status 200 (20.00ms)
+[2026-08-23 11:21:57] [INFO   ] [uvicorn.access:485] [MainThread] - 172.17.0.1:0 - "GET /purchasing/cost-centers HTTP/1.1" 200
+[2026-08-23 11:21:57] [INFO   ] [sqlalchemy.engine.Engine:2718] [AnyIO worker thread] - COMMIT
