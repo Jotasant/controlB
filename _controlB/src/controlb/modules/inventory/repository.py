@@ -10,9 +10,15 @@ Isola todas as consultas SQLAlchemy para:
 import uuid
 from decimal import Decimal
 from sqlalchemy import select, func, and_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, noload
 
-from controlb.modules.inventory.models import ProductCategory, Product, StockMovement
+from controlb.modules.inventory.models import (
+    ProductCategory,
+    Product,
+    StockMovement,
+    StockReservation,
+    StockReservationItem,
+)
 
 
 # ==============================================================================
@@ -169,3 +175,121 @@ def list_stock_movements(
         stmt = stmt.where(StockMovement.product_id == product_id)
     stmt = stmt.order_by(StockMovement.created_at.desc()).limit(limit)
     return list(db.scalars(stmt).all())
+
+
+# ==============================================================================
+# 4. RESERVAS E DISPONIBILIDADE
+# ==============================================================================
+
+def get_sales_order_for_update(
+    db: Session,
+    sales_order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+):
+    from controlb.modules.sales.models import SalesOrder
+
+    stmt = (
+        select(SalesOrder)
+        .where(
+            SalesOrder.id == sales_order_id,
+            SalesOrder.organization_id == organization_id,
+        )
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
+def lock_products_by_ids(
+    db: Session,
+    product_ids: list[uuid.UUID],
+    organization_id: uuid.UUID,
+) -> list[Product]:
+    """Bloqueia produtos em ordem estável para evitar deadlocks entre reservas e PDV."""
+    stable_ids = sorted(set(product_ids), key=str)
+    if not stable_ids:
+        return []
+    stmt = (
+        select(Product)
+        .options(noload(Product.movements))
+        .where(
+            Product.organization_id == organization_id,
+            Product.id.in_(stable_ids),
+        )
+        .order_by(Product.id.asc())
+        .with_for_update()
+    )
+    return list(db.scalars(stmt).all())
+
+
+def get_reservation_by_sales_order(
+    db: Session,
+    sales_order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> StockReservation | None:
+    stmt = select(StockReservation).where(
+        StockReservation.sales_order_id == sales_order_id,
+        StockReservation.organization_id == organization_id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return db.scalars(stmt).first()
+
+
+def get_reservation_by_id(
+    db: Session,
+    reservation_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> StockReservation | None:
+    stmt = select(StockReservation).where(
+        StockReservation.id == reservation_id,
+        StockReservation.organization_id == organization_id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return db.scalars(stmt).first()
+
+
+def get_reserved_quantities(
+    db: Session,
+    organization_id: uuid.UUID,
+    product_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, Decimal]:
+    stable_ids = sorted(set(product_ids), key=str)
+    if not stable_ids:
+        return {}
+    stmt = (
+        select(
+            StockReservationItem.product_id,
+            func.sum(StockReservationItem.quantity),
+        )
+        .join(
+            StockReservation,
+            and_(
+                StockReservation.id == StockReservationItem.reservation_id,
+                StockReservation.organization_id == StockReservationItem.organization_id,
+            ),
+        )
+        .where(
+            StockReservation.organization_id == organization_id,
+            StockReservation.status == "RESERVED",
+            StockReservationItem.product_id.in_(stable_ids),
+        )
+        .group_by(StockReservationItem.product_id)
+    )
+    return {
+        product_id: Decimal(str(quantity or 0))
+        for product_id, quantity in db.execute(stmt).all()
+    }
+
+
+def save_reservation(
+    db: Session,
+    reservation: StockReservation,
+) -> StockReservation:
+    db.add(reservation)
+    db.flush()
+    return reservation

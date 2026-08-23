@@ -5,11 +5,20 @@ modules/sales/models.py - Modelos ORM do Módulo de Vendas & PDV (Sales & POS Do
 import uuid
 from datetime import datetime, timezone, date
 from decimal import Decimal
-from sqlalchemy import String, Text, Boolean, DateTime, Date, Numeric, ForeignKey, Integer
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    String, Text, Boolean, DateTime, Date, Numeric, ForeignKey, ForeignKeyConstraint,
+    Integer, UniqueConstraint
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
+from controlb.modules.documents.models import BusinessDocument
+
+if TYPE_CHECKING:
+    from controlb.modules.crm.models import Opportunity
 
 
 def utcnow() -> datetime:
@@ -58,7 +67,7 @@ class Customer(Base):
     # Relacionamentos
     quotes: Mapped[list["SalesQuote"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
     orders: Mapped[list["SalesOrder"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
-    opportunities: Mapped[list["controlb.modules.crm.models.Opportunity"]] = relationship(foreign_keys="controlb.modules.crm.models.Opportunity.customer_id")
+    opportunities: Mapped[list["Opportunity"]] = relationship(back_populates="customer")
 
 
 # ==============================================================================
@@ -70,11 +79,22 @@ class SalesQuote(Base):
     Tabela 'sales_quote' - Orçamentos Comerciais com fluxo de aprovação e conversão.
     """
     __tablename__ = "sales_quote"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_sales_quote_document_org",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("customer.id", ondelete="SET NULL"), nullable=True)
     opportunity_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunity.id", ondelete="SET NULL"), nullable=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
+    )
     
     quote_number: Mapped[str] = mapped_column(String(50), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -98,7 +118,10 @@ class SalesQuote(Base):
 
     # Relacionamentos
     customer: Mapped["Customer | None"] = relationship(back_populates="quotes")
-    opportunity: Mapped["controlb.modules.crm.models.Opportunity | None"] = relationship(back_populates="quotes", lazy="selectin")
+    opportunity: Mapped["Opportunity | None"] = relationship(
+        back_populates="quotes", lazy="selectin"
+    )
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     items: Mapped[list["SalesQuoteItem"]] = relationship(back_populates="quote", cascade="all, delete-orphan", lazy="selectin")
 
 
@@ -131,12 +154,25 @@ class SalesOrder(Base):
     Tabela 'sales_order' - Pedidos de Venda Oficiais.
     """
     __tablename__ = "sales_order"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_sales_order_document_org",
+        ),
+        UniqueConstraint("sales_quote_id", name="uq_sales_order_sales_quote"),
+        UniqueConstraint("id", "organization_id", name="uq_sales_order_id_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("customer.id", ondelete="SET NULL"), nullable=True)
     sales_quote_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sales_quote.id", ondelete="SET NULL"), nullable=True)
     opportunity_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunity.id", ondelete="SET NULL"), nullable=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
+    )
     
     order_number: Mapped[str] = mapped_column(String(50), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -159,7 +195,8 @@ class SalesOrder(Base):
 
     # Relacionamentos
     customer: Mapped["Customer | None"] = relationship(back_populates="orders")
-    opportunity: Mapped["controlb.modules.crm.models.Opportunity | None"] = relationship(lazy="selectin")
+    opportunity: Mapped["Opportunity | None"] = relationship(lazy="selectin")
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     items: Mapped[list["SalesOrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan", lazy="selectin")
 
 
@@ -389,4 +426,3 @@ class SalesReturnItem(Base):
 
     # Relacionamentos
     sales_return: Mapped["SalesReturn"] = relationship(back_populates="items")
-

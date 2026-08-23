@@ -18,7 +18,17 @@ export default defineConfig({
       '/identity': 'http://localhost:8000',
       '/inventory': 'http://localhost:8000',
       '/purchasing': 'http://localhost:8000',
-      '/crm': 'http://localhost:8000',
+      '/crm': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass: (req) => {
+          // Se for uma requisição de navegação no navegador (HTML ou rota exata /crm), serve o index.html da SPA
+          const accept = req.headers.accept || '';
+          if (accept.includes('text/html') || req.url === '/crm' || req.url === '/crm/') {
+            return '/index.html';
+          }
+        },
+      },
       '/sales': 'http://localhost:8000',
       '/billing': 'http://localhost:8000',
       '/finance': 'http://localhost:8000',

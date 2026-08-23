@@ -11,6 +11,7 @@ Define contratos de validação e serialização para:
 import uuid
 from decimal import Decimal
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -162,6 +163,45 @@ class StockMovementResponse(BaseModel):
     product: ProductResponse | None = None
 
 
+class StockReservationItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    reservation_id: uuid.UUID
+    product_id: uuid.UUID
+    quantity: Decimal
+    created_at: datetime
+    product: ProductResponse | None = None
+
+
+class StockReservationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    sales_order_id: uuid.UUID
+    document_id: uuid.UUID
+    reservation_number: str
+    status: Literal["RESERVED", "RELEASED"]
+    status_version: int
+    created_by_id: uuid.UUID | None = None
+    released_by_id: uuid.UUID | None = None
+    released_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[StockReservationItemResponse]
+
+
+class ProductAvailabilityResponse(BaseModel):
+    product_id: uuid.UUID
+    sku: str
+    product_name: str
+    current_stock: Decimal
+    reserved_stock: Decimal
+    available_stock: Decimal
+
+
 # ==============================================================================
 # 4. SCHEMAS DE IMPORTAÇÃO E SINCRONIZAÇÃO DE ESTOQUE
 # ==============================================================================
@@ -200,4 +240,3 @@ class InventoryImportSummaryResponse(BaseModel):
 # Aliases para compatibilidade
 ToolsPharmaImportItemDetail = InventoryImportItemDetail
 ToolsPharmaImportSummaryResponse = InventoryImportSummaryResponse
-

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/sales", tags=["Sales & POS / Vendas e Frente de Caix
 def list_sales_quotes(
     opportunity_id: uuid.UUID | None = Query(None),
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:view"))
 ):
     return service.list_sales_quotes(db, current_user.organization_id, opportunity_id)
 
@@ -30,7 +30,7 @@ def list_sales_quotes(
 def get_sales_quote(
     quote_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:view"))
 ):
     return service.get_sales_quote(db, quote_id, current_user.organization_id)
 
@@ -39,7 +39,7 @@ def get_sales_quote(
 def create_sales_quote(
     payload: schemas.SalesQuoteCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
     return service.create_sales_quote(db, current_user.organization_id, current_user, payload)
 
@@ -49,7 +49,7 @@ def update_sales_quote(
     quote_id: uuid.UUID,
     payload: schemas.SalesQuoteUpdate,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
     return service.update_sales_quote(db, quote_id, current_user.organization_id, payload)
 
@@ -59,18 +59,24 @@ def update_sales_quote_status(
     quote_id: uuid.UUID,
     new_status: str = Query(..., description="DRAFT, SENT, APPROVED, REJECTED, CONVERTED, EXPIRED, CANCELLED"),
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.update_sales_quote_status(db, quote_id, current_user.organization_id, new_status)
+    return service.update_sales_quote_status(
+        db,
+        quote_id,
+        current_user.organization_id,
+        new_status,
+        current_user,
+    )
 
 
-@router.delete("/quotes/{quote_id}", status_code=status.HTTP_200_OK, summary="Excluir Orçamento")
+@router.delete("/quotes/{quote_id}", status_code=status.HTTP_200_OK, summary="Cancelar Orçamento")
 def delete_sales_quote(
     quote_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.delete_sales_quote(db, quote_id, current_user.organization_id)
+    return service.delete_sales_quote(db, quote_id, current_user.organization_id, current_user)
 
 
 # ==============================================================================
@@ -80,7 +86,7 @@ def delete_sales_quote(
 @router.get("/orders", response_model=list[schemas.SalesOrderResponse], summary="Listar Pedidos de Venda")
 def list_sales_orders(
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:view"))
 ):
     return service.list_sales_orders(db, current_user.organization_id)
 
@@ -89,7 +95,7 @@ def list_sales_orders(
 def get_sales_order(
     order_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:view"))
 ):
     return service.get_sales_order(db, order_id, current_user.organization_id)
 
@@ -98,18 +104,18 @@ def get_sales_order(
 def create_sales_order(
     payload: schemas.SalesOrderCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
     return service.create_sales_order(db, current_user.organization_id, current_user, payload)
 
 
-@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Excluir Pedido de Venda")
+@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Cancelar Pedido de Venda")
 def delete_sales_order(
     order_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.delete_sales_order(db, order_id, current_user.organization_id)
+    return service.delete_sales_order(db, order_id, current_user.organization_id, current_user)
 
 
 
@@ -250,7 +256,7 @@ def delete_customer(
 def convert_quote_to_order(
     quote_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(identity_service.get_current_user)
+    current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
     return service.convert_quote_to_order(db, quote_id, current_user.organization_id, current_user)
 
@@ -353,5 +359,3 @@ def get_sales_analytics(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.get_sales_analytics(db, current_user.organization_id)
-
-

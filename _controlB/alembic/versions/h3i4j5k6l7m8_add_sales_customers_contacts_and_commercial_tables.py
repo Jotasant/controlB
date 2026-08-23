@@ -1,7 +1,7 @@
 """add_sales_customers_contacts_and_commercial_tables
 
 Revision ID: h3i4j5k6l7m8
-Revises: g2h3i4j5k6l7
+Revises: h2i3j4k5l6m7
 Create Date: 2026-08-17 13:25:00.000000
 
 """
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = 'h3i4j5k6l7m8'
-down_revision: Union[str, Sequence[str], None] = 'g2h3i4j5k6l7'
+down_revision: Union[str, Sequence[str], None] = 'h2i3j4k5l6m7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -20,7 +20,16 @@ from controlb.modules.inventory.spreadsheet_parser import parse_inventory_xlsx, 
 def db_session():
     """Cria banco SQLite em memória isolado para os testes de inventário."""
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Organization.__table__,
+            User.__table__,
+            ProductCategory.__table__,
+            Product.__table__,
+            StockMovement.__table__,
+        ],
+    )
     Session = sessionmaker(bind=engine)
     session = Session()
     try:

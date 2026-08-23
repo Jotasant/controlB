@@ -11,11 +11,24 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, Numeric, Integer
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
+from controlb.modules.documents.models import BusinessDocument
 
 
 def utcnow() -> datetime:
@@ -48,6 +61,9 @@ class Product(Base):
     Tabela 'product' - Catálogo de produtos, insumos, medicamentos e controle de estoque físico.
     """
     __tablename__ = "product"
+    __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_product_id_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
@@ -84,7 +100,11 @@ class Product(Base):
     category: Mapped["ProductCategory | None"] = relationship(back_populates="products", lazy="selectin")
     
     # Relacionamento 1:N com movimentações de estoque
-    movements: Mapped[list["StockMovement"]] = relationship(back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+    movements: Mapped[list["StockMovement"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
 
 
 class StockMovement(Base):
@@ -118,3 +138,114 @@ class StockMovement(Base):
 
     # Relacionamento com o produto
     product: Mapped["Product"] = relationship(back_populates="movements", lazy="selectin")
+
+
+class StockReservation(Base):
+    """Reserva integral de estoque vinculada a um pedido de venda."""
+
+    __tablename__ = "stock_reservation"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["sales_order_id", "organization_id"],
+            ["sales_order.id", "sales_order.organization_id"],
+            name="fk_stock_reservation_sales_order_org",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_stock_reservation_document_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("sales_order_id", name="uq_stock_reservation_sales_order"),
+        UniqueConstraint("document_id", name="uq_stock_reservation_document"),
+        UniqueConstraint(
+            "organization_id",
+            "reservation_number",
+            name="uq_stock_reservation_number_org",
+        ),
+        UniqueConstraint("id", "organization_id", name="uq_stock_reservation_id_org"),
+        CheckConstraint(
+            "status IN ('RESERVED', 'RELEASED')",
+            name="ck_stock_reservation_status",
+        ),
+        CheckConstraint("status_version > 0", name="ck_stock_reservation_version_positive"),
+        Index("ix_stock_reservation_org_status", "organization_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE"), nullable=False
+    )
+    sales_order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    reservation_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="RESERVED")
+    status_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    released_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
+    items: Mapped[list["StockReservationItem"]] = relationship(
+        back_populates="reservation",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="StockReservationItem.product_id",
+    )
+
+
+class StockReservationItem(Base):
+    """Quantidade reservada de um produto, sem movimentar o saldo físico."""
+
+    __tablename__ = "stock_reservation_item"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["reservation_id", "organization_id"],
+            ["stock_reservation.id", "stock_reservation.organization_id"],
+            name="fk_stock_reservation_item_reservation_org",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["product_id", "organization_id"],
+            ["product.id", "product.organization_id"],
+            name="fk_stock_reservation_item_product_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "reservation_id",
+            "product_id",
+            name="uq_stock_reservation_item_product",
+        ),
+        CheckConstraint("quantity > 0", name="ck_stock_reservation_item_quantity_positive"),
+        Index("ix_stock_reservation_item_product", "organization_id", "product_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    reservation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    reservation: Mapped["StockReservation"] = relationship(back_populates="items")
+    product: Mapped["Product"] = relationship(
+        lazy="selectin",
+        overlaps="items,reservation",
+    )

@@ -17,4 +17,10 @@ MODULE_PERMISSIONS: List[Dict[str, Any]] = [
         "module": "CRM",
         "description": "Criar leads, mover oportunidades no funil e registrar interações com clientes"
     },
+    {
+        "code": "crm:stages:manage",
+        "name": "Configurar Etapas do Funil de CRM",
+        "module": "CRM",
+        "description": "Criar, ordenar, editar e excluir etapas personalizadas do pipeline / Kanban do CRM"
+    },
 ]

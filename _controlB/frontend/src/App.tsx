@@ -24,12 +24,14 @@ import { Roles } from '@/pages/Roles/Roles';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { PublicRoute } from '@/components/PublicRoute';
 import { AppLayout } from '@/components/AppLayout';
+import { ToastProvider } from '@/components/Toast/ToastProvider';
 
 export const App: React.FC = () => {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <Routes>
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
           {/* 1. Rota de Login (Pública) */}
           <Route
             path="/login"
@@ -63,8 +65,9 @@ export const App: React.FC = () => {
 
           {/* 3. Fallback */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-      </BrowserRouter>
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
     </ThemeProvider>
   );
 };

@@ -15,7 +15,13 @@ from alembic import context
 # 1. Importações dos modelos do projeto para detecção automática de alterações de schema (autogenerate)
 from controlb.db import Base
 from controlb.modules.identity.models import Organization, Role, User, Permission
-from controlb.modules.inventory.models import ProductCategory, Product, StockMovement
+from controlb.modules.inventory.models import (
+    ProductCategory,
+    Product,
+    StockMovement,
+    StockReservation,
+    StockReservationItem,
+)
 from controlb.modules.purchasing.models import (
     Supplier, CostCenter, 
     PurchaseRequest, PurchaseRequestItem, ApprovalEvent, 
@@ -33,6 +39,7 @@ from controlb.modules.sales.models import (
     POSSession, POSSale, POSSaleItem
 )
 from controlb.modules.billing.models import Invoice, InvoiceInstallment
+from controlb.modules.documents.models import BusinessDocument, DocumentRelation, DocumentEvent
 from controlb.config import get_settings
 
 

@@ -94,6 +94,23 @@ def get_quote_by_id(db: Session, quote_id: uuid.UUID, organization_id: uuid.UUID
     return db.scalars(stmt).first()
 
 
+def get_quote_by_id_for_update(
+    db: Session,
+    quote_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> SalesQuote | None:
+    """Obtém e bloqueia a cotação durante uma transição transacional."""
+    stmt = (
+        select(SalesQuote)
+        .where(
+            SalesQuote.id == quote_id,
+            SalesQuote.organization_id == organization_id,
+        )
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
 def list_quotes(db: Session, organization_id: uuid.UUID) -> list[SalesQuote]:
     stmt = select(SalesQuote).where(SalesQuote.organization_id == organization_id).order_by(SalesQuote.created_at.desc())
     return list(db.scalars(stmt).all())
@@ -101,7 +118,7 @@ def list_quotes(db: Session, organization_id: uuid.UUID) -> list[SalesQuote]:
 
 def create_quote(db: Session, quote: SalesQuote) -> SalesQuote:
     db.add(quote)
-    db.commit()
+    db.flush()
     db.refresh(quote)
     return quote
 
@@ -115,14 +132,42 @@ def get_order_by_id(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID
     return db.scalars(stmt).first()
 
 
+def get_order_by_id_for_update(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> SalesOrder | None:
+    stmt = (
+        select(SalesOrder)
+        .where(
+            SalesOrder.id == order_id,
+            SalesOrder.organization_id == organization_id,
+        )
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
 def list_orders(db: Session, organization_id: uuid.UUID) -> list[SalesOrder]:
     stmt = select(SalesOrder).where(SalesOrder.organization_id == organization_id).order_by(SalesOrder.created_at.desc())
     return list(db.scalars(stmt).all())
 
 
+def list_orders_by_quote_id(
+    db: Session,
+    sales_quote_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> list[SalesOrder]:
+    stmt = select(SalesOrder).where(
+        SalesOrder.sales_quote_id == sales_quote_id,
+        SalesOrder.organization_id == organization_id,
+    )
+    return list(db.scalars(stmt).all())
+
+
 def create_order(db: Session, order: SalesOrder) -> SalesOrder:
     db.add(order)
-    db.commit()
+    db.flush()
     db.refresh(order)
     return order
 
@@ -155,7 +200,7 @@ def list_pos_sessions(db: Session, organization_id: uuid.UUID) -> list[POSSessio
 
 def create_pos_sale(db: Session, sale: POSSale) -> POSSale:
     db.add(sale)
-    db.commit()
+    db.flush()
     db.refresh(sale)
     return sale
 
@@ -238,25 +283,15 @@ def get_sales_return_by_id(db: Session, return_id: uuid.UUID, organization_id: u
 
 
 def update_quote(db: Session, quote: SalesQuote) -> SalesQuote:
-    db.commit()
+    db.flush()
     db.refresh(quote)
     return quote
 
 
 def update_order(db: Session, order: SalesOrder) -> SalesOrder:
-    db.commit()
+    db.flush()
     db.refresh(order)
     return order
-
-
-def delete_quote(db: Session, quote: SalesQuote) -> None:
-    db.delete(quote)
-    db.commit()
-
-
-def delete_order(db: Session, order: SalesOrder) -> None:
-    db.delete(order)
-    db.commit()
 
 
 def get_sales_goal_by_id(db: Session, goal_id: uuid.UUID, organization_id: uuid.UUID) -> SalesGoal | None:
@@ -277,6 +312,3 @@ def delete_price_table(db: Session, table: PriceTable) -> None:
 def delete_sales_return(db: Session, sales_return: SalesReturn) -> None:
     db.delete(sales_return)
     db.commit()
-
-
-

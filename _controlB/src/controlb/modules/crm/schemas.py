@@ -8,6 +8,37 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CRMStageBase(BaseModel):
+    name: str = Field(..., max_length=100)
+    code: str = Field(..., max_length=50)
+    color: str = Field(default="#10b981", max_length=20)
+    order: int = Field(default=0)
+    is_won: bool = False
+    is_lost: bool = False
+    is_system: bool = False
+
+
+class CRMStageCreate(CRMStageBase):
+    pass
+
+
+class CRMStageUpdate(BaseModel):
+    name: str | None = None
+    color: str | None = None
+    order: int | None = None
+    is_won: bool | None = None
+    is_lost: bool | None = None
+
+
+class CRMStageResponse(CRMStageBase):
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LeadBase(BaseModel):
     name: str = Field(..., max_length=255)
     company_name: str | None = None
@@ -17,10 +48,12 @@ class LeadBase(BaseModel):
     status: str = "NEW"
     notes: str | None = None
     assigned_to_id: uuid.UUID | None = None
+    customer_id: uuid.UUID | None = None
 
 
 class LeadCreate(LeadBase):
-    pass
+    document: str | None = None
+    person_type: str | None = "PJ"
 
 
 class LeadUpdate(BaseModel):
@@ -32,6 +65,7 @@ class LeadUpdate(BaseModel):
     status: str | None = None
     notes: str | None = None
     assigned_to_id: uuid.UUID | None = None
+    customer_id: uuid.UUID | None = None
 
 
 class LeadResponse(LeadBase):

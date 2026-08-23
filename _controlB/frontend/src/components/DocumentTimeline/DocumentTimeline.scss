@@ -1,0 +1,186 @@
+.ui-document-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+
+  &__summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+
+    span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.3rem 0.55rem;
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      background: var(--bg-surface-elevated);
+    }
+  }
+
+  &__list {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 1rem;
+      bottom: 1rem;
+      left: 0.95rem;
+      width: 1px;
+      background: var(--border-highlight);
+    }
+  }
+
+  &__item {
+    --timeline-color: #3b82f6;
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.9rem minmax(0, 1fr);
+    gap: 0.7rem;
+
+    &.is-success { --timeline-color: #10b981; }
+    &.is-warning { --timeline-color: #f59e0b; }
+    &.is-danger { --timeline-color: #ef4444; }
+
+    &.is-root .ui-document-timeline__card {
+      border-color: var(--timeline-color);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--timeline-color) 10%, transparent);
+    }
+  }
+
+  &__marker {
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border: 1px solid var(--timeline-color);
+    border-radius: 50%;
+    background: var(--bg-surface);
+    color: var(--timeline-color);
+  }
+
+  &__card {
+    min-width: 0;
+    padding: 0.85rem 0.95rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--bg-surface-elevated);
+
+    > header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.7rem;
+
+      > div {
+        display: flex;
+        min-width: 0;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.35rem 0.55rem;
+
+        > span {
+          width: 100%;
+          color: var(--text-secondary);
+          font-size: 0.68rem;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+
+        > strong { color: var(--text-primary); }
+
+        small {
+          padding: 0.12rem 0.35rem;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--timeline-color) 12%, transparent);
+          color: var(--timeline-color);
+          font-size: 0.58rem;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+      }
+    }
+
+    > time {
+      display: block;
+      margin-top: 0.35rem;
+      color: var(--text-muted);
+      font-size: 0.68rem;
+    }
+  }
+
+  &__relation {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  &__events {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0.7rem 0 0;
+    padding: 0.7rem 0 0;
+    border-top: 1px solid var(--border-subtle);
+    list-style: none;
+
+    li {
+      display: grid;
+      grid-template-columns: 0.8rem minmax(0, 1fr) auto;
+      gap: 0.4rem;
+      color: var(--text-muted);
+      font-size: 0.67rem;
+
+      svg { margin-top: 0.15rem; color: var(--timeline-color); }
+      div { display: flex; min-width: 0; flex-direction: column; }
+      strong { color: var(--text-primary); }
+      time { white-space: nowrap; }
+    }
+  }
+
+  &__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+
+    strong { color: var(--text-primary); }
+  }
+}
+
+.ui-document-timeline-loading {
+  display: flex;
+  min-height: 11rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+
+  svg { animation: ui-document-spin 0.8s linear infinite; }
+}
+
+@keyframes ui-document-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .ui-document-timeline__card > header { flex-direction: column; }
+  .ui-document-timeline__events li { grid-template-columns: 0.8rem minmax(0, 1fr); }
+  .ui-document-timeline__events time { grid-column: 2; }
+}

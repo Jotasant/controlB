@@ -49,4 +49,11 @@ def get_db() -> Generator[Session, None, None]:
     automático ('finally') após a resposta ser enviada, prevenindo vazamento de conexões.
     """
     with SessionLocal() as session:
-        yield session
+        try:
+            yield session
+            # A requisição HTTP é a fronteira transacional padrão. Serviços novos
+            # devem usar add/flush e deixar este ponto confirmar o caso de uso inteiro.
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise

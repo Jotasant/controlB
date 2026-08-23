@@ -10,9 +10,147 @@ from controlb.modules.identity.models import User
 from controlb.modules.crm import models, repository, schemas
 
 
+DEFAULT_STAGES = [
+    {"code": "PROSPECTING", "name": "Prospecção", "color": "#10b981", "order": 0, "is_won": False, "is_lost": False, "is_system": True},
+    {"code": "QUALIFICATION", "name": "Qualificação", "color": "#3b82f6", "order": 1, "is_won": False, "is_lost": False, "is_system": True},
+    {"code": "PROPOSAL", "name": "Proposta Comercial", "color": "#f59e0b", "order": 2, "is_won": False, "is_lost": False, "is_system": True},
+    {"code": "NEGOTIATION", "name": "Negociação", "color": "#8b5cf6", "order": 3, "is_won": False, "is_lost": False, "is_system": True},
+    {"code": "WON", "name": "Ganho / Fechado", "color": "#10b981", "order": 4, "is_won": True, "is_lost": False, "is_system": True},
+    {"code": "LOST", "name": "Perdido", "color": "#ef4444", "order": 5, "is_won": False, "is_lost": True, "is_system": True},
+]
+
+
+def list_stages(db: Session, organization_id: uuid.UUID) -> list[models.CRMStage]:
+    stages = repository.list_stages(db, organization_id)
+    if not stages:
+        # Seed inicial automático para organizações existentes
+        for stg_data in DEFAULT_STAGES:
+            stage_obj = models.CRMStage(
+                organization_id=organization_id,
+                code=stg_data["code"],
+                name=stg_data["name"],
+                color=stg_data["color"],
+                order=stg_data["order"],
+                is_won=stg_data["is_won"],
+                is_lost=stg_data["is_lost"],
+                is_system=stg_data["is_system"]
+            )
+            repository.create_stage(db, stage_obj)
+        stages = repository.list_stages(db, organization_id)
+    return stages
+
+
+def create_stage(db: Session, organization_id: uuid.UUID, payload: schemas.CRMStageCreate) -> models.CRMStage:
+    code_norm = payload.code.strip().upper().replace(" ", "_")
+    existing = repository.get_stage_by_code(db, code_norm, organization_id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Já existe uma etapa com o código '{code_norm}' nesta organização."
+        )
+
+    current_stages = repository.list_stages(db, organization_id)
+    calculated_order = payload.order if payload.order > 0 else len(current_stages)
+
+    stage = models.CRMStage(
+        organization_id=organization_id,
+        code=code_norm,
+        name=payload.name.strip(),
+        color=payload.color.strip() or "#10b981",
+        order=calculated_order,
+        is_won=payload.is_won,
+        is_lost=payload.is_lost,
+        is_system=payload.is_system
+    )
+    return repository.create_stage(db, stage)
+
+
+def update_stage(
+    db: Session,
+    stage_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    payload: schemas.CRMStageUpdate
+) -> models.CRMStage:
+    stage = repository.get_stage_by_id(db, stage_id, organization_id)
+    if not stage:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Etapa não encontrada.")
+
+    if payload.name is not None:
+        stage.name = payload.name.strip()
+    if payload.color is not None:
+        stage.color = payload.color.strip()
+    if payload.order is not None:
+        stage.order = payload.order
+    if payload.is_won is not None:
+        stage.is_won = payload.is_won
+    if payload.is_lost is not None:
+        stage.is_lost = payload.is_lost
+
+    return repository.update_stage(db, stage)
+
+
+def delete_stage(db: Session, stage_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
+    stage = repository.get_stage_by_id(db, stage_id, organization_id)
+    if not stage:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Etapa não encontrada.")
+
+    # Validação de integridade referencial: não deletar etapas que possuem oportunidades ativas
+    opp_count = repository.count_opportunities_in_stage(db, stage.code, organization_id)
+    if opp_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Não é possível excluir a etapa '{stage.name}' pois existem {opp_count} oportunidade(s) associadas a ela."
+        )
+
+    repository.delete_stage(db, stage)
+    return {"message": f"Etapa '{stage.name}' excluída com sucesso."}
+
+
 def create_lead(db: Session, organization_id: uuid.UUID, payload: schemas.LeadCreate) -> models.Lead:
+    from controlb.modules.identity import service as identity_service, schemas as identity_schemas
+    from controlb.modules.sales import service as sales_service, schemas as sales_schemas, repository as sales_repo
+
+    customer_id = payload.customer_id
+    if customer_id:
+        cust = sales_repo.get_customer_by_id(db, customer_id, organization_id)
+        if not cust:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente especificado não encontrado no módulo de Vendas.")
+    else:
+        # Criação obrigatória/automática do Cliente em Vendas e Contato no Identity
+        contact = identity_service.create_contact(
+            db,
+            organization_id,
+            identity_schemas.ContactCreate(
+                full_name=payload.name.strip(),
+                email=payload.email.strip() if payload.email else None,
+                phone=payload.phone.strip() if payload.phone else None,
+                position="Contato Comercial (Lead)",
+                notes=f"Origem Lead CRM: {payload.source}"
+            )
+        )
+        doc = payload.document.strip() if payload.document else f"LEAD-{uuid.uuid4().hex[:8].upper()}"
+        customer_name = payload.company_name.strip() if payload.company_name else payload.name.strip()
+        person_type = payload.person_type or ("PJ" if payload.company_name else "PF")
+
+        cust = sales_service.create_customer(
+            db,
+            organization_id,
+            sales_schemas.CustomerCreate(
+                person_type=person_type,
+                document=doc,
+                name=customer_name,
+                trade_name=payload.name.strip() if payload.company_name else None,
+                email=payload.email.strip() if payload.email else None,
+                phone=payload.phone.strip() if payload.phone else None,
+                contact_id=contact.id,
+                notes=f"Criado automaticamente a partir de Lead CRM ({payload.source})"
+            )
+        )
+        customer_id = cust.id
+
     lead = models.Lead(
         organization_id=organization_id,
+        customer_id=customer_id,
         name=payload.name.strip(),
         company_name=payload.company_name.strip() if payload.company_name else None,
         email=payload.email.strip() if payload.email else None,
@@ -50,18 +188,48 @@ def update_lead(db: Session, lead_id: uuid.UUID, organization_id: uuid.UUID, pay
         lead.notes = payload.notes
     if payload.assigned_to_id is not None:
         lead.assigned_to_id = payload.assigned_to_id
+    if payload.customer_id is not None:
+        lead.customer_id = payload.customer_id
 
     return repository.update_lead(db, lead)
 
 
 def create_opportunity(db: Session, organization_id: uuid.UUID, payload: schemas.OpportunityCreate) -> models.Opportunity:
+    from controlb.modules.sales import service as sales_service, schemas as sales_schemas, repository as sales_repo
+
+    customer_id = payload.customer_id
+    customer_name = payload.customer_name.strip()
+    contact_id = payload.contact_id
+
+    if customer_id:
+        cust = sales_repo.get_customer_by_id(db, customer_id, organization_id)
+        if not cust:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente especificado não encontrado no módulo de Vendas.")
+        customer_name = cust.trade_name or cust.name
+        if not contact_id and cust.contact_id:
+            contact_id = cust.contact_id
+    else:
+        # Garante criação de cliente em Vendas para eliminar campos desconexos
+        doc = f"OPP-{uuid.uuid4().hex[:8].upper()}"
+        cust = sales_service.create_customer(
+            db,
+            organization_id,
+            sales_schemas.CustomerCreate(
+                person_type="PJ",
+                document=doc,
+                name=customer_name,
+                notes="Criado automaticamente na criação de Oportunidade Comercial"
+            )
+        )
+        customer_id = cust.id
+
     opp = models.Opportunity(
         organization_id=organization_id,
         lead_id=payload.lead_id,
-        customer_id=payload.customer_id,
-        contact_id=payload.contact_id,
+        customer_id=customer_id,
+        contact_id=contact_id,
         title=payload.title.strip(),
-        customer_name=payload.customer_name.strip(),
+        customer_name=customer_name,
         estimated_amount=payload.estimated_amount,
         probability_percent=payload.probability_percent,
         expected_closing_date=payload.expected_closing_date,
@@ -286,6 +454,5 @@ def create_quote_from_opportunity(
 
     quote = sales_service.create_sales_quote(db, organization_id, current_user, quote_payload)
     opp.stage = "PROPOSAL"
-    db.commit()
+    db.flush()
     return quote
-

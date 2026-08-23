@@ -18,7 +18,9 @@ from controlb.modules.inventory import service
 from controlb.modules.inventory.schemas import (
     ProductCategoryCreate, ProductCategoryUpdate, ProductCategoryResponse,
     ProductCreate, ProductUpdate, ProductResponse,
-    StockAdjustmentCreate, StockMovementResponse
+    ProductAvailabilityResponse,
+    StockAdjustmentCreate, StockMovementResponse,
+    StockReservationResponse,
 )
 
 router = APIRouter(prefix="", tags=["Inventory / Estoque"])
@@ -116,8 +118,94 @@ def delete_product(
     return None
 
 
+@router.get(
+    "/products/{product_id}/availability",
+    response_model=ProductAvailabilityResponse,
+    summary="Consultar Saldo Disponível",
+)
+def get_product_availability(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.get_product_availability(
+        db, current_user.organization_id, product_id
+    )
+
+
 # ==============================================================================
-# 3. GESTÃO DE INVENTÁRIO FÍSICO & AUDITORIA DE MOVIMENTAÇÕES
+# 3. RESERVAS INTEGRAIS POR PEDIDO DE VENDA
+# ==============================================================================
+
+@router.get(
+    "/reservations/sales-orders/{sales_order_id}",
+    response_model=StockReservationResponse,
+    summary="Consultar Reserva do Pedido",
+)
+def get_sales_order_reservation(
+    sales_order_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.get_sales_order_reservation(
+        db, current_user.organization_id, sales_order_id
+    )
+
+
+@router.post(
+    "/reservations/sales-orders/{sales_order_id}",
+    response_model=StockReservationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Reservar Integralmente um Pedido Confirmado",
+)
+def reserve_sales_order(
+    sales_order_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("inventory:move")),
+):
+    return service.reserve_sales_order(
+        db,
+        current_user.organization_id,
+        current_user.id,
+        sales_order_id,
+    )
+
+
+@router.post(
+    "/reservations/{reservation_id}/release",
+    response_model=StockReservationResponse,
+    summary="Liberar Reserva de Estoque",
+)
+def release_stock_reservation(
+    reservation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("inventory:move")),
+):
+    return service.release_stock_reservation(
+        db,
+        current_user.organization_id,
+        current_user.id,
+        reservation_id,
+    )
+
+
+@router.get(
+    "/reservations/{reservation_id}",
+    response_model=StockReservationResponse,
+    summary="Consultar Reserva de Estoque",
+)
+def get_stock_reservation(
+    reservation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.get_stock_reservation(
+        db, current_user.organization_id, reservation_id
+    )
+
+
+# ==============================================================================
+# 4. GESTÃO DE INVENTÁRIO FÍSICO & AUDITORIA DE MOVIMENTAÇÕES
 # ==============================================================================
 
 @router.post("/adjust", response_model=StockMovementResponse, status_code=status.HTTP_200_OK, summary="Ajustar Saldo Físico / Inventário")
@@ -164,5 +252,3 @@ async def import_inventory_spreadsheet(
         user_id=current_user.id,
         file_bytes=file_bytes
     )
-
-

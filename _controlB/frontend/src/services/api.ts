@@ -148,6 +148,33 @@ export const formatApiError = (err: any, fallback: string = 'Ocorreu um erro ao 
 // 2. AUTENTICAÇÃO E SESSÃO (Auth)
 // ==============================================================================
 
+/**
+ * Consulta somente leitura da cadeia transversal de um documento de negócio.
+ * O tipo permanece aberto para que novos módulos reutilizem o mesmo contrato.
+ */
+export const documentService = {
+  async getChain(
+    documentType: string,
+    nativeId: string,
+    forceRefresh = false
+  ): Promise<import('@/types').BusinessDocumentChain> {
+    const normalizedType = documentType.trim().toUpperCase();
+    const cacheKey = `documents:chain:${normalizedType}:${nativeId}`;
+
+    return cacheManager.fetchWithCache(
+      cacheKey,
+      async () => {
+        const response = await api.get<import('@/types').BusinessDocumentChain>(
+          `/documents/${encodeURIComponent(normalizedType)}/${encodeURIComponent(nativeId)}/chain`
+        );
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  }
+};
+
 export const authService = {
   async login(email: string, password: string): Promise<TokenResponse> {
     const formData = new URLSearchParams();
@@ -484,6 +511,17 @@ export const inventoryService = {
     const response = await api.post<import('@/types').StockMovement>('/inventory/adjust', payload);
     cacheManager.invalidate('inventory');
     cacheManager.invalidate('purchasing:replenishment');
+    return response.data;
+  },
+
+  async reserveSalesOrderStock(orderId: string): Promise<import('@/types').StockReservation> {
+    const response = await api.post<import('@/types').StockReservation>(
+      `/inventory/reservations/sales-orders/${orderId}`
+    );
+    cacheManager.invalidate('inventory');
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate(`sales:order:${orderId}`);
+    cacheManager.invalidate(`documents:chain:SALES_ORDER:${orderId}`);
     return response.data;
   },
 
@@ -1176,6 +1214,43 @@ export const billingService = {
 // ==============================================================================
 
 export const crmService = {
+  async getStages(forceRefresh = false): Promise<import('@/types').CRMStage[]> {
+    return cacheManager.fetchWithCache(
+      'crm:stages',
+      async () => {
+        const response = await api.get<import('@/types').CRMStage[]>('/crm/stages');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async createStage(data: {
+    name: string;
+    code: string;
+    color?: string;
+    order?: number;
+    is_won?: boolean;
+    is_lost?: boolean;
+  }): Promise<import('@/types').CRMStage> {
+    const response = await api.post<import('@/types').CRMStage>('/crm/stages', data);
+    cacheManager.invalidate('crm:stages');
+    return response.data;
+  },
+
+  async updateStage(stageId: string, data: Partial<import('@/types').CRMStage>): Promise<import('@/types').CRMStage> {
+    const response = await api.put<import('@/types').CRMStage>(`/crm/stages/${stageId}`, data);
+    cacheManager.invalidate('crm:stages');
+    return response.data;
+  },
+
+  async deleteStage(stageId: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/crm/stages/${stageId}`);
+    cacheManager.invalidate('crm:stages');
+    return response.data;
+  },
+
   async getLeads(status?: string, forceRefresh = false): Promise<import('@/types').Lead[]> {
     const key = `crm:leads:${status || 'all'}`;
     return cacheManager.fetchWithCache(
@@ -1199,6 +1274,9 @@ export const crmService = {
     status?: string;
     notes?: string;
     assigned_to_id?: string;
+    customer_id?: string;
+    document?: string;
+    person_type?: string;
   }): Promise<import('@/types').Lead> {
     const response = await api.post<import('@/types').Lead>('/crm/leads', data);
     cacheManager.invalidate('crm:leads');

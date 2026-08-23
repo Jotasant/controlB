@@ -9,13 +9,190 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from controlb.logger import logger
+from controlb.modules.documents import service as documents_service
 from controlb.modules.identity.models import User
+from controlb.modules.inventory import repository as inventory_repository
 from controlb.modules.inventory.models import Product, StockMovement
 from controlb.modules.sales import models, repository, schemas
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+QUOTE_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    "DRAFT": frozenset({"SENT", "APPROVED", "CANCELLED", "EXPIRED"}),
+    "SENT": frozenset({"APPROVED", "REJECTED", "CANCELLED", "EXPIRED"}),
+    "APPROVED": frozenset({"CANCELLED"}),
+    "REJECTED": frozenset(),
+    "EXPIRED": frozenset(),
+    "CANCELLED": frozenset(),
+    "CONVERTED": frozenset(),
+}
+
+
+def _validate_current_user_tenant(current_user: User, organization_id: uuid.UUID) -> None:
+    if current_user.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="O usuário não pertence à organização informada.",
+        )
+
+
+def _validate_commercial_references(
+    db: Session,
+    organization_id: uuid.UUID,
+    *,
+    customer_id: uuid.UUID | None,
+    opportunity_id: uuid.UUID | None,
+    product_ids: list[uuid.UUID],
+):
+    customer = None
+    if customer_id:
+        customer = repository.get_customer_by_id(db, customer_id, organization_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O cliente vinculado não pertence à organização.",
+            )
+
+    opportunity = None
+    if opportunity_id:
+        from controlb.modules.crm import repository as crm_repository
+
+        opportunity = crm_repository.get_opportunity_by_id(
+            db,
+            opportunity_id,
+            organization_id,
+        )
+        if not opportunity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A oportunidade vinculada não pertence à organização.",
+            )
+        if customer_id and opportunity.customer_id and opportunity.customer_id != customer_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A cotação e a oportunidade estão vinculadas a clientes diferentes.",
+            )
+
+    for product_id in set(product_ids):
+        if not inventory_repository.get_product_by_id(db, product_id, organization_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Um dos produtos vinculados não pertence à organização.",
+            )
+
+    return customer, opportunity
+
+
+def _ensure_quote_document(
+    db: Session,
+    quote: models.SalesQuote,
+    organization_id: uuid.UUID,
+):
+    document = documents_service.ensure_document(
+        db,
+        organization_id=organization_id,
+        document_type="SALES_QUOTE",
+        native_id=quote.id,
+        document_number=quote.quote_number,
+        current_status=quote.status,
+        created_by_id=quote.created_by_id,
+        issued_at=quote.created_at,
+    )
+    quote.document_id = document.id
+    return document
+
+
+def _ensure_order_document(
+    db: Session,
+    order: models.SalesOrder,
+    organization_id: uuid.UUID,
+):
+    document = documents_service.ensure_document(
+        db,
+        organization_id=organization_id,
+        document_type="SALES_ORDER",
+        native_id=order.id,
+        document_number=order.order_number,
+        current_status=order.status,
+        created_by_id=order.created_by_id,
+        issued_at=order.created_at,
+    )
+    order.document_id = document.id
+    return document
+
+
+def _record_created_event(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    document,
+    document_kind: str,
+    native_id: uuid.UUID,
+    status_value: str,
+    created_by_id: uuid.UUID | None,
+    event_metadata: dict | None = None,
+) -> None:
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=document,
+        event_type="CREATED",
+        new_status=status_value,
+        created_by_id=created_by_id,
+        event_metadata=event_metadata,
+        idempotency_key=f"{document_kind}:{native_id}:created",
+    )
+
+
+def _record_quote_conversion_chain(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    quote: models.SalesQuote,
+    order: models.SalesOrder,
+    current_user: User,
+) -> None:
+    quote_document = _ensure_quote_document(db, quote, organization_id)
+    order_document = _ensure_order_document(db, order, organization_id)
+    documents_service.relate_documents(
+        db,
+        organization_id=organization_id,
+        parent_document=quote_document,
+        child_document=order_document,
+        relation_type="CONVERTED_TO",
+        created_by_id=current_user.id,
+        relation_metadata={
+            "quote_id": str(quote.id),
+            "order_id": str(order.id),
+        },
+    )
+    _record_created_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        document_kind="sales-order",
+        native_id=order.id,
+        status_value=order.status,
+        created_by_id=current_user.id,
+        event_metadata={
+            "origin": "SALES_QUOTE",
+            "quote_id": str(quote.id),
+        },
+    )
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=quote_document,
+        event_type="CONVERTED_TO_ORDER",
+        previous_status="APPROVED",
+        new_status="CONVERTED",
+        created_by_id=current_user.id,
+        event_metadata={"order_id": str(order.id)},
+        idempotency_key=f"sales-quote:{quote.id}:converted-to:{order.id}",
+    )
 
 
 # ==============================================================================
@@ -28,9 +205,25 @@ def create_sales_quote(
     current_user: User,
     payload: schemas.SalesQuoteCreate
 ) -> models.SalesQuote:
+    _validate_current_user_tenant(current_user, organization_id)
+    if not payload.items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A cotação deve conter pelo menos um item.",
+        )
+
+    _validate_commercial_references(
+        db,
+        organization_id,
+        customer_id=payload.customer_id,
+        opportunity_id=payload.opportunity_id,
+        product_ids=[item.product_id for item in payload.items],
+    )
+
     quote_num = f"ORC-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
-    
+    quote_id = uuid.uuid4()
     quote = models.SalesQuote(
+        id=quote_id,
         organization_id=organization_id,
         quote_number=quote_num,
         customer_id=payload.customer_id,
@@ -41,16 +234,25 @@ def create_sales_quote(
         customer_phone=payload.customer_phone.strip() if payload.customer_phone else None,
         payment_terms=payload.payment_terms or "À Vista",
         valid_until=payload.valid_until or (date.today() + timedelta(days=15)),
+        status="DRAFT",
         notes=payload.notes,
         created_by_id=current_user.id
     )
+
+    quote_document = _ensure_quote_document(db, quote, organization_id)
 
     total_gross = Decimal("0.00")
     total_disc = Decimal("0.00")
 
     for it in payload.items:
-        it_total = (it.quantity * it.unit_price) - it.discount_amount
-        total_gross += (it.quantity * it.unit_price)
+        gross_item_total = it.quantity * it.unit_price
+        if it.discount_amount > gross_item_total:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O desconto de um item não pode superar seu valor bruto.",
+            )
+        it_total = gross_item_total - it.discount_amount
+        total_gross += gross_item_total
         total_disc += it.discount_amount
         
         q_item = models.SalesQuoteItem(
@@ -67,7 +269,19 @@ def create_sales_quote(
     quote.discount_amount = total_disc
     quote.net_amount = total_gross - total_disc
 
-    return repository.create_quote(db, quote)
+    saved_quote = repository.create_quote(db, quote)
+    quote_document.issued_at = saved_quote.created_at
+    _record_created_event(
+        db,
+        organization_id=organization_id,
+        document=quote_document,
+        document_kind="sales-quote",
+        native_id=saved_quote.id,
+        status_value=saved_quote.status,
+        created_by_id=current_user.id,
+    )
+    db.flush()
+    return saved_quote
 
 
 def get_sales_quote(db: Session, quote_id: uuid.UUID, organization_id: uuid.UUID) -> models.SalesQuote:
@@ -87,6 +301,38 @@ def update_sales_quote(
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
 
+    if quote.status != "DRAFT":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Somente cotações em rascunho podem ser alteradas.",
+        )
+    if payload.status is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use a operação específica de mudança de status da cotação.",
+        )
+    if payload.items is not None and not payload.items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A cotação deve conter pelo menos um item.",
+        )
+
+    _validate_commercial_references(
+        db,
+        organization_id,
+        customer_id=payload.customer_id if payload.customer_id is not None else quote.customer_id,
+        opportunity_id=(
+            payload.opportunity_id
+            if payload.opportunity_id is not None
+            else quote.opportunity_id
+        ),
+        product_ids=(
+            [item.product_id for item in payload.items]
+            if payload.items is not None
+            else [item.product_id for item in quote.items]
+        ),
+    )
+
     if payload.customer_id is not None:
         quote.customer_id = payload.customer_id
     if payload.opportunity_id is not None:
@@ -103,8 +349,6 @@ def update_sales_quote(
         quote.payment_terms = payload.payment_terms
     if payload.valid_until is not None:
         quote.valid_until = payload.valid_until
-    if payload.status is not None:
-        quote.status = payload.status.upper()
     if payload.notes is not None:
         quote.notes = payload.notes
 
@@ -114,8 +358,14 @@ def update_sales_quote(
         total_disc = Decimal("0.00")
 
         for it in payload.items:
-            it_total = (it.quantity * it.unit_price) - it.discount_amount
-            total_gross += (it.quantity * it.unit_price)
+            gross_item_total = it.quantity * it.unit_price
+            if it.discount_amount > gross_item_total:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="O desconto de um item não pode superar seu valor bruto.",
+                )
+            it_total = gross_item_total - it.discount_amount
+            total_gross += gross_item_total
             total_disc += it.discount_amount
 
             q_item = models.SalesQuoteItem(
@@ -139,13 +389,53 @@ def update_sales_quote_status(
     db: Session,
     quote_id: uuid.UUID,
     organization_id: uuid.UUID,
-    new_status: str
+    new_status: str,
+    current_user: User,
 ) -> models.SalesQuote:
-    quote = repository.get_quote_by_id(db, quote_id, organization_id)
+    _validate_current_user_tenant(current_user, organization_id)
+    quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
-    quote.status = new_status.upper()
-    return repository.update_quote(db, quote)
+
+    normalized_status = new_status.strip().upper()
+    if normalized_status == "CONVERTED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O status CONVERTED só pode ser produzido pela conversão em pedido.",
+        )
+    if normalized_status not in QUOTE_STATUS_TRANSITIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Status de cotação inválido.",
+        )
+    if normalized_status == quote.status:
+        _ensure_quote_document(db, quote, organization_id)
+        db.flush()
+        return quote
+    if normalized_status not in QUOTE_STATUS_TRANSITIONS.get(quote.status, frozenset()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Não é permitido alterar a cotação de {quote.status} para {normalized_status}.",
+        )
+
+    previous_status = quote.status
+    quote_document = _ensure_quote_document(db, quote, organization_id)
+    quote.status = normalized_status
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=quote_document,
+        event_type="STATUS_CHANGED",
+        previous_status=previous_status,
+        new_status=normalized_status,
+        created_by_id=current_user.id,
+        event_metadata={"quote_id": str(quote.id)},
+        idempotency_key=(
+            f"sales-quote:{quote.id}:status:{previous_status.lower()}:{normalized_status.lower()}"
+        ),
+    )
+    db.flush()
+    return quote
 
 
 def convert_quote_to_order(
@@ -154,12 +444,63 @@ def convert_quote_to_order(
     organization_id: uuid.UUID,
     current_user: User
 ) -> models.SalesOrder:
-    quote = repository.get_quote_by_id(db, quote_id, organization_id)
+    _validate_current_user_tenant(current_user, organization_id)
+    quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
-    
+
+    existing_orders = repository.list_orders_by_quote_id(db, quote.id, organization_id)
+    if len(existing_orders) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A cotação possui mais de um pedido vinculado e requer saneamento de dados.",
+        )
+    if existing_orders:
+        existing_order = existing_orders[0]
+        if quote.status != "CONVERTED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Já existe um pedido para a cotação, mas seu status está inconsistente.",
+            )
+        _validate_commercial_references(
+            db,
+            organization_id,
+            customer_id=quote.customer_id,
+            opportunity_id=quote.opportunity_id,
+            product_ids=[item.product_id for item in quote.items],
+        )
+        _record_quote_conversion_chain(
+            db,
+            organization_id=organization_id,
+            quote=quote,
+            order=existing_order,
+            current_user=current_user,
+        )
+        db.flush()
+        return existing_order
+
+    if quote.status != "APPROVED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Somente uma cotação aprovada pode ser convertida em pedido de venda.",
+        )
+    if not quote.items:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Não é possível converter uma cotação sem itens.",
+        )
+
+    _, opportunity = _validate_commercial_references(
+        db,
+        organization_id,
+        customer_id=quote.customer_id,
+        opportunity_id=quote.opportunity_id,
+        product_ids=[item.product_id for item in quote.items],
+    )
+
     order_num = f"PED-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
     order = models.SalesOrder(
+        id=uuid.uuid4(),
         organization_id=organization_id,
         order_number=order_num,
         customer_id=quote.customer_id,
@@ -189,19 +530,20 @@ def convert_quote_to_order(
         )
         order.items.append(o_item)
 
+    _record_quote_conversion_chain(
+        db,
+        organization_id=organization_id,
+        quote=quote,
+        order=order,
+        current_user=current_user,
+    )
     quote.status = "CONVERTED"
     db.add(order)
-    
-    # Se vinculado a uma oportunidade CRM, atualiza o estágio da oportunidade para WON
-    if quote.opportunity_id:
-        from controlb.modules.crm import repository as crm_repo
-        opp = crm_repo.get_opportunity_by_id(db, quote.opportunity_id, organization_id)
-        if opp:
-            opp.stage = "WON"
-            db.add(opp)
+    if opportunity:
+        opportunity.stage = "WON"
+        db.add(opportunity)
 
-    db.commit()
-    db.refresh(order)
+    db.flush()
     return order
 
 
@@ -212,12 +554,40 @@ def list_sales_quotes(db: Session, organization_id: uuid.UUID, opportunity_id: u
     return quotes
 
 
-def delete_sales_quote(db: Session, quote_id: uuid.UUID, organization_id: uuid.UUID):
-    quote = repository.get_quote_by_id(db, quote_id, organization_id)
+def delete_sales_quote(
+    db: Session,
+    quote_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+):
+    _validate_current_user_tenant(current_user, organization_id)
+    quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
-    repository.delete_quote(db, quote)
-    return {"message": "Orçamento excluído com sucesso."}
+    if quote.status == "CONVERTED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uma cotação convertida não pode ser cancelada.",
+        )
+    if quote.status == "CANCELLED":
+        return {"message": "Cotação já estava cancelada."}
+
+    previous_status = quote.status
+    quote_document = _ensure_quote_document(db, quote, organization_id)
+    quote.status = "CANCELLED"
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=quote_document,
+        event_type="CANCELLED",
+        previous_status=previous_status,
+        new_status="CANCELLED",
+        created_by_id=current_user.id,
+        event_metadata={"quote_id": str(quote.id)},
+        idempotency_key=f"sales-quote:{quote.id}:cancelled",
+    )
+    db.flush()
+    return {"message": "Cotação cancelada com sucesso."}
 
 
 # ==============================================================================
@@ -230,28 +600,64 @@ def create_sales_order(
     current_user: User,
     payload: schemas.SalesOrderCreate
 ) -> models.SalesOrder:
+    _validate_current_user_tenant(current_user, organization_id)
+    if payload.sales_quote_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pedidos originados de cotação devem usar a operação de conversão.",
+        )
+    if not payload.items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O pedido de venda deve conter pelo menos um item.",
+        )
+    if payload.delivery_status.upper() != "PENDING":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Um pedido novo deve iniciar com entrega PENDING.",
+        )
+
+    _, opportunity = _validate_commercial_references(
+        db,
+        organization_id,
+        customer_id=payload.customer_id,
+        opportunity_id=payload.opportunity_id,
+        product_ids=[item.product_id for item in payload.items],
+    )
+
     order_num = f"PED-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
 
     order = models.SalesOrder(
+        id=uuid.uuid4(),
         organization_id=organization_id,
         order_number=order_num,
         customer_id=payload.customer_id,
-        sales_quote_id=payload.sales_quote_id,
+        sales_quote_id=None,
         opportunity_id=payload.opportunity_id,
         customer_name=payload.customer_name.strip(),
         customer_document=payload.customer_document.strip() if payload.customer_document else None,
         payment_terms=payload.payment_terms or "À Vista",
-        delivery_status=payload.delivery_status,
+        delivery_status="PENDING",
+        billing_status="PENDING",
+        status="CONFIRMED",
         notes=payload.notes,
         created_by_id=current_user.id
     )
+
+    order_document = _ensure_order_document(db, order, organization_id)
 
     total_gross = Decimal("0.00")
     total_disc = Decimal("0.00")
 
     for it in payload.items:
-        it_total = (it.quantity * it.unit_price) - it.discount_amount
-        total_gross += (it.quantity * it.unit_price)
+        gross_item_total = it.quantity * it.unit_price
+        if it.discount_amount > gross_item_total:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O desconto de um item não pode superar seu valor bruto.",
+            )
+        it_total = gross_item_total - it.discount_amount
+        total_gross += gross_item_total
         total_disc += it.discount_amount
 
         o_item = models.SalesOrderItem(
@@ -268,7 +674,23 @@ def create_sales_order(
     order.discount_amount = total_disc
     order.net_amount = total_gross - total_disc
 
-    return repository.create_order(db, order)
+    saved_order = repository.create_order(db, order)
+    order_document.issued_at = saved_order.created_at
+    _record_created_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        document_kind="sales-order",
+        native_id=saved_order.id,
+        status_value=saved_order.status,
+        created_by_id=current_user.id,
+        event_metadata={"origin": "DIRECT"},
+    )
+    if opportunity:
+        opportunity.stage = "WON"
+        db.add(opportunity)
+    db.flush()
+    return saved_order
 
 
 def get_sales_order(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID) -> models.SalesOrder:
@@ -282,12 +704,59 @@ def list_sales_orders(db: Session, organization_id: uuid.UUID) -> list[models.Sa
     return repository.list_orders(db, organization_id)
 
 
-def delete_sales_order(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID):
-    order = repository.get_order_by_id(db, order_id, organization_id)
+def delete_sales_order(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+):
+    _validate_current_user_tenant(current_user, organization_id)
+    order = repository.get_order_by_id_for_update(db, order_id, organization_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
-    repository.delete_order(db, order)
-    return {"message": "Pedido de venda excluído com sucesso."}
+    from controlb.modules.inventory import service as inventory_service
+
+    if order.billing_status == "INVOICED" or order.status == "COMPLETED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Um pedido faturado ou concluído não pode ser cancelado.",
+        )
+    if order.status == "CANCELLED":
+        inventory_service.release_sales_order_reservation(
+            db,
+            organization_id,
+            current_user.id,
+            order.id,
+            locked_order=order,
+            delivery_status_after="CANCELLED",
+        )
+        return {"message": "Pedido de venda já estava cancelado."}
+
+    previous_status = order.status
+    order_document = _ensure_order_document(db, order, organization_id)
+    inventory_service.release_sales_order_reservation(
+        db,
+        organization_id,
+        current_user.id,
+        order.id,
+        locked_order=order,
+        delivery_status_after="CANCELLED",
+    )
+    order.status = "CANCELLED"
+    order.delivery_status = "CANCELLED"
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="CANCELLED",
+        previous_status=previous_status,
+        new_status="CANCELLED",
+        created_by_id=current_user.id,
+        event_metadata={"order_id": str(order.id)},
+        idempotency_key=f"sales-order:{order.id}:cancelled",
+    )
+    db.flush()
+    return {"message": "Pedido de venda cancelado com sucesso."}
 
 
 
@@ -363,6 +832,7 @@ def process_pos_sale(
             pos_session_id = active_sess.id
 
     sale = models.POSSale(
+        id=uuid.uuid4(),
         organization_id=organization_id,
         pos_session_id=pos_session_id,
         customer_name=payload.customer_name.strip() if payload.customer_name else "Consumidor Final",
@@ -372,20 +842,37 @@ def process_pos_sale(
         created_by_id=current_user.id
     )
 
+    from controlb.modules.inventory import service as inventory_service
+
+    requested: dict[uuid.UUID, Decimal] = {}
+    for item in payload.items:
+        requested[item.product_id] = requested.get(
+            item.product_id, Decimal("0.0000")
+        ) + Decimal(str(item.quantity))
+
+    products, available, _ = inventory_service.lock_products_and_get_availability(
+        db, organization_id, list(requested)
+    )
+    products_by_id = {product.id: product for product in products}
+    shortages = [
+        (products_by_id[product_id], quantity, available[product_id])
+        for product_id, quantity in sorted(requested.items(), key=lambda item: str(item[0]))
+        if quantity > available[product_id]
+    ]
+    if shortages:
+        details = "; ".join(
+            f"{product.sku}: solicitado {quantity}, disponível {available_quantity}"
+            for product, quantity, available_quantity in shortages
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Saldo disponível insuficiente para a venda no PDV. {details}.",
+        )
+
     total_gross = Decimal("0.00")
 
     for it in payload.items:
-        # Validar produto e baixar estoque
-        product = db.query(Product).filter(
-            Product.id == it.product_id,
-            Product.organization_id == organization_id
-        ).first()
-
-        if not product:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Produto ID '{it.product_id}' não encontrado no catálogo da organização."
-            )
+        product = products_by_id[it.product_id]
 
         it_total = (it.quantity * it.unit_price)
         total_gross += it_total
@@ -399,8 +886,13 @@ def process_pos_sale(
         sale.items.append(sale_item)
 
         # 2. Baixa física de estoque
-        prev_stock = product.current_stock or Decimal("0.0000")
-        product.current_stock = prev_stock - it.quantity
+        prev_stock = Decimal(str(product.current_stock or 0))
+        product.current_stock = prev_stock - Decimal(str(it.quantity))
+        if product.current_stock < 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A venda produziria saldo físico negativo para o SKU {product.sku}.",
+            )
 
         # 3. Registro de Auditoria / Kardex (StockMovement)
         movement = StockMovement(
@@ -767,5 +1259,3 @@ def get_sales_analytics(db: Session, organization_id: uuid.UUID) -> schemas.Sale
         top_selling_products=top_products,
         seller_performance=seller_perf
     )
-
-

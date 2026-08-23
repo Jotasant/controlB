@@ -3,10 +3,55 @@ modules/crm/repository.py - Camada de Acesso a Dados do Módulo CRM
 """
 
 import uuid
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from controlb.modules.crm.models import Lead, Opportunity, CustomerInteraction
+from controlb.modules.crm.models import Lead, Opportunity, CustomerInteraction, CRMStage
+
+
+# ==============================================================================
+# ETAPAS DO FUNIL (CRM STAGES)
+# ==============================================================================
+
+def list_stages(db: Session, organization_id: uuid.UUID) -> list[CRMStage]:
+    stmt = select(CRMStage).where(CRMStage.organization_id == organization_id).order_by(CRMStage.order.asc(), CRMStage.created_at.asc())
+    return list(db.scalars(stmt).all())
+
+
+def get_stage_by_id(db: Session, stage_id: uuid.UUID, organization_id: uuid.UUID) -> CRMStage | None:
+    stmt = select(CRMStage).where(CRMStage.id == stage_id, CRMStage.organization_id == organization_id)
+    return db.scalars(stmt).first()
+
+
+def get_stage_by_code(db: Session, code: str, organization_id: uuid.UUID) -> CRMStage | None:
+    stmt = select(CRMStage).where(CRMStage.code == code.upper(), CRMStage.organization_id == organization_id)
+    return db.scalars(stmt).first()
+
+
+def create_stage(db: Session, stage: CRMStage) -> CRMStage:
+    db.add(stage)
+    db.commit()
+    db.refresh(stage)
+    return stage
+
+
+def update_stage(db: Session, stage: CRMStage) -> CRMStage:
+    db.commit()
+    db.refresh(stage)
+    return stage
+
+
+def delete_stage(db: Session, stage: CRMStage) -> None:
+    db.delete(stage)
+    db.commit()
+
+
+def count_opportunities_in_stage(db: Session, stage_code: str, organization_id: uuid.UUID) -> int:
+    stmt = select(func.count(Opportunity.id)).where(
+        Opportunity.organization_id == organization_id,
+        Opportunity.stage == stage_code.upper()
+    )
+    return db.scalar(stmt) or 0
 
 
 # ==============================================================================

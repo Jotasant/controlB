@@ -15,18 +15,26 @@ import {
   ShoppingBag, FileText, RefreshCw, Search,
   Trash2, Users, Plus, Target, DollarSign,
   TrendingUp, Undo2, ChevronRight, Award, BarChart3,
-  Package, CheckCircle2, Layers, Edit, Filter, ArrowUpRight
+  Package, CheckCircle2, Layers, Edit, Filter, ArrowUpRight, GitBranch
 } from 'lucide-react';
 import {
-  salesService, inventoryService, identityService, formatApiError
+  Bar, BarChart, CartesianGrid, ResponsiveContainer,
+  Tooltip, XAxis, YAxis
+} from 'recharts';
+import {
+  salesService, inventoryService, identityService, documentService, formatApiError
 } from '@/services/api';
 import {
   SalesOrder, SalesQuote, Product,
-  Customer, Contact, SalesGoal, PriceTable, SalesReturn, SalesAnalytics
+  Customer, Contact, SalesGoal, PriceTable, SalesReturn, SalesAnalytics,
+  BusinessDocumentChain
 } from '@/types';
 import { formatCurrency, formatQuantity } from '@/utils/formatters';
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal, ConfirmModalType } from '@/components/ConfirmModal/ConfirmModal';
+import { Can } from '@/components/Can';
+import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline';
+import { useToast } from '@/components/Toast/ToastContext';
 import './Sales.scss';
 
 type ActiveSalesTab =
@@ -38,6 +46,7 @@ type ActiveSalesTab =
   | 'analytics';
 
 export const Sales: React.FC = () => {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<ActiveSalesTab>('quotes');
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -62,6 +71,16 @@ export const Sales: React.FC = () => {
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [isDocumentTimelineOpen, setIsDocumentTimelineOpen] = useState(false);
+  const [documentTimelineLoading, setDocumentTimelineLoading] = useState(false);
+  const [documentTimelineLabel, setDocumentTimelineLabel] = useState('');
+  const [documentTimelineError, setDocumentTimelineError] = useState<string | null>(null);
+  const [documentChain, setDocumentChain] = useState<BusinessDocumentChain | null>(null);
+  const [documentTimelineTarget, setDocumentTimelineTarget] = useState<{
+    documentType: 'SALES_QUOTE' | 'SALES_ORDER';
+    nativeId: string;
+  } | null>(null);
+  const [reservingOrderId, setReservingOrderId] = useState<string | null>(null);
 
   // --- CONFIRM MODAL GENÉRICO ---
   const [confirmModal, setConfirmModal] = useState<{
@@ -209,9 +228,45 @@ export const Sales: React.FC = () => {
     return `${safeNumber(val).toFixed(1)}%`;
   };
 
+  const fmtCompactCurrency = (val: number | string | undefined | null): string => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+      notation: 'compact',
+      maximumFractionDigits: 1
+    }).format(safeNumber(val));
+  };
+
   const triggerSuccess = (msg: string) => {
     setActionSuccess(msg);
     setTimeout(() => setActionSuccess(null), 4000);
+  };
+
+  const openDocumentTimeline = async (
+    documentType: 'SALES_QUOTE' | 'SALES_ORDER',
+    nativeId: string,
+    label: string
+  ) => {
+    setDocumentTimelineLabel(label);
+    setDocumentTimelineError(null);
+    setDocumentChain(null);
+    setDocumentTimelineTarget({ documentType, nativeId });
+    setIsDocumentTimelineOpen(true);
+    setDocumentTimelineLoading(true);
+
+    try {
+      const chain = await documentService.getChain(documentType, nativeId, true);
+      setDocumentChain(chain);
+    } catch (err: unknown) {
+      const message = formatApiError(
+        err,
+        'Não foi possível consultar a cadeia deste documento.'
+      );
+      setDocumentTimelineError(message);
+      toast.error(message, 'Rastreabilidade indisponível');
+    } finally {
+      setDocumentTimelineLoading(false);
+    }
   };
 
   // =========================================================================
@@ -354,7 +409,7 @@ export const Sales: React.FC = () => {
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao converter cotação."));
+          toast.error(formatApiError(err, "Erro ao converter cotação."), 'Falha na conversão');
         }
       }
     });
@@ -362,19 +417,19 @@ export const Sales: React.FC = () => {
 
   const handleDeleteQuote = (quote: SalesQuote) => {
     openConfirm({
-      title: 'Excluir Cotação Comercial',
+      title: 'Cancelar Cotação Comercial',
       subtitle: `Cotação #${quote.quote_number}`,
-      message: `Deseja realmente remover a cotação #${quote.quote_number} de ${quote.customer_name}?`,
+      message: `Deseja realmente cancelar a cotação #${quote.quote_number} de ${quote.customer_name}?`,
       type: 'danger',
-      confirmText: 'Excluir Cotação',
+      confirmText: 'Cancelar Cotação',
       onConfirm: async () => {
         try {
           await salesService.deleteQuote(quote.id);
-          triggerSuccess("Cotação excluída com sucesso.");
+          triggerSuccess("Cotação cancelada com sucesso.");
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao excluir cotação."));
+          toast.error(formatApiError(err, "Erro ao cancelar cotação."), 'Falha ao cancelar cotação');
         }
       }
     });
@@ -459,21 +514,79 @@ export const Sales: React.FC = () => {
     }
   };
 
+  const handleReserveOrderStock = async (order: SalesOrder) => {
+    if (reservingOrderId !== null) return;
+
+    setReservingOrderId(order.id);
+    try {
+      const reservation = await inventoryService.reserveSalesOrderStock(order.id);
+      toast.success(
+        `Reserva #${reservation.reservation_number} criada para ${reservation.items.length} item(ns).`,
+        'Estoque reservado'
+      );
+      setOrders(current => current.map(item => (
+        item.id === order.id ? { ...item, delivery_status: 'RESERVED' } : item
+      )));
+
+      try {
+        const ordersRes = await salesService.getOrders(true);
+        setOrders(ordersRes || []);
+      } catch (refreshError: unknown) {
+        toast.warning(
+          formatApiError(
+            refreshError,
+            'A reserva foi concluída, mas os dados da tela não puderam ser atualizados.'
+          ),
+          'Atualização pendente'
+        );
+      }
+
+      if (
+        isDocumentTimelineOpen &&
+        documentTimelineTarget?.documentType === 'SALES_ORDER' &&
+        documentTimelineTarget.nativeId === order.id
+      ) {
+        setDocumentTimelineLoading(true);
+        setDocumentTimelineError(null);
+        try {
+          const chain = await documentService.getChain('SALES_ORDER', order.id, true);
+          setDocumentChain(chain);
+        } catch (timelineError: unknown) {
+          const message = formatApiError(
+            timelineError,
+            'A reserva foi concluída, mas a rastreabilidade não pôde ser atualizada.'
+          );
+          setDocumentTimelineError(message);
+          toast.warning(message, 'Rastreabilidade pendente');
+        } finally {
+          setDocumentTimelineLoading(false);
+        }
+      }
+    } catch (err: unknown) {
+      toast.error(
+        formatApiError(err, 'Não foi possível reservar o estoque deste pedido.'),
+        'Falha na reserva de estoque'
+      );
+    } finally {
+      setReservingOrderId(null);
+    }
+  };
+
   const handleDeleteOrder = (order: SalesOrder) => {
     openConfirm({
-      title: 'Cancelar / Excluir Pedido de Venda',
+      title: 'Cancelar Pedido de Venda',
       subtitle: `Pedido #${order.order_number}`,
-      message: `Deseja realmente remover o pedido #${order.order_number} de ${order.customer_name}?`,
+      message: `Deseja realmente cancelar o pedido #${order.order_number} de ${order.customer_name}?`,
       type: 'danger',
-      confirmText: 'Excluir Pedido',
+      confirmText: 'Cancelar Pedido',
       onConfirm: async () => {
         try {
           await salesService.deleteOrder(order.id);
-          triggerSuccess("Pedido excluído com sucesso.");
+          triggerSuccess("Pedido cancelado com sucesso.");
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao excluir pedido."));
+          toast.error(formatApiError(err, "Erro ao cancelar pedido."), 'Falha ao cancelar pedido');
         }
       }
     });
@@ -583,7 +696,7 @@ export const Sales: React.FC = () => {
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao excluir cliente."));
+          toast.error(formatApiError(err, "Erro ao excluir cliente."), 'Falha ao excluir cliente');
         }
       }
     });
@@ -633,7 +746,7 @@ export const Sales: React.FC = () => {
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao excluir meta."));
+          toast.error(formatApiError(err, "Erro ao excluir meta."), 'Falha ao excluir meta');
         }
       }
     });
@@ -684,7 +797,7 @@ export const Sales: React.FC = () => {
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao excluir tabela."));
+          toast.error(formatApiError(err, "Erro ao excluir tabela."), 'Falha ao excluir tabela');
         }
       }
     });
@@ -757,7 +870,7 @@ export const Sales: React.FC = () => {
           closeConfirm();
           loadAllData();
         } catch (err: any) {
-          alert(formatApiError(err, "Erro ao excluir registro."));
+          toast.error(formatApiError(err, "Erro ao excluir registro."), 'Falha ao excluir registro');
         }
       }
     });
@@ -921,9 +1034,9 @@ export const Sales: React.FC = () => {
           )}
 
           {/* CABEÇALHO DA SEÇÃO */}
-          <div className="content-header">
-            <div className="header-titles">
-              <div className="breadcrumbs">
+          <div className="content-header ui-page-header">
+            <div className="header-titles ui-page-header__info">
+              <div className="breadcrumbs ui-page-header__breadcrumb">
                 <span>Comercial</span>
                 <ChevronRight size={12} />
                 <span className="current">
@@ -935,7 +1048,7 @@ export const Sales: React.FC = () => {
                   {activeTab === 'analytics' && 'Inteligência Comercial & BI'}
                 </span>
               </div>
-              <h1>
+              <h1 className="ui-page-header__title">
                 {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
                 {activeTab === 'orders' && 'Pedidos de Venda'}
                 {activeTab === 'customers' && 'Clientes (Pessoa Jurídica / Física)'}
@@ -945,42 +1058,42 @@ export const Sales: React.FC = () => {
               </h1>
             </div>
 
-            <div className="header-actions">
-              <button className="btn-refresh" onClick={() => loadAllData(true)} title="Atualizar Dados">
+            <div className="header-actions ui-page-header__actions">
+              <button className="btn-refresh ui-button ui-button--icon" onClick={() => loadAllData(true)} title="Atualizar Dados">
                 <RefreshCw size={15} className={loading ? 'spinning' : ''} />
               </button>
 
               {activeTab === 'quotes' && (
-                <button className="btn-primary" onClick={handleOpenQuoteModal}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={handleOpenQuoteModal}>
                   <Plus size={16} /> Nova Cotação
                 </button>
               )}
 
               {activeTab === 'orders' && (
-                <button className="btn-primary" onClick={handleOpenOrderModal}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={handleOpenOrderModal}>
                   <Plus size={16} /> Novo Pedido
                 </button>
               )}
 
               {activeTab === 'customers' && (
-                <button className="btn-primary" onClick={() => handleOpenCustomerModal()}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={() => handleOpenCustomerModal()}>
                   <Plus size={16} /> Novo Cliente
                 </button>
               )}
 
               {activeTab === 'commercial' && (
                 <>
-                  <button className="btn-secondary" onClick={() => setIsPriceTableModalOpen(true)}>
+                  <button className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsPriceTableModalOpen(true)}>
                     <Layers size={16} /> Nova Tabela de Preços
                   </button>
-                  <button className="btn-primary" onClick={() => setIsGoalModalOpen(true)}>
+                  <button className="btn-primary ui-button ui-button--primary" onClick={() => setIsGoalModalOpen(true)}>
                     <Plus size={16} /> Nova Meta
                   </button>
                 </>
               )}
 
               {activeTab === 'post_sales' && (
-                <button className="btn-primary" onClick={handleOpenReturnModal}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={handleOpenReturnModal}>
                   <Plus size={16} /> Registrar Devolução
                 </button>
               )}
@@ -992,8 +1105,8 @@ export const Sales: React.FC = () => {
           {/* =============================================================== */}
           {activeTab === 'quotes' && (
             <div className="tab-pane">
-              <div className="toolbar">
-                <div className="search-box">
+              <div className="toolbar ui-toolbar">
+                <div className="search-box ui-search-box">
                   <Search size={16} />
                   <input
                     type="text"
@@ -1002,7 +1115,7 @@ export const Sales: React.FC = () => {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <div className="filter-group">
+                <div className="filter-group ui-filter-group">
                   <Filter size={14} />
                   <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                     <option value="ALL">Todos os Status</option>
@@ -1014,8 +1127,8 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
-              <div className="table-container">
-                <table className="data-table">
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
                       <th>Cotação</th>
@@ -1030,7 +1143,7 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredQuotes.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="empty-state">
+                        <td colSpan={7} className="empty-state ui-empty-state">
                           Nenhuma cotação comercial encontrada.
                         </td>
                       </tr>
@@ -1048,7 +1161,7 @@ export const Sales: React.FC = () => {
                           <td>{q.valid_until ? new Date(q.valid_until).toLocaleDateString('pt-BR') : '15 dias'}</td>
                           <td><strong>{fmtCurrency(q.net_amount)}</strong></td>
                           <td>
-                            <span className={`status-pill ${
+                            <span className={`status-pill ui-status ${
                               q.status === 'APPROVED' ? 'success' :
                               q.status === 'CONVERTED' ? 'info' :
                               q.status === 'REJECTED' ? 'danger' : 'warning'
@@ -1059,11 +1172,20 @@ export const Sales: React.FC = () => {
                             </span>
                           </td>
                           <td>
-                            <div className="table-actions">
-                              {q.status !== 'CONVERTED' && (
+                            <div className="table-actions ui-table-actions">
+                              <button
+                                type="button"
+                                className="table-action-btn ui-table-action"
+                                onClick={() => void openDocumentTimeline('SALES_QUOTE', q.id, `Cotação #${q.quote_number}`)}
+                                title="Ver cadeia documental"
+                                aria-label={`Ver cadeia da cotação ${q.quote_number}`}
+                              >
+                                <GitBranch size={14} /> Rastrear
+                              </button>
+                              {q.status === 'APPROVED' && (
                                 <button
                                   type="button"
-                                  className="table-action-btn primary"
+                                  className="table-action-btn ui-table-action primary"
                                   onClick={() => handleConvertToOrder(q)}
                                   title="Converter em Pedido de Venda"
                                 >
@@ -1072,7 +1194,7 @@ export const Sales: React.FC = () => {
                               )}
                               <button
                                 type="button"
-                                className="table-action-btn danger"
+                                className="table-action-btn ui-table-action danger"
                                 onClick={() => handleDeleteQuote(q)}
                                 title="Excluir Cotação"
                               >
@@ -1094,8 +1216,8 @@ export const Sales: React.FC = () => {
           {/* =============================================================== */}
           {activeTab === 'orders' && (
             <div className="tab-pane">
-              <div className="toolbar">
-                <div className="search-box">
+              <div className="toolbar ui-toolbar">
+                <div className="search-box ui-search-box">
                   <Search size={16} />
                   <input
                     type="text"
@@ -1104,7 +1226,7 @@ export const Sales: React.FC = () => {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <div className="filter-group">
+                <div className="filter-group ui-filter-group">
                   <Filter size={14} />
                   <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                     <option value="ALL">Todos os Status</option>
@@ -1116,8 +1238,8 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
-              <div className="table-container">
-                <table className="data-table">
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
                       <th>Pedido</th>
@@ -1133,7 +1255,7 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredOrders.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state">
+                        <td colSpan={8} className="empty-state ui-empty-state">
                           Nenhum pedido de venda encontrado.
                         </td>
                       </tr>
@@ -1149,22 +1271,25 @@ export const Sales: React.FC = () => {
                           </td>
                           <td>{new Date(o.created_at).toLocaleDateString('pt-BR')}</td>
                           <td>
-                            <span className={`status-pill ${
+                            <span className={`status-pill ui-status ${
+                              o.delivery_status === 'CANCELLED' ? 'danger' :
                               o.delivery_status === 'DELIVERED' ? 'success' :
-                              o.delivery_status === 'DISPATCHED' ? 'info' : 'warning'
+                              o.delivery_status === 'DISPATCHED' || o.delivery_status === 'RESERVED' ? 'info' : 'warning'
                             }`}>
-                              {o.delivery_status === 'DELIVERED' ? 'Entregue' :
-                               o.delivery_status === 'DISPATCHED' ? 'Em Trânsito' : 'Pendente'}
+                              {o.delivery_status === 'CANCELLED' ? 'Cancelado' :
+                               o.delivery_status === 'DELIVERED' ? 'Entregue' :
+                               o.delivery_status === 'DISPATCHED' ? 'Em Trânsito' :
+                               o.delivery_status === 'RESERVED' ? 'Reservado' : 'Pendente'}
                             </span>
                           </td>
                           <td>
-                            <span className={`status-pill ${o.billing_status === 'INVOICED' ? 'success' : 'warning'}`}>
+                            <span className={`status-pill ui-status ${o.billing_status === 'INVOICED' ? 'success' : 'warning'}`}>
                               {o.billing_status === 'INVOICED' ? 'Faturado' : 'Aguardando'}
                             </span>
                           </td>
                           <td><strong>{fmtCurrency(o.net_amount)}</strong></td>
                           <td>
-                            <span className={`status-pill ${
+                            <span className={`status-pill ui-status ${
                               o.status === 'COMPLETED' ? 'success' :
                               o.status === 'CONFIRMED' ? 'info' :
                               o.status === 'CANCELLED' ? 'danger' : 'warning'
@@ -1173,12 +1298,38 @@ export const Sales: React.FC = () => {
                             </span>
                           </td>
                           <td>
-                            <div className="table-actions">
+                            <div className="table-actions ui-table-actions">
+                              <Can permission="inventory:move">
+                                {o.status === 'CONFIRMED' && o.delivery_status === 'PENDING' && (
+                                  <button
+                                    type="button"
+                                    className="table-action-btn ui-table-action primary"
+                                    onClick={() => void handleReserveOrderStock(o)}
+                                    disabled={reservingOrderId !== null}
+                                    aria-busy={reservingOrderId === o.id}
+                                    title="Reservar estoque para o pedido"
+                                    aria-label={`Reservar estoque do pedido ${o.order_number}`}
+                                  >
+                                    <Package size={14} />
+                                    {reservingOrderId === o.id ? 'Reservando...' : 'Reservar estoque'}
+                                  </button>
+                                )}
+                              </Can>
                               <button
                                 type="button"
-                                className="table-action-btn danger"
+                                className="table-action-btn ui-table-action"
+                                onClick={() => void openDocumentTimeline('SALES_ORDER', o.id, `Pedido #${o.order_number}`)}
+                                title="Ver cadeia documental"
+                                aria-label={`Ver cadeia do pedido ${o.order_number}`}
+                              >
+                                <GitBranch size={14} /> Rastrear
+                              </button>
+                              <button
+                                type="button"
+                                className="table-action-btn ui-table-action danger"
                                 onClick={() => handleDeleteOrder(o)}
-                                title="Cancelar / Excluir Pedido"
+                                title="Cancelar pedido"
+                                aria-label={`Cancelar pedido ${o.order_number}`}
                               >
                                 <Trash2 size={14} />
                               </button>
@@ -1198,8 +1349,8 @@ export const Sales: React.FC = () => {
           {/* =============================================================== */}
           {activeTab === 'customers' && (
             <div className="tab-pane">
-              <div className="toolbar">
-                <div className="search-box">
+              <div className="toolbar ui-toolbar">
+                <div className="search-box ui-search-box">
                   <Search size={16} />
                   <input
                     type="text"
@@ -1208,7 +1359,7 @@ export const Sales: React.FC = () => {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <div className="filter-group">
+                <div className="filter-group ui-filter-group">
                   <Filter size={14} />
                   <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
                     <option value="ALL">Todos os Tipos</option>
@@ -1218,8 +1369,8 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
-              <div className="table-container">
-                <table className="data-table">
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
                       <th>Tipo</th>
@@ -1234,7 +1385,7 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredCustomers.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="empty-state">
+                        <td colSpan={7} className="empty-state ui-empty-state">
                           Nenhum cliente cadastrado no módulo de vendas.
                         </td>
                       </tr>
@@ -1262,10 +1413,10 @@ export const Sales: React.FC = () => {
                           <td>{c.address_city ? `${c.address_city}/${c.address_state}` : '-'}</td>
                           <td><strong>{fmtCurrency(c.credit_limit)}</strong></td>
                           <td>
-                            <div className="table-actions">
+                            <div className="table-actions ui-table-actions">
                               <button
                                 type="button"
-                                className="table-action-btn"
+                                className="table-action-btn ui-table-action"
                                 onClick={() => handleOpenCustomerModal(c)}
                                 title="Editar Cliente"
                               >
@@ -1273,7 +1424,7 @@ export const Sales: React.FC = () => {
                               </button>
                               <button
                                 type="button"
-                                className="table-action-btn danger"
+                                className="table-action-btn ui-table-action danger"
                                 onClick={() => handleDeleteCustomer(c)}
                                 title="Excluir Cliente"
                               >
@@ -1295,15 +1446,15 @@ export const Sales: React.FC = () => {
           {/* =============================================================== */}
           {activeTab === 'commercial' && (
             <div className="tab-pane commercial-pane">
-              <div className="commercial-subgrid">
+              <div className="commercial-subgrid ui-section-stack">
                 {/* Seção 1: Metas por Vendedor */}
-                <div className="subgrid-card">
-                  <div className="card-header-row">
+                <div className="subgrid-card ui-section">
+                  <div className="card-header-row ui-section__header">
                     <h3><Target size={16} /> Metas Comerciais por Vendedor ({yearFilter})</h3>
                     <select
                       value={yearFilter}
                       onChange={(e) => setYearFilter(Number(e.target.value))}
-                      className="year-picker"
+                      className="year-picker ui-field ui-field--select"
                     >
                       <option value={2025}>Ano 2025</option>
                       <option value={2026}>Ano 2026</option>
@@ -1311,8 +1462,8 @@ export const Sales: React.FC = () => {
                     </select>
                   </div>
 
-                  <div className="table-container mini">
-                    <table className="data-table">
+                  <div className="table-container mini ui-table-wrap">
+                    <table className="data-table ui-table">
                       <thead>
                         <tr>
                           <th>Vendedor</th>
@@ -1325,7 +1476,7 @@ export const Sales: React.FC = () => {
                       <tbody>
                         {salesGoals.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="empty-state">
+                            <td colSpan={5} className="empty-state ui-empty-state">
                               Nenhuma meta comercial cadastrada para {yearFilter}.
                             </td>
                           </tr>
@@ -1339,7 +1490,7 @@ export const Sales: React.FC = () => {
                               <td>
                                 <button
                                   type="button"
-                                  className="table-action-btn danger"
+                                  className="table-action-btn ui-table-action danger"
                                   onClick={() => handleDeleteGoal(g)}
                                   title="Excluir Meta"
                                 >
@@ -1355,13 +1506,13 @@ export const Sales: React.FC = () => {
                 </div>
 
                 {/* Seção 2: Tabelas de Preços */}
-                <div className="subgrid-card">
-                  <div className="card-header-row">
+                <div className="subgrid-card ui-section">
+                  <div className="card-header-row ui-section__header">
                     <h3><Layers size={16} /> Tabelas de Preços Personalizadas</h3>
                   </div>
 
-                  <div className="table-container mini">
-                    <table className="data-table">
+                  <div className="table-container mini ui-table-wrap">
+                    <table className="data-table ui-table">
                       <thead>
                         <tr>
                           <th>Nome da Tabela</th>
@@ -1374,7 +1525,7 @@ export const Sales: React.FC = () => {
                       <tbody>
                         {priceTables.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="empty-state">
+                            <td colSpan={5} className="empty-state ui-empty-state">
                               Nenhuma tabela de preços cadastrada.
                             </td>
                           </tr>
@@ -1384,19 +1535,19 @@ export const Sales: React.FC = () => {
                               <td><strong>{t.name}</strong></td>
                               <td>{t.description || '-'}</td>
                               <td>
-                                <span className={`status-pill ${t.is_default ? 'success' : 'info'}`}>
+                                <span className={`status-pill ui-status ${t.is_default ? 'success' : 'info'}`}>
                                   {t.is_default ? 'Sim' : 'Não'}
                                 </span>
                               </td>
                               <td>
-                                <span className={`status-pill ${t.is_active ? 'success' : 'danger'}`}>
+                                <span className={`status-pill ui-status ${t.is_active ? 'success' : 'danger'}`}>
                                   {t.is_active ? 'Ativa' : 'Inativa'}
                                 </span>
                               </td>
                               <td>
                                 <button
                                   type="button"
-                                  className="table-action-btn danger"
+                                  className="table-action-btn ui-table-action danger"
                                   onClick={() => handleDeletePriceTable(t)}
                                   title="Excluir Tabela"
                                 >
@@ -1419,8 +1570,8 @@ export const Sales: React.FC = () => {
           {/* =============================================================== */}
           {activeTab === 'post_sales' && (
             <div className="tab-pane">
-              <div className="toolbar">
-                <div className="search-box">
+              <div className="toolbar ui-toolbar">
+                <div className="search-box ui-search-box">
                   <Search size={16} />
                   <input
                     type="text"
@@ -1429,7 +1580,7 @@ export const Sales: React.FC = () => {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <div className="filter-group">
+                <div className="filter-group ui-filter-group">
                   <Filter size={14} />
                   <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
                     <option value="ALL">Todos os Tipos</option>
@@ -1440,8 +1591,8 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
-              <div className="table-container">
-                <table className="data-table">
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
                       <th>Tipo</th>
@@ -1457,7 +1608,7 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredReturns.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state">
+                        <td colSpan={8} className="empty-state ui-empty-state">
                           Nenhum registro de pós-venda encontrado.
                         </td>
                       </tr>
@@ -1465,7 +1616,7 @@ export const Sales: React.FC = () => {
                       filteredReturns.map(r => (
                         <tr key={r.id}>
                           <td>
-                            <span className={`status-pill ${
+                            <span className={`status-pill ui-status ${
                               r.return_type === 'DEVOLUCAO' ? 'danger' :
                               r.return_type === 'TROCA' ? 'info' : 'warning'
                             }`}>
@@ -1476,13 +1627,13 @@ export const Sales: React.FC = () => {
                           <td>{new Date(r.created_at).toLocaleDateString('pt-BR')}</td>
                           <td>{r.reason}</td>
                           <td>
-                            <span className={`status-pill ${r.restock_items ? 'success' : 'danger'}`}>
+                            <span className={`status-pill ui-status ${r.restock_items ? 'success' : 'danger'}`}>
                               {r.restock_items ? 'Sim (Kardex)' : 'Não'}
                             </span>
                           </td>
                           <td><strong>{fmtCurrency(r.total_amount)}</strong></td>
                           <td>
-                            <span className={`status-pill ${
+                            <span className={`status-pill ui-status ${
                               r.status === 'COMPLETED' ? 'success' :
                               r.status === 'REJECTED' ? 'danger' : 'warning'
                             }`}>
@@ -1492,7 +1643,7 @@ export const Sales: React.FC = () => {
                           <td>
                             <button
                               type="button"
-                              className="table-action-btn danger"
+                              className="table-action-btn ui-table-action danger"
                               onClick={() => handleDeleteReturn(r)}
                               title="Excluir Registro"
                             >
@@ -1512,54 +1663,126 @@ export const Sales: React.FC = () => {
           {/* ABA 6: INDICADORES & BI COMERCIAL                               */}
           {/* =============================================================== */}
           {activeTab === 'analytics' && (
-            <div className="tab-pane analytics-pane">
+            <div className="tab-pane analytics-pane tab-analytics-container">
               {/* Cards de Métricas Principais */}
-              <div className="kpi-grid">
-                <div className="kpi-card">
-                  <div className="kpi-header">
-                    <span className="label">Faturamento Total Comercial</span>
-                    <DollarSign size={18} className="icon green" />
+              <div className="kpi-grid ui-kpi-grid">
+                <div className="kpi-card ui-kpi-card ui-kpi-card--success">
+                  <div className="kpi-header ui-kpi-card__header">
+                    <span className="label ui-kpi-card__label">Faturamento Total Comercial</span>
+                    <DollarSign size={18} className="icon green ui-kpi-card__icon" />
                   </div>
-                  <div className="kpi-value">{fmtCurrency(analytics?.total_revenue || 0)}</div>
-                  <span className="kpi-sub">Receita consolidada de pedidos no período</span>
+                  <div className="kpi-value ui-kpi-card__value">{fmtCurrency(analytics?.total_revenue || 0)}</div>
+                  <span className="kpi-sub ui-kpi-card__sub">Receita consolidada de pedidos no período</span>
                 </div>
 
-                <div className="kpi-card">
-                  <div className="kpi-header">
-                    <span className="label">Ticket Médio por Pedido</span>
-                    <TrendingUp size={18} className="icon blue" />
+                <div className="kpi-card ui-kpi-card ui-kpi-card--info">
+                  <div className="kpi-header ui-kpi-card__header">
+                    <span className="label ui-kpi-card__label">Ticket Médio por Pedido</span>
+                    <TrendingUp size={18} className="icon blue ui-kpi-card__icon" />
                   </div>
-                  <div className="kpi-value">{fmtCurrency(analytics?.average_ticket || 0)}</div>
-                  <span className="kpi-sub">Média líquida por transação comercial</span>
+                  <div className="kpi-value ui-kpi-card__value">{fmtCurrency(analytics?.average_ticket || 0)}</div>
+                  <span className="kpi-sub ui-kpi-card__sub">Média líquida por transação comercial</span>
                 </div>
 
-                <div className="kpi-card">
-                  <div className="kpi-header">
-                    <span className="label">Taxa de Conversão de Cotações</span>
-                    <Award size={18} className="icon purple" />
+                <div className="kpi-card ui-kpi-card ui-kpi-card--purple">
+                  <div className="kpi-header ui-kpi-card__header">
+                    <span className="label ui-kpi-card__label">Taxa de Conversão de Cotações</span>
+                    <Award size={18} className="icon purple ui-kpi-card__icon" />
                   </div>
-                  <div className="kpi-value">{fmtPercent(analytics?.quote_conversion_rate || 0)}</div>
-                  <span className="kpi-sub">Propostas convertidas em pedidos</span>
+                  <div className="kpi-value ui-kpi-card__value">{fmtPercent(analytics?.quote_conversion_rate || 0)}</div>
+                  <span className="kpi-sub ui-kpi-card__sub">Propostas convertidas em pedidos</span>
                 </div>
 
-                <div className="kpi-card">
-                  <div className="kpi-header">
-                    <span className="label">Volume Total de Vendas</span>
-                    <ShoppingBag size={18} className="icon amber" />
+                <div className="kpi-card ui-kpi-card ui-kpi-card--warning">
+                  <div className="kpi-header ui-kpi-card__header">
+                    <span className="label ui-kpi-card__label">Volume Total de Vendas</span>
+                    <ShoppingBag size={18} className="icon amber ui-kpi-card__icon" />
                   </div>
-                  <div className="kpi-value">{orders.length}</div>
-                  <span className="kpi-sub">Pedidos emitidos no período</span>
+                  <div className="kpi-value ui-kpi-card__value">{orders.length}</div>
+                  <span className="kpi-sub ui-kpi-card__sub">Pedidos emitidos no período</span>
                 </div>
               </div>
 
+              <section className="ui-chart-panel" aria-labelledby="sales-products-chart-title">
+                <div className="ui-chart-panel__header">
+                  <h3 id="sales-products-chart-title">Receita dos Produtos Mais Vendidos</h3>
+                  <p>Comparativo de faturamento dos cinco produtos com maior receita.</p>
+                </div>
+
+                {(!analytics?.top_selling_products || analytics.top_selling_products.length === 0) ? (
+                  <div className="ui-empty-state">
+                    Ainda não existem vendas de produtos suficientes para gerar o gráfico.
+                  </div>
+                ) : (
+                  <div
+                    className="ui-chart-panel__canvas"
+                    role="img"
+                    aria-label="Gráfico de barras da receita dos produtos mais vendidos"
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={analytics.top_selling_products.map(product => ({
+                          name: product.product_name,
+                          revenue: safeNumber(product.total_revenue)
+                        }))}
+                        layout="vertical"
+                        margin={{ top: 8, right: 24, bottom: 8, left: 8 }}
+                      >
+                        <CartesianGrid
+                          stroke="var(--border-subtle)"
+                          strokeDasharray="3 3"
+                          horizontal={false}
+                        />
+                        <XAxis
+                          type="number"
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(value) => fmtCompactCurrency(value)}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={190}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(value: string) => (
+                            value.length > 28 ? `${value.slice(0, 28)}…` : value
+                          )}
+                        />
+                        <Tooltip
+                          cursor={{ fill: 'var(--bg-surface-hover)' }}
+                          contentStyle={{
+                            background: 'var(--bg-surface-elevated)',
+                            border: '1px solid var(--border-highlight)',
+                            borderRadius: '6px',
+                            color: 'var(--text-primary)',
+                            fontSize: '0.8rem'
+                          }}
+                          labelStyle={{ color: 'var(--text-primary)', fontWeight: 600 }}
+                          formatter={(value) => [fmtCurrency(safeNumber(value as number)), 'Receita']}
+                        />
+                        <Bar
+                          dataKey="revenue"
+                          name="Receita"
+                          fill="var(--accent-brand)"
+                          radius={[0, 5, 5, 0]}
+                          maxBarSize={30}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </section>
+
               {/* Ranking e Desempenho */}
-              <div className="analytics-details-grid">
-                <div className="details-card">
+              <div className="analytics-details-grid ui-panel-grid">
+                <div className="details-card ui-panel">
                   <h3>Top 5 Produtos Mais Vendidos</h3>
                   {(!analytics?.top_selling_products || analytics.top_selling_products.length === 0) ? (
-                    <p className="empty-sub">Nenhuma movimentação de produto registrada.</p>
+                    <p className="empty-sub ui-empty-state">Nenhuma movimentação de produto registrada.</p>
                   ) : (
-                    <table className="data-table">
+                    <div className="ui-table-wrap ui-table-wrap--embedded">
+                    <table className="data-table ui-table">
                       <thead>
                         <tr>
                           <th>Produto</th>
@@ -1577,15 +1800,17 @@ export const Sales: React.FC = () => {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
 
-                <div className="details-card">
+                <div className="details-card ui-panel">
                   <h3>Desempenho da Equipe Comercial</h3>
                   {(!analytics?.seller_performance || analytics.seller_performance.length === 0) ? (
-                    <p className="empty-sub">Nenhuma meta apurada para a equipe comercial.</p>
+                    <p className="empty-sub ui-empty-state">Nenhuma meta apurada para a equipe comercial.</p>
                   ) : (
-                    <table className="data-table">
+                    <div className="ui-table-wrap ui-table-wrap--embedded">
+                    <table className="data-table ui-table">
                       <thead>
                         <tr>
                           <th>Vendedor</th>
@@ -1601,11 +1826,11 @@ export const Sales: React.FC = () => {
                             <td>{fmtCurrency(s.target_amount)}</td>
                             <td>{fmtCurrency(s.total_sales_amount)}</td>
                             <td>
-                              <div className="progress-cell">
+                              <div className="progress-cell ui-progress">
                                 <span>{fmtPercent(s.achievement_percent)}</span>
-                                <div className="progress-bar-bg">
+                                <div className="progress-bar-bg ui-progress__track">
                                   <div
-                                    className="progress-bar-fill"
+                                    className="progress-bar-fill ui-progress__fill"
                                     style={{ width: `${Math.min(100, safeNumber(s.achievement_percent))}%` }}
                                   ></div>
                                 </div>
@@ -1615,6 +1840,7 @@ export const Sales: React.FC = () => {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1635,8 +1861,8 @@ export const Sales: React.FC = () => {
         subtitle="Emissão de proposta comercial formal com alçada e condições"
         size="lg"
       >
-        <form onSubmit={handleSaveQuote} className="wizard-form">
-          {modalError && <div className="form-error-callout">{modalError}</div>}
+        <form onSubmit={handleSaveQuote} className="wizard-form ui-form">
+          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-row">
             <div className="form-group flex-2">
               <label>Nome do Cliente *</label>
@@ -1667,16 +1893,16 @@ export const Sales: React.FC = () => {
             </div>
           </div>
 
-          <div className="form-items-section">
-            <div className="section-title-row">
+          <div className="form-items-section ui-form__section">
+            <div className="section-title-row ui-form__section-header">
               <h4>Itens do Orçamento</h4>
-              <button type="button" className="btn-secondary sm" onClick={handleAddQuoteItem}>
+              <button type="button" className="btn-secondary sm ui-button ui-button--secondary ui-button--sm" onClick={handleAddQuoteItem}>
                 <Plus size={13} /> Adicionar Produto
               </button>
             </div>
 
             {quoteItems.map((item, idx) => (
-              <div key={idx} className="dynamic-item-row">
+              <div key={idx} className="dynamic-item-row ui-form__item-row">
                 <div className="form-group flex-3">
                   <select
                     value={item.product_id}
@@ -1720,18 +1946,18 @@ export const Sales: React.FC = () => {
                     }}
                   />
                 </div>
-                <button type="button" className="btn-del-item" onClick={() => handleRemoveQuoteItem(idx)}>
+                <button type="button" className="btn-del-item ui-form__remove" onClick={() => handleRemoveQuoteItem(idx)}>
                   <Trash2 size={14} />
                 </button>
               </div>
             ))}
           </div>
 
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={() => setIsQuoteModalOpen(false)}>
+          <div className="modal-footer ui-form__actions">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsQuoteModalOpen(false)}>
               Cancelar
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
               {isSaving ? 'Salvando...' : 'Salvar Cotação'}
             </button>
           </div>
@@ -1746,8 +1972,8 @@ export const Sales: React.FC = () => {
         subtitle="Cadastro direto de pedido comercial"
         size="lg"
       >
-        <form onSubmit={handleSaveOrder} className="wizard-form">
-          {modalError && <div className="form-error-callout">{modalError}</div>}
+        <form onSubmit={handleSaveOrder} className="wizard-form ui-form">
+          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-row">
             <div className="form-group flex-2">
               <label>Cliente *</label>
@@ -1779,16 +2005,16 @@ export const Sales: React.FC = () => {
             </div>
           </div>
 
-          <div className="form-items-section">
-            <div className="section-title-row">
+          <div className="form-items-section ui-form__section">
+            <div className="section-title-row ui-form__section-header">
               <h4>Produtos do Pedido</h4>
-              <button type="button" className="btn-secondary sm" onClick={handleAddOrderItem}>
+              <button type="button" className="btn-secondary sm ui-button ui-button--secondary ui-button--sm" onClick={handleAddOrderItem}>
                 <Plus size={13} /> Adicionar Produto
               </button>
             </div>
 
             {orderItems.map((item, idx) => (
-              <div key={idx} className="dynamic-item-row">
+              <div key={idx} className="dynamic-item-row ui-form__item-row">
                 <div className="form-group flex-3">
                   <select
                     value={item.product_id}
@@ -1832,18 +2058,18 @@ export const Sales: React.FC = () => {
                     }}
                   />
                 </div>
-                <button type="button" className="btn-del-item" onClick={() => handleRemoveOrderItem(idx)}>
+                <button type="button" className="btn-del-item ui-form__remove" onClick={() => handleRemoveOrderItem(idx)}>
                   <Trash2 size={14} />
                 </button>
               </div>
             ))}
           </div>
 
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={() => setIsOrderModalOpen(false)}>
+          <div className="modal-footer ui-form__actions">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsOrderModalOpen(false)}>
               Cancelar
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
               {isSaving ? 'Salvando...' : 'Salvar Pedido'}
             </button>
           </div>
@@ -1858,8 +2084,8 @@ export const Sales: React.FC = () => {
         subtitle="Cadastro centralizado para Vendas, CRM, Faturamento e Identity"
         size="lg"
       >
-        <form onSubmit={handleSaveCustomer} className="wizard-form">
-          {modalError && <div className="form-error-callout">{modalError}</div>}
+        <form onSubmit={handleSaveCustomer} className="wizard-form ui-form">
+          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-row">
             <div className="form-group flex-1">
               <label>Tipo de Pessoa *</label>
@@ -1944,11 +2170,11 @@ export const Sales: React.FC = () => {
             </div>
           </div>
 
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={() => setIsCustomerModalOpen(false)}>
+          <div className="modal-footer ui-form__actions">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsCustomerModalOpen(false)}>
               Cancelar
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
               {isSaving ? 'Salvando...' : 'Salvar Cliente'}
             </button>
           </div>
@@ -1963,8 +2189,8 @@ export const Sales: React.FC = () => {
         subtitle="Definição de objetivos por vendedor e comissão"
         size="sm"
       >
-        <form onSubmit={handleSaveGoal} className="wizard-form">
-          {modalError && <div className="form-error-callout">{modalError}</div>}
+        <form onSubmit={handleSaveGoal} className="wizard-form ui-form">
+          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-group">
             <label>Nome do Vendedor *</label>
             <input
@@ -2002,11 +2228,11 @@ export const Sales: React.FC = () => {
               onChange={(e) => setGoalCommission(e.target.value)}
             />
           </div>
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={() => setIsGoalModalOpen(false)}>
+          <div className="modal-footer ui-form__actions">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsGoalModalOpen(false)}>
               Cancelar
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
               {isSaving ? 'Salvando...' : 'Salvar Meta'}
             </button>
           </div>
@@ -2021,8 +2247,8 @@ export const Sales: React.FC = () => {
         subtitle="Precificação diferenciada por canal de venda"
         size="md"
       >
-        <form onSubmit={handleSavePriceTable} className="wizard-form">
-          {modalError && <div className="form-error-callout">{modalError}</div>}
+        <form onSubmit={handleSavePriceTable} className="wizard-form ui-form">
+          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-group">
             <label>Nome da Tabela *</label>
             <input
@@ -2041,7 +2267,7 @@ export const Sales: React.FC = () => {
               onChange={(e) => setPriceTableDesc(e.target.value)}
             />
           </div>
-          <div className="form-group checkbox-group">
+          <div className="form-group checkbox-group ui-form__checkbox">
             <label>
               <input
                 type="checkbox"
@@ -2052,12 +2278,12 @@ export const Sales: React.FC = () => {
             </label>
           </div>
 
-          <div className="form-items-section">
-            <div className="section-title-row">
+          <div className="form-items-section ui-form__section">
+            <div className="section-title-row ui-form__section-header">
               <h4>Produtos da Tabela (Opcional)</h4>
               <button
                 type="button"
-                className="btn-secondary sm"
+                className="btn-secondary sm ui-button ui-button--secondary ui-button--sm"
                 onClick={() => {
                   if (products.length > 0) {
                     setPriceTableItems([
@@ -2071,7 +2297,7 @@ export const Sales: React.FC = () => {
               </button>
             </div>
             {priceTableItems.map((item, idx) => (
-              <div key={idx} className="dynamic-item-row">
+              <div key={idx} className="dynamic-item-row ui-form__item-row">
                 <div className="form-group flex-3">
                   <select
                     value={item.product_id}
@@ -2101,7 +2327,7 @@ export const Sales: React.FC = () => {
                 </div>
                 <button
                   type="button"
-                  className="btn-del-item"
+                  className="btn-del-item ui-form__remove"
                   onClick={() => setPriceTableItems(priceTableItems.filter((_, i) => i !== idx))}
                 >
                   <Trash2 size={14} />
@@ -2110,11 +2336,11 @@ export const Sales: React.FC = () => {
             ))}
           </div>
 
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={() => setIsPriceTableModalOpen(false)}>
+          <div className="modal-footer ui-form__actions">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsPriceTableModalOpen(false)}>
               Cancelar
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
               {isSaving ? 'Salvando...' : 'Salvar Tabela'}
             </button>
           </div>
@@ -2129,8 +2355,8 @@ export const Sales: React.FC = () => {
         subtitle="Estorno financeiro e reestocagem auditada no Kardex"
         size="md"
       >
-        <form onSubmit={handleSaveReturn} className="wizard-form">
-          {modalError && <div className="form-error-callout">{modalError}</div>}
+        <form onSubmit={handleSaveReturn} className="wizard-form ui-form">
+          {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-row">
             <div className="form-group flex-2">
               <label>Cliente *</label>
@@ -2209,7 +2435,7 @@ export const Sales: React.FC = () => {
             />
           </div>
 
-          <div className="form-group checkbox-group">
+          <div className="form-group checkbox-group ui-form__checkbox">
             <label>
               <input
                 type="checkbox"
@@ -2220,11 +2446,11 @@ export const Sales: React.FC = () => {
             </label>
           </div>
 
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={() => setIsReturnModalOpen(false)}>
+          <div className="modal-footer ui-form__actions">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsReturnModalOpen(false)}>
               Cancelar
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
               {isSaving ? 'Processando...' : 'Processar Devolução'}
             </button>
           </div>
@@ -2232,6 +2458,28 @@ export const Sales: React.FC = () => {
       </Modal>
 
       {/* CONFIRM MODAL GENÉRICO */}
+      <Modal
+        isOpen={isDocumentTimelineOpen}
+        onClose={() => setIsDocumentTimelineOpen(false)}
+        title={`Cadeia documental · ${documentTimelineLabel}`}
+        subtitle="Rastreabilidade entre os documentos realmente vinculados pelos módulos."
+        size="lg"
+      >
+        {documentTimelineLoading ? (
+          <div className="ui-document-timeline-loading" role="status">
+            <RefreshCw size={18} /> Consultando documentos relacionados...
+          </div>
+        ) : documentTimelineError ? (
+          <div className="modal-alert-error" role="alert">
+            {documentTimelineError}
+          </div>
+        ) : documentChain ? (
+          <DocumentTimeline chain={documentChain} />
+        ) : (
+          <div className="ui-empty-state">Nenhuma cadeia documental disponível.</div>
+        )}
+      </Modal>
+
       <ConfirmModal
         isOpen={confirmModal.isOpen}
         onClose={closeConfirm}

@@ -18,6 +18,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+
     # 1. Identity Cascades
     op.drop_constraint('user_organization_id_fkey', 'user', type_='foreignkey')
     op.create_foreign_key('user_organization_id_fkey', 'user', 'organization', ['organization_id'], ['id'], ondelete='CASCADE')
@@ -29,14 +31,20 @@ def upgrade() -> None:
     op.create_foreign_key('user_role_id_fkey', 'user', 'role', ['role_id'], ['id'], ondelete='SET NULL')
 
     # 2. Product Items Cascades
-    op.drop_constraint('pos_sale_item_product_id_fkey', 'pos_sale_item', type_='foreignkey')
-    op.create_foreign_key('pos_sale_item_product_id_fkey', 'pos_sale_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')
+    # Bancos legados já possuíam estas tabelas; instalações novas só passam a
+    # criá-las na revisão de bootstrap posterior. Nesse caso, ela já nasce com
+    # o comportamento correto e esta correção histórica deve ser ignorada.
+    if inspector.has_table('pos_sale_item'):
+        op.drop_constraint('pos_sale_item_product_id_fkey', 'pos_sale_item', type_='foreignkey')
+        op.create_foreign_key('pos_sale_item_product_id_fkey', 'pos_sale_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')
 
-    op.drop_constraint('sales_order_item_product_id_fkey', 'sales_order_item', type_='foreignkey')
-    op.create_foreign_key('sales_order_item_product_id_fkey', 'sales_order_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')
+    if inspector.has_table('sales_order_item'):
+        op.drop_constraint('sales_order_item_product_id_fkey', 'sales_order_item', type_='foreignkey')
+        op.create_foreign_key('sales_order_item_product_id_fkey', 'sales_order_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')
 
-    op.drop_constraint('sales_quote_item_product_id_fkey', 'sales_quote_item', type_='foreignkey')
-    op.create_foreign_key('sales_quote_item_product_id_fkey', 'sales_quote_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')
+    if inspector.has_table('sales_quote_item'):
+        op.drop_constraint('sales_quote_item_product_id_fkey', 'sales_quote_item', type_='foreignkey')
+        op.create_foreign_key('sales_quote_item_product_id_fkey', 'sales_quote_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')
 
     op.drop_constraint('purchase_request_item_product_id_fkey', 'purchase_request_item', type_='foreignkey')
     op.create_foreign_key('purchase_request_item_product_id_fkey', 'purchase_request_item', 'product', ['product_id'], ['id'], ondelete='CASCADE')

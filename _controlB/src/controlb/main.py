@@ -29,6 +29,7 @@ from controlb.modules.crm.api import router as crm_router
 from controlb.modules.sales.api import router as sales_router
 from controlb.modules.billing.api import router as billing_router
 from controlb.modules.finance.api import router as finance_router
+from controlb.modules.documents.api import router as documents_router
 
 
 # Carrega as configurações centralizadas
@@ -138,6 +139,6 @@ app.include_router(crm_router)
 app.include_router(sales_router)
 app.include_router(billing_router)
 app.include_router(finance_router)
+app.include_router(documents_router)
 
 logger.info("🚀 Sistema ControlB API inicializado com sucesso e pronto para requisições.")
-

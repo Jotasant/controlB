@@ -14,6 +14,47 @@ router = APIRouter(prefix="/crm", tags=["CRM / Gestão de Relacionamento"])
 
 
 # ==============================================================================
+# ETAPAS DO FUNIL (CRM STAGES)
+# ==============================================================================
+
+@router.get("/stages", response_model=list[schemas.CRMStageResponse], summary="Listar Etapas do Funil de CRM")
+def list_stages(
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.list_stages(db, current_user.organization_id)
+
+
+@router.post("/stages", response_model=schemas.CRMStageResponse, status_code=status.HTTP_201_CREATED, summary="Criar Etapa do Funil")
+def create_stage(
+    payload: schemas.CRMStageCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    # Permite criação para quem possui permissão crm:stages:manage, crm:manage ou admin
+    return service.create_stage(db, current_user.organization_id, payload)
+
+
+@router.put("/stages/{stage_id}", response_model=schemas.CRMStageResponse, summary="Atualizar Etapa do Funil")
+def update_stage(
+    stage_id: uuid.UUID,
+    payload: schemas.CRMStageUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.update_stage(db, stage_id, current_user.organization_id, payload)
+
+
+@router.delete("/stages/{stage_id}", status_code=status.HTTP_200_OK, summary="Excluir Etapa do Funil")
+def delete_stage(
+    stage_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.delete_stage(db, stage_id, current_user.organization_id)
+
+
+# ==============================================================================
 # LEADS
 # ==============================================================================
 

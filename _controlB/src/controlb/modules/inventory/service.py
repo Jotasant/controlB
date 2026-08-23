@@ -9,16 +9,25 @@ Contém a lógica de:
 """
 
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from controlb.logger import logger
+from controlb.modules.documents import service as documents_service
 from controlb.modules.inventory import repository
-from controlb.modules.inventory.models import ProductCategory, Product, StockMovement
+from controlb.modules.inventory.models import (
+    ProductCategory,
+    Product,
+    StockMovement,
+    StockReservation,
+    StockReservationItem,
+)
 from controlb.modules.inventory.schemas import (
     ProductCategoryCreate, ProductCategoryUpdate,
     ProductCreate, ProductUpdate,
+    ProductAvailabilityResponse,
     StockAdjustmentCreate, StockMovementResponse
 )
 
@@ -365,6 +374,453 @@ def list_movements(
 # 4. PONTOS DE INTEGRAÇÃO DESACOPLADA (PURCHASING <-> INVENTORY)
 # ==============================================================================
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aggregate_order_items(order) -> dict[uuid.UUID, Decimal]:
+    requested: dict[uuid.UUID, Decimal] = {}
+    for item in order.items:
+        quantity = Decimal(str(item.quantity))
+        if quantity <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="O pedido possui item com quantidade inválida para reserva.",
+            )
+        requested[item.product_id] = requested.get(
+            item.product_id, Decimal("0.0000")
+        ) + quantity
+    if not requested:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Não é possível reservar um pedido sem itens.",
+        )
+    return requested
+
+
+def lock_products_and_get_availability(
+    db: Session,
+    organization_id: uuid.UUID,
+    product_ids: list[uuid.UUID],
+) -> tuple[list[Product], dict[uuid.UUID, Decimal], dict[uuid.UUID, Decimal]]:
+    """Bloqueia produtos em ordem estável e calcula físico - reservas RESERVED."""
+    stable_ids = sorted(set(product_ids), key=str)
+    products = repository.lock_products_by_ids(db, stable_ids, organization_id)
+    products_by_id = {product.id: product for product in products}
+    missing = [product_id for product_id in stable_ids if product_id not in products_by_id]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Um dos produtos não foi encontrado na organização.",
+        )
+    inactive = [product.sku for product in products if not product.is_active]
+    if inactive:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Produtos inativos não podem ser reservados ou vendidos: {', '.join(inactive)}.",
+        )
+
+    reserved = repository.get_reserved_quantities(db, organization_id, stable_ids)
+    available = {
+        product.id: Decimal(str(product.current_stock or 0))
+        - reserved.get(product.id, Decimal("0.0000"))
+        for product in products
+    }
+    return products, available, reserved
+
+
+def get_product_availability(
+    db: Session,
+    organization_id: uuid.UUID,
+    product_id: uuid.UUID,
+) -> ProductAvailabilityResponse:
+    product = repository.get_product_by_id(db, product_id, organization_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Produto não encontrado.",
+        )
+    reserved = repository.get_reserved_quantities(db, organization_id, [product.id]).get(
+        product.id, Decimal("0.0000")
+    )
+    current = Decimal(str(product.current_stock or 0))
+    return ProductAvailabilityResponse(
+        product_id=product.id,
+        sku=product.sku,
+        product_name=product.name,
+        current_stock=current,
+        reserved_stock=reserved,
+        available_stock=current - reserved,
+    )
+
+
+def get_stock_reservation(
+    db: Session,
+    organization_id: uuid.UUID,
+    reservation_id: uuid.UUID,
+) -> StockReservation:
+    reservation = repository.get_reservation_by_id(db, reservation_id, organization_id)
+    if not reservation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Reserva de estoque não encontrada.",
+        )
+    return reservation
+
+
+def get_sales_order_reservation(
+    db: Session,
+    organization_id: uuid.UUID,
+    sales_order_id: uuid.UUID,
+) -> StockReservation:
+    reservation = repository.get_reservation_by_sales_order(
+        db, sales_order_id, organization_id
+    )
+    if not reservation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="O pedido ainda não possui reserva de estoque.",
+        )
+    return reservation
+
+
+def _ensure_order_document(db: Session, order, organization_id: uuid.UUID):
+    document = documents_service.ensure_document(
+        db,
+        organization_id=organization_id,
+        document_type="SALES_ORDER",
+        native_id=order.id,
+        document_number=order.order_number,
+        current_status=order.status,
+        created_by_id=order.created_by_id,
+        issued_at=order.created_at,
+    )
+    order.document_id = document.id
+    return document
+
+
+def _record_reserved_events(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    order,
+    reservation: StockReservation,
+    actor_id: uuid.UUID | None,
+) -> None:
+    order_document = _ensure_order_document(db, order, organization_id)
+    reservation_document = documents_service.ensure_document(
+        db,
+        organization_id=organization_id,
+        document_type="STOCK_RESERVATION",
+        native_id=reservation.id,
+        document_number=reservation.reservation_number,
+        current_status=reservation.status,
+        created_by_id=reservation.created_by_id,
+        issued_at=reservation.created_at,
+    )
+    reservation.document_id = reservation_document.id
+    documents_service.relate_documents(
+        db,
+        organization_id=organization_id,
+        parent_document=order_document,
+        child_document=reservation_document,
+        relation_type="RESERVED_BY",
+        created_by_id=actor_id,
+        relation_metadata={"sales_order_id": str(order.id)},
+    )
+    metadata = {
+        "sales_order_id": str(order.id),
+        "reservation_id": str(reservation.id),
+        "status_version": reservation.status_version,
+    }
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=reservation_document,
+        event_type="RESERVED",
+        previous_status="RELEASED" if reservation.status_version > 1 else None,
+        new_status="RESERVED",
+        created_by_id=actor_id,
+        event_metadata=metadata,
+        idempotency_key=(
+            f"stock-reservation:{reservation.id}:status:"
+            f"{reservation.status_version}:reserved"
+        ),
+    )
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="STOCK_RESERVED",
+        created_by_id=actor_id,
+        event_metadata=metadata,
+        idempotency_key=(
+            f"sales-order:{order.id}:stock-reservation:{reservation.id}:"
+            f"status:{reservation.status_version}:reserved"
+        ),
+    )
+
+
+def reserve_sales_order(
+    db: Session,
+    organization_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
+    sales_order_id: uuid.UUID,
+) -> StockReservation:
+    """Reserva todos os itens ou não reserva nenhum; nunca baixa current_stock."""
+    order = repository.get_sales_order_for_update(db, sales_order_id, organization_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pedido de venda não encontrado.",
+        )
+    if order.status != "CONFIRMED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Somente pedidos CONFIRMED podem reservar estoque.",
+        )
+    if order.delivery_status not in {"PENDING", "RESERVED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido já avançou para separação, expedição ou entrega.",
+        )
+
+    existing = repository.get_reservation_by_sales_order(
+        db, sales_order_id, organization_id, for_update=True
+    )
+    if existing and existing.status == "RESERVED":
+        order.delivery_status = "RESERVED"
+        db.flush()
+        return existing
+
+    requested = _aggregate_order_items(order)
+    products, available, _ = lock_products_and_get_availability(
+        db, organization_id, list(requested)
+    )
+    products_by_id = {product.id: product for product in products}
+    shortages = [
+        (
+            products_by_id[product_id],
+            quantity,
+            available[product_id],
+        )
+        for product_id, quantity in sorted(requested.items(), key=lambda item: str(item[0]))
+        if quantity > available[product_id]
+    ]
+    if shortages:
+        details = "; ".join(
+            f"{product.sku}: solicitado {quantity}, disponível {available_quantity}"
+            for product, quantity, available_quantity in shortages
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Estoque disponível insuficiente para reserva integral. {details}.",
+        )
+
+    if existing:
+        existing.items.clear()
+        db.flush()
+        existing.status = "RESERVED"
+        existing.status_version += 1
+        existing.released_by_id = None
+        existing.released_at = None
+        existing.updated_at = _utcnow()
+        reservation = existing
+    else:
+        reservation_id = uuid.uuid4()
+        reservation_document = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            document_type="STOCK_RESERVATION",
+            native_id=reservation_id,
+            document_number=f"RES-{order.order_number}",
+            current_status="RESERVED",
+            created_by_id=actor_id,
+        )
+        reservation = StockReservation(
+            id=reservation_id,
+            organization_id=organization_id,
+            sales_order_id=order.id,
+            document_id=reservation_document.id,
+            reservation_number=f"RES-{order.order_number}",
+            status="RESERVED",
+            status_version=1,
+            created_by_id=actor_id,
+        )
+
+    for product_id, quantity in sorted(requested.items(), key=lambda item: str(item[0])):
+        reservation.items.append(
+            StockReservationItem(
+                organization_id=organization_id,
+                product_id=product_id,
+                quantity=quantity,
+                product=products_by_id[product_id],
+            )
+        )
+
+    repository.save_reservation(db, reservation)
+    order.delivery_status = "RESERVED"
+    _record_reserved_events(
+        db,
+        organization_id=organization_id,
+        order=order,
+        reservation=reservation,
+        actor_id=actor_id,
+    )
+    db.flush()
+    return reservation
+
+
+def _release_locked_reservation(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
+    order,
+    reservation: StockReservation,
+    delivery_status_after: str,
+) -> StockReservation:
+    if reservation.status == "RELEASED":
+        order.delivery_status = delivery_status_after
+        db.flush()
+        return reservation
+
+    reservation.status = "RELEASED"
+    reservation.status_version += 1
+    reservation.released_by_id = actor_id
+    reservation.released_at = _utcnow()
+    reservation.updated_at = reservation.released_at
+    order.delivery_status = delivery_status_after
+
+    order_document = _ensure_order_document(db, order, organization_id)
+    reservation_document = documents_service.ensure_document(
+        db,
+        organization_id=organization_id,
+        document_type="STOCK_RESERVATION",
+        native_id=reservation.id,
+        document_number=reservation.reservation_number,
+        current_status="RELEASED",
+        created_by_id=reservation.created_by_id,
+        issued_at=reservation.created_at,
+    )
+    metadata = {
+        "sales_order_id": str(order.id),
+        "reservation_id": str(reservation.id),
+        "status_version": reservation.status_version,
+    }
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=reservation_document,
+        event_type="RELEASED",
+        previous_status="RESERVED",
+        new_status="RELEASED",
+        created_by_id=actor_id,
+        event_metadata=metadata,
+        idempotency_key=(
+            f"stock-reservation:{reservation.id}:status:"
+            f"{reservation.status_version}:released"
+        ),
+    )
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="STOCK_RESERVATION_RELEASED",
+        created_by_id=actor_id,
+        event_metadata=metadata,
+        idempotency_key=(
+            f"sales-order:{order.id}:stock-reservation:{reservation.id}:"
+            f"status:{reservation.status_version}:released"
+        ),
+    )
+    repository.save_reservation(db, reservation)
+    return reservation
+
+
+def release_stock_reservation(
+    db: Session,
+    organization_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
+    reservation_id: uuid.UUID,
+) -> StockReservation:
+    peek = repository.get_reservation_by_id(db, reservation_id, organization_id)
+    if not peek:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Reserva de estoque não encontrada.",
+        )
+    order = repository.get_sales_order_for_update(
+        db, peek.sales_order_id, organization_id
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido vinculado à reserva não está disponível.",
+        )
+    reservation = repository.get_reservation_by_id(
+        db, reservation_id, organization_id, for_update=True
+    )
+    if not reservation or reservation.sales_order_id != order.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A reserva mudou durante a operação; tente novamente.",
+        )
+    if reservation.status == "RELEASED":
+        return reservation
+    if order.status != "CONFIRMED" or order.delivery_status != "RESERVED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A liberação manual exige pedido CONFIRMED com entrega RESERVED; "
+                "pedidos em separação, expedição ou entrega não podem retroceder."
+            ),
+        )
+    return _release_locked_reservation(
+        db,
+        organization_id=organization_id,
+        actor_id=actor_id,
+        order=order,
+        reservation=reservation,
+        delivery_status_after="PENDING",
+    )
+
+
+def release_sales_order_reservation(
+    db: Session,
+    organization_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
+    sales_order_id: uuid.UUID,
+    *,
+    locked_order=None,
+    delivery_status_after: str = "PENDING",
+) -> StockReservation | None:
+    """Integração interna idempotente usada pelo cancelamento do pedido."""
+    order = locked_order or repository.get_sales_order_for_update(
+        db, sales_order_id, organization_id
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pedido de venda não encontrado.",
+        )
+    reservation = repository.get_reservation_by_sales_order(
+        db, sales_order_id, organization_id, for_update=True
+    )
+    if not reservation:
+        order.delivery_status = delivery_status_after
+        db.flush()
+        return None
+    return _release_locked_reservation(
+        db,
+        organization_id=organization_id,
+        actor_id=actor_id,
+        order=order,
+        reservation=reservation,
+        delivery_status_after=delivery_status_after,
+    )
+
+
 def register_purchase_receipt(
     db: Session,
     organization_id: uuid.UUID,
@@ -688,4 +1144,3 @@ def import_inventory_spreadsheet(
 
 # Alias para retrocompatibilidade
 import_toolspharma_inventory = import_inventory_spreadsheet
-

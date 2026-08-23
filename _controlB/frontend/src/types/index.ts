@@ -9,6 +9,44 @@
 // 1. IDENTITY & ACESSO (RBAC)
 // ==============================================================================
 
+// Cadeia documental transversal (CRM, Vendas, Estoque, Fiscal e Financeiro).
+export interface BusinessDocumentNode {
+  id: string;
+  document_type: string;
+  native_id: string;
+  document_number: string;
+  current_status: string;
+  issued_at?: string | null;
+  created_at: string;
+}
+
+export interface BusinessDocumentRelation {
+  id: string;
+  parent_document_id: string;
+  child_document_id: string;
+  relation_type: string;
+  relation_metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface BusinessDocumentEvent {
+  id: string;
+  document_id: string;
+  event_type: string;
+  previous_status?: string | null;
+  new_status?: string | null;
+  event_metadata: Record<string, unknown>;
+  created_by_id?: string | null;
+  created_at: string;
+}
+
+export interface BusinessDocumentChain {
+  root_document_id: string;
+  documents: BusinessDocumentNode[];
+  relations: BusinessDocumentRelation[];
+  events: BusinessDocumentEvent[];
+}
+
 export interface Permission {
   id: string;
   code: string;           // Ex: "users:create"
@@ -465,6 +503,32 @@ export interface StockMovement {
   created_at: string;
 }
 
+export interface StockReservationItem {
+  id: string;
+  organization_id: string;
+  reservation_id: string;
+  product_id: string;
+  quantity: number;
+  created_at: string;
+  product?: Product | null;
+}
+
+export interface StockReservation {
+  id: string;
+  organization_id: string;
+  sales_order_id: string;
+  document_id: string;
+  reservation_number: string;
+  status: 'RESERVED' | 'RELEASED';
+  status_version: number;
+  created_by_id?: string | null;
+  released_by_id?: string | null;
+  released_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  items: StockReservationItem[];
+}
+
 
 // ==============================================================================
 // 4. GESTÃO FINANCEIRA (FINANCE) & FATURAMENTO (BILLING)
@@ -686,9 +750,24 @@ export interface FinanceDashboardSummary {
 // 7. CRM & GESTÃO DE RELACIONAMENTO
 // ==============================================================================
 
+export interface CRMStage {
+  id: string;
+  organization_id: string;
+  code: string;
+  name: string;
+  color: string;
+  order: number;
+  is_won: boolean;
+  is_lost: boolean;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Lead {
   id: string;
   organization_id: string;
+  customer_id?: string | null;
   name: string;
   company_name?: string | null;
   email?: string | null;
@@ -722,7 +801,7 @@ export interface Opportunity {
   estimated_amount: number;
   probability_percent: number;
   expected_closing_date?: string | null;
-  stage: 'PROSPECTING' | 'QUALIFICATION' | 'PROPOSAL' | 'NEGOTIATION' | 'WON' | 'LOST';
+  stage: string;
   loss_reason?: string | null;
   assigned_to_id?: string | null;
   created_at: string;
@@ -844,7 +923,7 @@ export interface SalesOrder {
   discount_amount: number;
   net_amount: number;
   payment_terms?: string | null;
-  delivery_status: 'PENDING' | 'DISPATCHED' | 'DELIVERED';
+  delivery_status: 'PENDING' | 'RESERVED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELLED';
   billing_status: 'PENDING' | 'INVOICED';
   status: 'DRAFT' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
   notes?: string | null;
@@ -1019,9 +1098,6 @@ export interface Invoice {
   updated_at: string;
   installments: InvoiceInstallment[];
 }
-
-
-
 
 
 
