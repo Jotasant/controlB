@@ -19,11 +19,17 @@ import {
   Package, Plus, DollarSign, TrendingUp,
   RefreshCw, UserPlus, MessageSquare,
   ArrowRight, X, AlertTriangle,
-  Building2, Send, Eye,
+  Building2, Eye,
   Edit3, CalendarDays,
-  ArrowUpRight, Check
+  ArrowUpRight, Check,
+  BarChart3, Download, Award, TrendingDown,
+  Target, Zap, Printer, Copy, Tag,
+  ShieldCheck, Star, CheckCheck,
+  Briefcase, CreditCard,
+  User, UserCheck, Calendar, Sparkles,
+  FileCheck, History, ExternalLink
 } from 'lucide-react';
-import { crmService, inventoryService, formatApiError } from '@/services/api';
+import { crmService, salesService, inventoryService, formatApiError } from '@/services/api';
 import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
 import { CustomerPicker } from '@/components/CustomerPicker';
@@ -59,7 +65,7 @@ export const CRM: React.FC = () => {
   const toast = useToast();
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pipeline' | 'opportunities_list' | 'leads' | 'activities' | 'stages'>('pipeline');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pipeline' | 'opportunities_list' | 'leads' | 'activities' | 'stages' | 'reports'>('pipeline');
   const [loading, setLoading] = useState<boolean>(true);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
@@ -67,9 +73,21 @@ export const CRM: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [allInteractions, setAllInteractions] = useState<CustomerInteraction[]>([]);
 
+  // Metas Comerciais & Previsibilidade (Fase 4)
+  const [monthlySalesGoal, setMonthlySalesGoal] = useState<number>(() => {
+    const saved = localStorage.getItem('controlb_crm_monthly_goal');
+    return saved ? Number(saved) : 100000;
+  });
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState<boolean>(false);
+  const [tempGoalInput, setTempGoalInput] = useState<string>(() => {
+    const saved = localStorage.getItem('controlb_crm_monthly_goal');
+    return saved ? saved : '100000';
+  });
+
   // Filtros Oportunidades
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [stageFilter, setStageFilter] = useState<string>('ALL');
+  const [oppActivityFilter, setOppActivityFilter] = useState<'ALL' | 'STAGNANT'>('ALL');
 
   // Filtros Leads (Fase 2)
   const [leadSearch, setLeadSearch] = useState<string>('');
@@ -105,19 +123,9 @@ export const CRM: React.FC = () => {
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
   const [dragOverStageCode, setDragOverStageCode] = useState<string | null>(null);
 
-  // Detalhes 360º da Oportunidade (Drawer / Modal)
+  // Detalhes da Oportunidade & Studio
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
   const [oppInteractions, setOppInteractions] = useState<CustomerInteraction[]>([]);
-  const [oppQuotes, setOppQuotes] = useState<SalesQuote[]>([]);
-  const [oppDrawerTab, setOppDrawerTab] = useState<'timeline' | 'quotes' | 'customer' | 'new_activity'>('timeline');
-
-  // Nova Interação Rápida no Drawer
-  const [quickActivityForm, setQuickActivityForm] = useState({
-    type: 'CALL',
-    summary: '',
-    details: ''
-  });
-  const [isSavingActivity, setIsSavingActivity] = useState<boolean>(false);
 
   // Modal Motivo de Perda
   const [lossModalOpp, setLossModalOpp] = useState<Opportunity | null>(null);
@@ -128,7 +136,6 @@ export const CRM: React.FC = () => {
 
   // Modais de Criação
   const [isLeadModalOpen, setIsLeadModalOpen] = useState<boolean>(false);
-  const [isOppModalOpen, setIsOppModalOpen] = useState<boolean>(false);
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState<boolean>(false);
   const [selectedOppForQuote, setSelectedOppForQuote] = useState<Opportunity | null>(null);
 
@@ -144,18 +151,6 @@ export const CRM: React.FC = () => {
     notes: ''
   });
 
-  // Form Oportunidade
-  const [oppForm, setOppForm] = useState({
-    title: '',
-    customer_id: '',
-    customer_name: '',
-    estimated_amount: '',
-    probability_percent: 50,
-    expected_closing_date: '',
-    stage: '',
-    notes: ''
-  });
-
   // Form Nova Etapa
   const [newStageForm, setNewStageForm] = useState({
     name: '',
@@ -167,17 +162,83 @@ export const CRM: React.FC = () => {
   });
   const [isSavingStage, setIsSavingStage] = useState<boolean>(false);
 
-  // Form Cotação vinculada
+  // Proposal Studio Workspace State (Formulário Avançado de Propostas Comerciais)
+  const [proposalActiveTab, setProposalActiveTab] = useState<'general' | 'customer' | 'items' | 'terms' | 'approvals'>('general');
+  const [proposalForm, setProposalForm] = useState({
+    quote_number: 'PR-2026-0187',
+    title: '',
+    status: 'DRAFT' as 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'CONVERTED',
+    customer_id: '',
+    customer_name: '',
+    customer_document: '',
+    customer_email: '',
+    customer_phone: '',
+    contact_person: 'Carlos Mendes',
+    responsible_name: 'Jefferson Santos',
+    sales_team: 'Equipe Comercial Principal',
+    pipeline_stage: 'PROPOSAL',
+    priority: 'HIGH' as 'LOW' | 'MEDIUM' | 'HIGH',
+    source: 'Indicação',
+    creation_date: new Date().toISOString().split('T')[0],
+    expected_closing_date: new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
+    probability_percent: 70,
+    tags: ['CFTV', 'Rede', 'Infraestrutura'] as string[],
+    notes: 'Cliente busca modernização do sistema de segurança e rede da nova unidade.\nProjeto inclui fornecimento, configuração e treinamento da equipe interna.',
+    payment_method: 'Transferência Bancária',
+    installment_terms: '30% entrada + 2x',
+    delivery_deadline: '15 dias úteis',
+    valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+    warranty_terms: '12 meses',
+    sla_support: '8x5 - NBR 15965 / Suporte Remoto',
+    special_conditions: 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
+    digital_acceptance: true,
+    tax_amount: 0,
+    freight_amount: 0
+  });
+  const [tagInput, setTagInput] = useState<string>('');
+  const [activeQuoteId, setActiveQuoteId] = useState<string | null>(null);
+
+  // Cotações vinculadas à oportunidade e Formulário Próprio de Cotação
+  const [oppQuotations, setOppQuotations] = useState<SalesQuote[]>([]);
+  const [isDedicatedQuoteModalOpen, setIsDedicatedQuoteModalOpen] = useState<boolean>(false);
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
+  const [quoteFormState, setQuoteFormState] = useState({
+    title: '',
+    quote_number: '',
+    valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+    delivery_deadline: '15 dias úteis',
+    payment_terms: 'Faturado 30 DDL',
+    notes: '',
+    tax_amount: 0,
+    freight_amount: 0,
+    is_main_for_opp: true,
+    items: [] as Array<{
+      product_id: string;
+      product_name?: string;
+      quantity: number;
+      unit_price: number;
+      discount_amount: number;
+      notes?: string;
+    }>
+  });
+
+  // Itens da Proposta Principal
   const [quoteItems, setQuoteItems] = useState<Array<{
     product_id: string;
+    product_name?: string;
     quantity: number;
     unit_price: number;
     discount_amount: number;
     notes?: string;
   }>>([]);
-  const [quoteValidUntil, setQuoteValidUntil] = useState<string>('');
-  const [quotePaymentTerms, setQuotePaymentTerms] = useState<string>('30 DDL');
   const [isSavingQuote, setIsSavingQuote] = useState<boolean>(false);
+  const [isAddingSidebarActivity, setIsAddingSidebarActivity] = useState<boolean>(false);
+  const [sidebarActivityForm, setSidebarActivityForm] = useState({
+    type: 'CALL',
+    summary: '',
+    date: new Date().toISOString().split('T')[0],
+    time: '10:00'
+  });
 
   // ===========================================================================
   // CARREGAMENTO DE DADOS
@@ -360,52 +421,151 @@ export const CRM: React.FC = () => {
     setDraggedOppId(null);
   };
 
-  // ===========================================================================
-  // INTERAÇÕES & TIMELINE (GAVETA 360º)
-  // ===========================================================================
-
-  const handleAddQuickActivity = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedOpp) return;
-    if (!quickActivityForm.summary.trim()) {
-      toast.warning("Descreva o resumo da atividade antes de salvar.", "Campo Obrigatório");
-      return;
-    }
-
-    setIsSavingActivity(true);
-    try {
-      const created = await crmService.createInteraction({
-        opportunity_id: selectedOpp.id,
-        interaction_type: quickActivityForm.type,
-        summary: quickActivityForm.summary.trim(),
-        details: quickActivityForm.details.trim() || undefined
-      });
-
-      setOppInteractions(prev => [created, ...prev]);
-      setAllInteractions(prev => [created, ...prev]);
-      setQuickActivityForm({ type: 'CALL', summary: '', details: '' });
-      setOppDrawerTab('timeline');
-      toast.success("Atividade registrada na timeline da oportunidade!", "Atividade Salva");
-    } catch (err: any) {
-      toast.error(formatApiError(err, "Erro ao registrar atividade."));
-    } finally {
-      setIsSavingActivity(false);
-    }
-  };
-
   const loadOpportunityDetails = async (opp: Opportunity) => {
     setSelectedOpp(opp);
-    setOppDrawerTab('timeline');
+    setSelectedOppForQuote(opp);
+    setConvertingLead(null);
+    setProposalActiveTab('general');
+    
     try {
       const [interactions, quotes] = await Promise.all([
         crmService.getInteractions(undefined, opp.id, true).catch(() => []),
         crmService.getOpportunityQuotations(opp.id, true).catch(() => [])
       ]);
       setOppInteractions(interactions);
-      setOppQuotes(quotes);
+      setOppQuotations(quotes);
+
+      // Carrega itens da primeira cotação vinculada se existir, ou inicializa itens padrão
+      const mainQuote = quotes.length > 0 ? quotes[0] : null;
+      if (mainQuote && mainQuote.items && mainQuote.items.length > 0) {
+        setActiveQuoteId(mainQuote.id);
+        setQuoteItems(mainQuote.items.map((it: any) => ({
+          product_id: it.product_id,
+          product_name: it.product?.name,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          discount_amount: it.discount_amount || 0,
+          notes: it.notes || ''
+        })));
+      } else {
+        setActiveQuoteId(null);
+        initDefaultItems();
+      }
+
+      setProposalForm({
+        quote_number: `OP-${opp.id.slice(0, 8).toUpperCase()}`,
+        title: opp.title,
+        status: opp.stage === 'WON' ? 'APPROVED' : (opp.stage === 'LOST' ? 'REJECTED' : 'DRAFT'),
+        customer_id: opp.customer_id || '',
+        customer_name: opp.customer_name,
+        customer_document: (opp as any).customer?.document || '',
+        customer_email: opp.lead?.email || '',
+        customer_phone: opp.lead?.phone || '',
+        contact_person: opp.lead?.name || 'Contato Principal',
+        responsible_name: 'Jefferson Santos',
+        sales_team: 'Equipe Comercial Principal',
+        pipeline_stage: opp.stage,
+        priority: 'HIGH',
+        source: opp.lead?.source || 'Indicação',
+        creation_date: opp.created_at ? opp.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+        expected_closing_date: opp.expected_closing_date ? opp.expected_closing_date.split('T')[0] : new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
+        probability_percent: opp.probability_percent || 70,
+        tags: ['CFTV', 'Rede', 'Infraestrutura'],
+        notes: opp.lead?.notes || `Cliente busca modernização do sistema de segurança e rede da nova unidade.\nProjeto inclui fornecimento, configuração e treinamento da equipe interna.`,
+        payment_method: 'Transferência Bancária',
+        installment_terms: '30% entrada + 2x',
+        delivery_deadline: '15 dias úteis',
+        valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        warranty_terms: '12 meses',
+        sla_support: '8x5 - NBR 15965',
+        special_conditions: 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
+        digital_acceptance: true,
+        tax_amount: 0,
+        freight_amount: 0
+      });
+
+      setIsQuoteModalOpen(true);
     } catch (err: any) {
       toast.error(formatApiError(err, "Falha ao carregar detalhes completos da oportunidade."));
     }
+  };
+
+  const handleOpenNewOppStudio = (leadToConvert?: Lead | null, initialStage?: string) => {
+    setSelectedOpp(null);
+    setSelectedOppForQuote(null);
+    setConvertingLead(leadToConvert || null);
+    setActiveQuoteId(null);
+    setProposalActiveTab('general');
+    setOppInteractions([]);
+    initDefaultItems();
+
+    if (leadToConvert) {
+      setProposalForm({
+        quote_number: `OP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        title: `Negócio - ${leadToConvert.company_name || leadToConvert.name}`,
+        status: 'DRAFT',
+        customer_id: leadToConvert.customer_id || '',
+        customer_name: leadToConvert.company_name || leadToConvert.name,
+        customer_document: '',
+        customer_email: leadToConvert.email || '',
+        customer_phone: leadToConvert.phone || '',
+        contact_person: leadToConvert.name,
+        responsible_name: 'Jefferson Santos',
+        sales_team: 'Equipe Comercial Principal',
+        pipeline_stage: initialStage || stages[0]?.code || 'PROSPECTING',
+        priority: 'HIGH',
+        source: leadToConvert.source || 'Indicação',
+        creation_date: new Date().toISOString().split('T')[0],
+        expected_closing_date: new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
+        probability_percent: 50,
+        tags: ['Convertido do Lead'],
+        notes: `Convertido do Lead: ${leadToConvert.name} (${leadToConvert.source || 'Sem origem'}). Anotações: ${leadToConvert.notes || '-'}`,
+        payment_method: 'Transferência Bancária',
+        installment_terms: '30% entrada + 2x',
+        delivery_deadline: '15 dias úteis',
+        valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        warranty_terms: '12 meses',
+        sla_support: '8x5 - NBR 15965',
+        special_conditions: 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
+        digital_acceptance: true,
+        tax_amount: 0,
+        freight_amount: 0
+      });
+    } else {
+      setProposalForm({
+        quote_number: `OP-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        title: '',
+        status: 'DRAFT',
+        customer_id: '',
+        customer_name: '',
+        customer_document: '',
+        customer_email: '',
+        customer_phone: '',
+        contact_person: '',
+        responsible_name: 'Jefferson Santos',
+        sales_team: 'Equipe Comercial Principal',
+        pipeline_stage: initialStage || stages[0]?.code || 'PROSPECTING',
+        priority: 'HIGH',
+        source: 'Indicação',
+        creation_date: new Date().toISOString().split('T')[0],
+        expected_closing_date: new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
+        probability_percent: 50,
+        tags: ['Comercial'],
+        notes: '',
+        payment_method: 'Transferência Bancária',
+        installment_terms: '30 DDL',
+        delivery_deadline: '15 dias úteis',
+        valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        warranty_terms: '12 meses',
+        sla_support: '8x5 - NBR 15965',
+        special_conditions: 'Condições comerciais padrão.',
+        digital_acceptance: true,
+        tax_amount: 0,
+        freight_amount: 0
+      });
+    }
+
+    setIsQuoteModalOpen(true);
   };
 
   // ===========================================================================
@@ -505,18 +665,7 @@ export const CRM: React.FC = () => {
   };
 
   const handleStartConvertLead = (lead: Lead) => {
-    setConvertingLead(lead);
-    setOppForm({
-      title: `Negócio - ${lead.company_name || lead.name}`,
-      customer_id: lead.customer_id || '',
-      customer_name: lead.company_name || lead.name,
-      estimated_amount: '15000',
-      probability_percent: 50,
-      expected_closing_date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-      stage: stages[0]?.code || 'PROSPECTING',
-      notes: `Convertido do Lead: ${lead.name} (${lead.source || 'Sem origem'}). Anotações: ${lead.notes || '-'}`
-    });
-    setIsOppModalOpen(true);
+    handleOpenNewOppStudio(lead);
   };
 
   // ===========================================================================
@@ -571,50 +720,7 @@ export const CRM: React.FC = () => {
   // OPERAÇÕES DE OPORTUNIDADES & ETAPAS
   // ===========================================================================
 
-  const handleCreateOpp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!oppForm.title.trim()) {
-      toast.warning("Informe o título da oportunidade.", "Título Obrigatório");
-      return;
-    }
 
-    const estimatedAmount = parseFloat(oppForm.estimated_amount) || 0;
-    const stageCode = oppForm.stage || (stages[0]?.code || 'PROSPECTING');
-
-    try {
-      await crmService.createOpportunity({
-        title: oppForm.title.trim(),
-        customer_name: oppForm.customer_name.trim() || 'Cliente sem identificação',
-        customer_id: oppForm.customer_id || undefined,
-        estimated_amount: estimatedAmount,
-        probability_percent: oppForm.probability_percent || 50,
-        expected_closing_date: oppForm.expected_closing_date || undefined,
-        stage: stageCode,
-        lead_id: convertingLead ? convertingLead.id : undefined
-      });
-
-      if (convertingLead) {
-        await crmService.updateLead(convertingLead.id, { status: 'CONVERTED' });
-        setConvertingLead(null);
-      }
-
-      setIsOppModalOpen(false);
-      setOppForm({
-        title: '',
-        customer_id: '',
-        customer_name: '',
-        estimated_amount: '',
-        probability_percent: 50,
-        expected_closing_date: '',
-        stage: '',
-        notes: ''
-      });
-      toast.success("Oportunidade adicionada ao pipeline comercial!", "Negócio Criado");
-      void loadCRMData();
-    } catch (err: any) {
-      toast.error(formatApiError(err, "Erro ao salvar oportunidade."));
-    }
-  };
 
   const handleCreateStage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -667,20 +773,124 @@ export const CRM: React.FC = () => {
   };
 
   // ===========================================================================
-  // COTAÇÃO VINCULADA À OPORTUNIDADE
+  // PROPOSAL STUDIO — WORKSPACE & ENRIQUECIMENTO DE PROPOSTAS COMERCIAIS
   // ===========================================================================
 
-  const handleOpenQuoteModal = (opp: Opportunity) => {
+  const initDefaultItems = () => {
+    if (products.length > 0) {
+      setQuoteItems([
+        {
+          product_id: products[0].id,
+          product_name: products[0].name,
+          quantity: 1,
+          unit_price: products[0].sale_price || products[0].reference_price || 12000.0,
+          discount_amount: 600.0
+        },
+        ...(products.length > 1 ? [{
+          product_id: products[1].id,
+          product_name: products[1].name,
+          quantity: 2,
+          unit_price: products[1].sale_price || products[1].reference_price || 1850.0,
+          discount_amount: 0
+        }] : [])
+      ]);
+    } else {
+      setQuoteItems([]);
+    }
+  };
+
+  const handleOpenQuoteModal = (opp: Opportunity, existingQuote?: SalesQuote | null) => {
     setSelectedOppForQuote(opp);
-    setQuoteItems([]);
-    setQuoteValidUntil(new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0]);
-    setQuotePaymentTerms('30 DDL');
+    setProposalActiveTab('general');
+    
+    if (existingQuote) {
+      setActiveQuoteId(existingQuote.id);
+      setProposalForm({
+        quote_number: existingQuote.quote_number || `PR-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        title: opp.title,
+        status: (existingQuote.status as any) || 'DRAFT',
+        customer_id: opp.customer_id || '',
+        customer_name: existingQuote.customer_name || opp.customer_name,
+        customer_document: existingQuote.customer_document || '',
+        customer_email: existingQuote.customer_email || '',
+        customer_phone: existingQuote.customer_phone || '',
+        contact_person: existingQuote.contact_person || 'Carlos Mendes',
+        responsible_name: existingQuote.responsible_name || 'Jefferson Santos',
+        sales_team: 'Equipe Comercial Principal',
+        pipeline_stage: opp.stage,
+        priority: existingQuote.priority || 'HIGH',
+        source: opp.lead?.source || 'Indicação',
+        creation_date: existingQuote.created_at ? existingQuote.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+        expected_closing_date: opp.expected_closing_date || new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
+        probability_percent: opp.probability_percent || 70,
+        tags: existingQuote.tags && existingQuote.tags.length > 0 ? existingQuote.tags : ['CFTV', 'Rede', 'Infraestrutura'],
+        notes: existingQuote.notes || `Cliente busca modernização do sistema de segurança e rede da nova unidade.\nProjeto inclui instalação, configuração e treinamento da equipe interna.`,
+        payment_method: 'Transferência Bancária',
+        installment_terms: existingQuote.installment_terms || existingQuote.payment_terms || '30% entrada + 2x',
+        delivery_deadline: existingQuote.delivery_deadline || '15 dias úteis',
+        valid_until: existingQuote.valid_until ? existingQuote.valid_until.split('T')[0] : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        warranty_terms: existingQuote.warranty_terms || '12 meses',
+        sla_support: existingQuote.sla_support || '8x5 - NBR 15965',
+        special_conditions: existingQuote.special_conditions || 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
+        digital_acceptance: existingQuote.digital_acceptance !== false,
+        tax_amount: existingQuote.tax_amount || 0,
+        freight_amount: existingQuote.freight_amount || 0
+      });
+
+      if (existingQuote.items && existingQuote.items.length > 0) {
+        setQuoteItems(existingQuote.items.map(it => ({
+          product_id: it.product_id,
+          product_name: it.product?.name,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          discount_amount: it.discount_amount || 0,
+          notes: it.notes || ''
+        })));
+      } else {
+        initDefaultItems();
+      }
+    } else {
+      setActiveQuoteId(null);
+      setProposalForm({
+        quote_number: `PR-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        title: opp.title,
+        status: 'DRAFT',
+        customer_id: opp.customer_id || '',
+        customer_name: opp.customer_name,
+        customer_document: '',
+        customer_email: '',
+        customer_phone: '',
+        contact_person: 'Carlos Mendes',
+        responsible_name: 'Jefferson Santos',
+        sales_team: 'Equipe Comercial Principal',
+        pipeline_stage: opp.stage,
+        priority: 'HIGH',
+        source: opp.lead?.source || 'Indicação',
+        creation_date: new Date().toISOString().split('T')[0],
+        expected_closing_date: opp.expected_closing_date || new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
+        probability_percent: opp.probability_percent || 70,
+        tags: ['CFTV', 'Rede', 'Infraestrutura'],
+        notes: `Cliente busca modernização do sistema de segurança e rede da nova unidade.\nProjeto inclui fornecimento, configuração e treinamento da equipe interna.`,
+        payment_method: 'Transferência Bancária',
+        installment_terms: '30% entrada + 2x',
+        delivery_deadline: '15 dias úteis',
+        valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        warranty_terms: '12 meses',
+        sla_support: '8x5 - NBR 15965',
+        special_conditions: 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
+        digital_acceptance: true,
+        tax_amount: 0,
+        freight_amount: 0
+      });
+      initDefaultItems();
+    }
+
     setIsQuoteModalOpen(true);
   };
 
   const handleAddQuoteItem = () => {
     if (products.length === 0) {
-      toast.warning("Cadastre produtos no Almoxarifado / Estoque para adicioná-los à cotação.", "Catálogo Vazio");
+      toast.warning("Cadastre produtos no Almoxarifado / Estoque para adicioná-los à proposta.", "Catálogo Vazio");
       return;
     }
     const defaultProduct = products[0];
@@ -688,6 +898,7 @@ export const CRM: React.FC = () => {
       ...prev,
       {
         product_id: defaultProduct.id,
+        product_name: defaultProduct.name,
         quantity: 1,
         unit_price: defaultProduct.sale_price || defaultProduct.reference_price || 10.0,
         discount_amount: 0
@@ -707,6 +918,7 @@ export const CRM: React.FC = () => {
         item.product_id = value;
         const p = products.find(prod => prod.id === value);
         if (p) {
+          item.product_name = p.name;
           item.unit_price = p.sale_price || p.reference_price || 10.0;
         }
       } else if (field === 'quantity') {
@@ -721,53 +933,667 @@ export const CRM: React.FC = () => {
     });
   };
 
-  const quoteTotalAmount = useMemo(() => {
-    return quoteItems.reduce((acc, it) => acc + (it.quantity * it.unit_price - (it.discount_amount || 0)), 0);
+  const handleAddTag = (e?: React.KeyboardEvent | React.MouseEvent) => {
+    if (e && 'key' in e && e.key !== 'Enter') return;
+    if (e) e.preventDefault();
+    const trimmed = tagInput.trim();
+    if (!trimmed) return;
+    if (!proposalForm.tags.includes(trimmed)) {
+      setProposalForm(prev => ({ ...prev, tags: [...prev.tags, trimmed] }));
+    }
+    setTagInput('');
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setProposalForm(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tagToRemove) }));
+  };
+
+  const proposalItemsSubtotal = useMemo(() => {
+    return quoteItems.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
   }, [quoteItems]);
 
-  const handleSaveQuotation = async (e: React.FormEvent) => {
+  const proposalTotalDiscount = useMemo(() => {
+    return quoteItems.reduce((acc, it) => acc + (it.discount_amount || 0), 0);
+  }, [quoteItems]);
+
+  const proposalFinalTotal = useMemo(() => {
+    const sub = proposalItemsSubtotal - proposalTotalDiscount;
+    const tax = Number(proposalForm.tax_amount) || 0;
+    const freight = Number(proposalForm.freight_amount) || 0;
+    return Math.max(0, sub + tax + freight);
+  }, [proposalItemsSubtotal, proposalTotalDiscount, proposalForm.tax_amount, proposalForm.freight_amount]);
+
+  // Cálculos dinâmicos do Formulário Próprio de Cotação
+  const quoteFormSubtotal = useMemo(() => {
+    return quoteFormState.items.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
+  }, [quoteFormState.items]);
+
+  const quoteFormDiscount = useMemo(() => {
+    return quoteFormState.items.reduce((acc, it) => acc + (it.discount_amount || 0), 0);
+  }, [quoteFormState.items]);
+
+  const quoteFormTotal = useMemo(() => {
+    const sub = quoteFormSubtotal - quoteFormDiscount;
+    const tax = Number(quoteFormState.tax_amount) || 0;
+    const freight = Number(quoteFormState.freight_amount) || 0;
+    return Math.max(0, sub + tax + freight);
+  }, [quoteFormSubtotal, quoteFormDiscount, quoteFormState.tax_amount, quoteFormState.freight_amount]);
+
+  // Handlers do Formulário Dedicado de Cotação
+  const handleOpenNewQuoteModal = () => {
+    const versionNum = (oppQuotations.length || 0) + 1;
+    const newQuoteNum = `ORC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    setEditingQuoteId(null);
+    setQuoteFormState({
+      title: `Proposta Comercial v${versionNum} - ${proposalForm.title || selectedOpp?.title || 'Novo Fornecimento'}`,
+      quote_number: newQuoteNum,
+      valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      delivery_deadline: proposalForm.delivery_deadline || '15 dias úteis',
+      payment_terms: proposalForm.payment_method || 'Faturado 30 DDL',
+      notes: proposalForm.notes || '',
+      tax_amount: proposalForm.tax_amount || 0,
+      freight_amount: proposalForm.freight_amount || 0,
+      is_main_for_opp: true,
+      items: quoteItems.length > 0 ? quoteItems.map(it => ({ ...it })) : (products.length > 0 ? [{
+        product_id: products[0].id,
+        product_name: products[0].name,
+        quantity: 1,
+        unit_price: Number(products[0].sale_price || products[0].reference_price) || 100,
+        discount_amount: 0,
+        notes: ''
+      }] : [])
+    });
+    setIsDedicatedQuoteModalOpen(true);
+  };
+
+  const handleOpenEditQuoteModal = (quote: SalesQuote) => {
+    setEditingQuoteId(quote.id);
+    setQuoteFormState({
+      title: (quote as any).title || `Proposta ${quote.quote_number}`,
+      quote_number: quote.quote_number,
+      valid_until: quote.valid_until ? quote.valid_until.split('T')[0] : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      delivery_deadline: (quote as any).delivery_deadline || '15 dias úteis',
+      payment_terms: quote.payment_terms || 'Faturado 30 DDL',
+      notes: quote.notes || '',
+      tax_amount: (quote as any).tax_amount || 0,
+      freight_amount: (quote as any).freight_amount || 0,
+      is_main_for_opp: activeQuoteId === quote.id,
+      items: quote.items && quote.items.length > 0 ? quote.items.map((it: any) => ({
+        product_id: it.product_id,
+        product_name: it.product?.name,
+        quantity: it.quantity,
+        unit_price: it.unit_price,
+        discount_amount: it.discount_amount || 0,
+        notes: it.notes || ''
+      })) : (quoteItems.length > 0 ? quoteItems.map(it => ({ ...it })) : [])
+    });
+    setIsDedicatedQuoteModalOpen(true);
+  };
+
+  const handleQuoteFormItemChange = (index: number, field: string, value: any) => {
+    setQuoteFormState(prev => {
+      const nextItems = [...prev.items];
+      const item = { ...nextItems[index] };
+      if (field === 'product_id') {
+        item.product_id = value;
+        const p = products.find(prod => prod.id === value);
+        if (p) {
+          item.product_name = p.name;
+          item.unit_price = Number(p.sale_price || p.reference_price) || 10.0;
+        }
+      } else if (field === 'quantity') {
+        item.quantity = Math.max(1, parseFloat(value) || 1);
+      } else if (field === 'unit_price') {
+        item.unit_price = Math.max(0, parseFloat(value) || 0);
+      } else if (field === 'discount_amount') {
+        item.discount_amount = Math.max(0, parseFloat(value) || 0);
+      } else if (field === 'notes') {
+        item.notes = value;
+      }
+      nextItems[index] = item;
+      return { ...prev, items: nextItems };
+    });
+  };
+
+  const handleAddQuoteFormItem = () => {
+    if (products.length === 0) {
+      toast.warning("Cadastre produtos no estoque antes de adicionar itens.", "Catálogo Vazio");
+      return;
+    }
+    const def = products[0];
+    setQuoteFormState(prev => ({
+      ...prev,
+      items: [
+        ...prev.items,
+        {
+          product_id: def.id,
+          product_name: def.name,
+          quantity: 1,
+          unit_price: Number(def.sale_price || def.reference_price) || 10.0,
+          discount_amount: 0,
+          notes: ''
+        }
+      ]
+    }));
+  };
+
+  const handleRemoveQuoteFormItem = (index: number) => {
+    setQuoteFormState(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
+    }));
+  };
+
+  const handleSaveQuoteModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedOppForQuote) return;
+    if (!selectedOpp) return;
+    if (!quoteFormState.items || quoteFormState.items.length === 0) {
+      toast.warning("Adicione pelo menos um item à cotação.");
+      return;
+    }
 
     setIsSavingQuote(true);
     try {
-      await crmService.createQuoteFromOpportunity(selectedOppForQuote.id, quoteItems.length > 0 ? quoteItems : undefined);
-      toast.success("Cotação comercial gerada e vinculada à oportunidade!", "Proposta Emitida");
-      setIsQuoteModalOpen(false);
-      if (selectedOpp?.id === selectedOppForQuote.id) {
-        void loadOpportunityDetails(selectedOppForQuote);
+      const itemsPayload = quoteFormState.items.map(it => ({
+        product_id: it.product_id,
+        quantity: Number(it.quantity) || 1,
+        unit_price: Number(it.unit_price) || 0,
+        discount_amount: Number(it.discount_amount) || 0,
+        notes: it.notes || ''
+      }));
+
+      let savedQuote: SalesQuote;
+      if (editingQuoteId) {
+        savedQuote = await salesService.updateQuote(editingQuoteId, {
+          payment_terms: quoteFormState.payment_terms,
+          valid_until: quoteFormState.valid_until,
+          notes: quoteFormState.notes,
+          items: itemsPayload
+        } as any);
+        setOppQuotations(prev => prev.map(q => q.id === editingQuoteId ? savedQuote : q));
+        toast.success(`Cotação '${savedQuote.quote_number}' atualizada com sucesso!`, "Cotação Salva");
+      } else {
+        savedQuote = await salesService.createQuote({
+          customer_id: selectedOpp.customer_id || undefined,
+          opportunity_id: selectedOpp.id,
+          customer_name: selectedOpp.customer_name,
+          payment_terms: quoteFormState.payment_terms,
+          valid_until: quoteFormState.valid_until,
+          notes: quoteFormState.notes,
+          items: itemsPayload
+        });
+        setOppQuotations(prev => [savedQuote, ...prev]);
+        toast.success(`Cotação '${savedQuote.quote_number}' criada com sucesso!`, "Cotação Criada");
       }
-      void loadCRMData();
+
+      if (quoteFormState.is_main_for_opp) {
+        setActiveQuoteId(savedQuote.id);
+        setQuoteItems(quoteFormState.items);
+        const sub = quoteFormState.items.reduce((acc, it) => acc + ((it.quantity * it.unit_price) - (it.discount_amount || 0)), 0);
+        const total = sub + (Number(quoteFormState.tax_amount) || 0) + (Number(quoteFormState.freight_amount) || 0);
+        setProposalForm(prev => ({
+          ...prev,
+          payment_method: quoteFormState.payment_terms,
+          valid_until: quoteFormState.valid_until,
+          delivery_deadline: quoteFormState.delivery_deadline,
+          tax_amount: quoteFormState.tax_amount,
+          freight_amount: quoteFormState.freight_amount
+        }));
+        await crmService.updateOpportunity(selectedOpp.id, {
+          estimated_amount: total
+        });
+        setOpportunities(prev => prev.map(o => o.id === selectedOpp.id ? { ...o, estimated_amount: total } : o));
+        setSelectedOpp(prev => prev ? { ...prev, estimated_amount: total } : null);
+      }
+
+      setIsDedicatedQuoteModalOpen(false);
     } catch (err: any) {
-      toast.error(formatApiError(err, "Falha ao emitir cotação comercial."));
+      toast.error(formatApiError(err, "Falha ao salvar cotação comercial."));
     } finally {
       setIsSavingQuote(false);
     }
   };
 
+  const handleSetMainQuote = async (quote: SalesQuote) => {
+    if (!selectedOpp) return;
+    try {
+      setActiveQuoteId(quote.id);
+      if (quote.items && quote.items.length > 0) {
+        const mappedItems = quote.items.map((it: any) => ({
+          product_id: it.product_id,
+          product_name: it.product?.name,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          discount_amount: it.discount_amount || 0,
+          notes: it.notes || ''
+        }));
+        setQuoteItems(mappedItems);
+        const sub = mappedItems.reduce((acc, it) => acc + ((it.quantity * it.unit_price) - (it.discount_amount || 0)), 0);
+        await crmService.updateOpportunity(selectedOpp.id, {
+          estimated_amount: sub
+        });
+        setOpportunities(prev => prev.map(o => o.id === selectedOpp.id ? { ...o, estimated_amount: sub } : o));
+        setSelectedOpp(prev => prev ? { ...prev, estimated_amount: sub } : null);
+      }
+      toast.success(`Cotação '${quote.quote_number}' definida como principal da oportunidade.`, "Cotação Principal");
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Erro ao definir cotação principal."));
+    }
+  };
+
+  const handleSaveProposal = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!proposalForm.title.trim()) {
+      toast.warning("Informe o título da oportunidade comercial.", "Título Obrigatório");
+      return;
+    }
+
+    setIsSavingQuote(true);
+    try {
+      if (selectedOppForQuote) {
+        // Atualiza oportunidade existente no funil
+        await crmService.updateOpportunityStage(selectedOppForQuote.id, proposalForm.pipeline_stage);
+        
+        // Emite/atualiza itens cotados
+        if (quoteItems.length > 0) {
+          await crmService.createQuoteFromOpportunity(selectedOppForQuote.id, quoteItems);
+        }
+
+        setOpportunities(prev => prev.map(o => o.id === selectedOppForQuote.id ? {
+          ...o,
+          title: proposalForm.title.trim(),
+          customer_name: proposalForm.customer_name.trim(),
+          estimated_amount: proposalFinalTotal,
+          probability_percent: proposalForm.probability_percent,
+          expected_closing_date: proposalForm.expected_closing_date,
+          stage: proposalForm.pipeline_stage || o.stage
+        } : o));
+
+        toast.success(`Oportunidade '${proposalForm.title}' atualizada com sucesso!`, "Negócio Salvo");
+      } else {
+        // Cria nova oportunidade comercial
+        const created = await crmService.createOpportunity({
+          title: proposalForm.title.trim(),
+          customer_name: proposalForm.customer_name.trim() || 'Cliente sem identificação',
+          customer_id: proposalForm.customer_id || undefined,
+          estimated_amount: proposalFinalTotal,
+          probability_percent: proposalForm.probability_percent || 50,
+          expected_closing_date: proposalForm.expected_closing_date || undefined,
+          stage: proposalForm.pipeline_stage || (stages[0]?.code || 'PROSPECTING'),
+          lead_id: convertingLead ? convertingLead.id : undefined
+        });
+
+        if (quoteItems.length > 0) {
+          await crmService.createQuoteFromOpportunity(created.id, quoteItems);
+        }
+
+        if (convertingLead) {
+          await crmService.updateLead(convertingLead.id, { status: 'CONVERTED' });
+          setConvertingLead(null);
+        }
+
+        toast.success(`Oportunidade '${proposalForm.title}' criada e adicionada ao funil!`, "Negócio Criado");
+      }
+
+      setIsQuoteModalOpen(false);
+      setSelectedOpp(null);
+      setSelectedOppForQuote(null);
+      void loadCRMData();
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Falha ao salvar oportunidade comercial."));
+    } finally {
+      setIsSavingQuote(false);
+    }
+  };
+
+  const handleSendProposalWhatsApp = () => {
+    const phone = proposalForm.customer_phone || selectedOppForQuote?.lead?.phone;
+    const digits = cleanPhone(phone);
+    if (!digits) {
+      toast.warning("Informe o telefone/WhatsApp do cliente na aba '2. Cliente' para compartilhar.", "WhatsApp Ausente");
+      return;
+    }
+    const lines = [
+      `*PROPOSTA COMERCIAL — CONTROLB*`,
+      `📄 *Proposta:* ${proposalForm.quote_number}`,
+      `🏢 *Cliente:* ${proposalForm.customer_name}`,
+      `📌 *Negócio:* ${proposalForm.title}`,
+      `💰 *Valor Total:* ${fmtCurrency(proposalFinalTotal)}`,
+      `💳 *Condições:* ${proposalForm.payment_method} (${proposalForm.installment_terms})`,
+      `⏳ *Validade:* até ${fmtDate(proposalForm.valid_until)}`,
+      `🚚 *Prazo de Entrega:* ${proposalForm.delivery_deadline}`,
+      `🛡️ *Garantia & SLA:* ${proposalForm.warranty_terms} / ${proposalForm.sla_support}`,
+      ``,
+      `Olá ${proposalForm.contact_person || proposalForm.customer_name}, segue nossa proposta comercial detalhada para sua apreciação. Ficamos à disposição!`
+    ].join('\n');
+    window.open(`https://wa.me/${digits}?text=${encodeURIComponent(lines)}`, '_blank');
+  };
+
+  const handleSendProposalEmail = () => {
+    const email = proposalForm.customer_email || selectedOppForQuote?.lead?.email;
+    if (!email) {
+      toast.warning("Informe o e-mail do cliente na aba '2. Cliente' para enviar a proposta.", "E-mail Ausente");
+      return;
+    }
+    const subject = `Proposta Comercial ${proposalForm.quote_number} — ${proposalForm.title} (ControlB)`;
+    const body = [
+      `Prezado(a) ${proposalForm.contact_person || proposalForm.customer_name},\n\n`,
+      `Agradecemos pela oportunidade e apresentamos nossa proposta comercial detalhada:\n\n`,
+      `• Número da Proposta: ${proposalForm.quote_number}\n`,
+      `• Projeto/Escopo: ${proposalForm.title}\n`,
+      `• Valor Total: ${fmtCurrency(proposalFinalTotal)}\n`,
+      `• Condição de Pagamento: ${proposalForm.payment_method} (${proposalForm.installment_terms})\n`,
+      `• Prazo de Entrega: ${proposalForm.delivery_deadline}\n`,
+      `• Garantia: ${proposalForm.warranty_terms}\n`,
+      `• SLA / Suporte: ${proposalForm.sla_support}\n`,
+      `• Validade: ${fmtDate(proposalForm.valid_until)}\n\n`,
+      `Observações do Projeto:\n${proposalForm.notes}\n\n`,
+      `Atenciosamente,\n${proposalForm.responsible_name}\nControlB — Gestão Empresarial Integrada`
+    ].join('');
+    window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  };
+
+  const handlePrintProposal = () => {
+    window.print();
+  };
+
+  const handleDuplicateProposal = () => {
+    const newNum = `${proposalForm.quote_number}-V2`;
+    setProposalForm(prev => ({
+      ...prev,
+      quote_number: newNum,
+      status: 'DRAFT',
+      creation_date: new Date().toISOString().split('T')[0]
+    }));
+    setActiveQuoteId(null);
+    toast.info(`Proposta duplicada como ${newNum}. Salve para persistir a nova versão.`, "Proposta Duplicada");
+  };
+
+  const handleSaveSidebarActivity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sidebarActivityForm.summary.trim()) {
+      toast.warning("Informe o resumo do follow-up.", "Resumo Obrigatório");
+      return;
+    }
+    if (!selectedOppForQuote) return;
+
+    try {
+      const scheduledDate = `${sidebarActivityForm.date}T${sidebarActivityForm.time}:00Z`;
+      const interaction = await crmService.createInteraction({
+        opportunity_id: selectedOppForQuote.id,
+        interaction_type: sidebarActivityForm.type,
+        summary: sidebarActivityForm.summary.trim(),
+        interaction_date: scheduledDate
+      });
+      setAllInteractions(prev => [interaction, ...prev]);
+      if (selectedOpp?.id === selectedOppForQuote.id) {
+        setOppInteractions(prev => [interaction, ...prev]);
+      }
+      setIsAddingSidebarActivity(false);
+      setSidebarActivityForm({
+        type: 'CALL',
+        summary: '',
+        date: new Date().toISOString().split('T')[0],
+        time: '10:00'
+      });
+      toast.success("Follow-up registrado com sucesso!", "Atividade Agendada");
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Falha ao registrar follow-up."));
+    }
+  };
+
+  const handleConvertAndWinFromStudio = async () => {
+    const targetOppId = selectedOppForQuote?.id || selectedOpp?.id;
+    if (!targetOppId) {
+      toast.warning("Salve a oportunidade antes de marcá-la como ganha.", "Negócio Não Salvo");
+      return;
+    }
+    try {
+      if (activeQuoteId) {
+        const order = await crmService.convertQuoteToOrder(activeQuoteId);
+        const orderNum = order.order_number || (order.id ? order.id.slice(0, 8) : 'S/N');
+        toast.success(`Pedido de Venda #${orderNum} gerado com sucesso!`, "Pedido de Venda");
+      }
+      await crmService.updateOpportunityStage(targetOppId, 'WON');
+      setOpportunities(prev => prev.map(o => o.id === targetOppId ? { ...o, stage: 'WON' } : o));
+      if (selectedOpp?.id === targetOppId) {
+        setSelectedOpp(prev => prev ? { ...prev, stage: 'WON' } : null);
+      }
+      setProposalForm(prev => ({ ...prev, status: 'APPROVED', pipeline_stage: 'WON' }));
+      toast.success(`🏆 Parabéns! Oportunidade marcada como Ganha no Pipeline!`, "Negócio Ganho");
+      setIsQuoteModalOpen(false);
+      void loadCRMData();
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Falha ao marcar oportunidade como ganha."));
+    }
+  };
+
   // ===========================================================================
-  // CÁLCULOS MEMOIZADOS (DASHBOARD & FILTROS)
+  // CONVERSÃO DE COTAÇÃO EM PEDIDO DE VENDA & EXPORTAÇÃO CSV (FASE 3)
   // ===========================================================================
+
+
+
+  const handleExportCSV = () => {
+    if (opportunities.length === 0) {
+      toast.info("Não há oportunidades cadastradas para exportar.");
+      return;
+    }
+    const headers = ['ID', 'Título', 'Cliente', 'Valor Estimado (R$)', 'Probabilidade (%)', 'Estágio', 'Data Previsão', 'Motivo de Perda', 'Criado Em'];
+    const rows = opportunities.map(opp => [
+      opp.id,
+      `"${(opp.title || '').replace(/"/g, '""')}"`,
+      `"${(opp.customer_name || '').replace(/"/g, '""')}"`,
+      (Number(opp.estimated_amount) || 0).toFixed(2),
+      opp.probability_percent || 0,
+      opp.stage,
+      opp.expected_closing_date || '',
+      `"${(opp.loss_reason || '').replace(/"/g, '""')}"`,
+      opp.created_at || ''
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `oportunidades_crm_controlb_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("Relatório de oportunidades exportado em CSV com sucesso!", "Exportação Concluída");
+  };
+
+  // ===========================================================================
+  // METAS COMERCIAIS & DETECÇÃO DE INATIVIDADE (FASE 4)
+  // ===========================================================================
+
+  const handleSaveGoal = (e: React.FormEvent) => {
+    e.preventDefault();
+    const val = Number(tempGoalInput);
+    if (isNaN(val) || val <= 0) {
+      toast.error("Informe um valor de meta válido superior a R$ 0,00.");
+      return;
+    }
+    setMonthlySalesGoal(val);
+    localStorage.setItem('controlb_crm_monthly_goal', val.toString());
+    setIsGoalModalOpen(false);
+    toast.success(`Meta comercial mensal definida para ${fmtCurrency(val)}!`, "Meta Atualizada");
+  };
+
+  const getOppInactivityInfo = (opp: Opportunity) => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const now = Date.now();
+    const oppActs = allInteractions.filter(a => a.opportunity_id === opp.id);
+    let lastDateMs = opp.created_at ? new Date(opp.created_at).getTime() : now;
+    if (oppActs.length > 0) {
+      const maxActDate = Math.max(...oppActs.map(a => new Date(a.interaction_date || a.created_at || '').getTime()));
+      if (!isNaN(maxActDate)) lastDateMs = Math.max(lastDateMs, maxActDate);
+    }
+    const daysInactive = Math.max(0, Math.round((now - lastDateMs) / (1000 * 60 * 60 * 24)));
+    const isOverdueClosing = !!(opp.expected_closing_date && opp.expected_closing_date < todayStr);
+    const isStagnant = (opp.stage !== 'WON' && opp.stage !== 'LOST') && (daysInactive >= 7 || isOverdueClosing);
+    return { daysInactive, isOverdueClosing, isStagnant };
+  };
+
+  const handleScheduleUrgentFollowUp = (opp: Opportunity) => {
+    setGlobalActivityForm({
+      type: 'CALL',
+      linked_type: 'OPPORTUNITY',
+      linked_id: opp.id,
+      summary: `🚨 Follow-up Emergencial: ${opp.title}`,
+      details: `Contato prioritário devido à estagnação de negociação no CRM. Retomar contato comercial com ${opp.customer_name}.`,
+      date: new Date().toISOString().split('T')[0],
+      time: '10:00'
+    });
+    setIsGlobalActivityModalOpen(true);
+  };
+
+  const selectedOppCustomerLTV = useMemo(() => {
+    const custId = selectedOpp?.customer_id || proposalForm.customer_id;
+    const custName = selectedOpp?.customer_name || proposalForm.customer_name;
+    if (!custId && !custName) return { totalLTV: 0, wonCount: 0, openCount: 0, lostCount: 0, customerOpps: [] };
+    const custOpps = opportunities.filter(o =>
+      (custId && o.customer_id === custId) ||
+      (custName && o.customer_name && o.customer_name.toLowerCase() === custName.toLowerCase())
+    );
+    const won = custOpps.filter(o => o.stage === 'WON');
+    const open = custOpps.filter(o => o.stage !== 'WON' && o.stage !== 'LOST');
+    const lost = custOpps.filter(o => o.stage === 'LOST');
+    const totalLTV = won.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+    return {
+      totalLTV,
+      wonCount: won.length,
+      openCount: open.length,
+      lostCount: lost.length,
+      customerOpps: custOpps
+    };
+  }, [selectedOpp, proposalForm.customer_id, proposalForm.customer_name, opportunities]);
+
+  // ===========================================================================
+  // CÁLCULOS MEMOIZADOS (DASHBOARD, RELATÓRIOS & FILTROS)
+  // ===========================================================================
+
+  const reportAnalytics = useMemo(() => {
+    const wonStages = new Set(stages.filter(s => s.is_won || s.code === 'WON').map(s => s.code));
+    const lostStages = new Set(stages.filter(s => s.is_lost || s.code === 'LOST').map(s => s.code));
+
+    const wonList = opportunities.filter(o => wonStages.has(o.stage));
+    const lostList = opportunities.filter(o => lostStages.has(o.stage));
+    const openList = opportunities.filter(o => !wonStages.has(o.stage) && !lostStages.has(o.stage));
+
+    const totalWon = wonList.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+    const totalLost = lostList.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+    const totalOpen = openList.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+
+    // Previsão de Receita Ponderada (Sales Forecast)
+    const weightedOpenPipeline = openList.reduce((acc, o) => {
+      const prob = (o.probability_percent !== undefined ? o.probability_percent : 50) / 100;
+      return acc + ((Number(o.estimated_amount) || 0) * prob);
+    }, 0);
+
+    const avgTicket = wonList.length > 0 ? totalWon / wonList.length : 0;
+    const closedCount = wonList.length + lostList.length;
+    const globalWinRate = closedCount > 0 ? Math.round((wonList.length / closedCount) * 100) : 0;
+
+    // Cálculo do Ciclo Médio (Dias) para negócios fechados
+    let totalCycleDays = 0;
+    let cycleCount = 0;
+    [...wonList, ...lostList].forEach(o => {
+      if (o.created_at) {
+        const created = new Date(o.created_at).getTime();
+        const closed = o.updated_at ? new Date(o.updated_at).getTime() : Date.now();
+        const diffDays = Math.max(1, Math.round((closed - created) / (1000 * 60 * 60 * 24)));
+        totalCycleDays += diffDays;
+        cycleCount++;
+      }
+    });
+    const avgCycleDays = cycleCount > 0 ? Math.round(totalCycleDays / cycleCount) : 0;
+
+    // Distribuição de Motivos de Perda
+    const lossCounts: Record<string, number> = {};
+    lostList.forEach(o => {
+      const reason = o.loss_reason || 'Outro motivo';
+      lossCounts[reason] = (lossCounts[reason] || 0) + 1;
+    });
+    const lossReasonsArray = Object.entries(lossCounts).map(([reason, count]) => ({
+      reason,
+      count,
+      percent: lostList.length > 0 ? Math.round((count / lostList.length) * 100) : 0
+    })).sort((a, b) => b.count - a.count);
+
+    // Performance por Canal de Lead
+    const sourceCounts: Record<string, { total: number; converted: number }> = {};
+    leads.forEach(l => {
+      const src = l.source || 'Indicação';
+      if (!sourceCounts[src]) sourceCounts[src] = { total: 0, converted: 0 };
+      sourceCounts[src].total += 1;
+      if (l.status === 'CONVERTED' || l.status === 'QUALIFIED') {
+        sourceCounts[src].converted += 1;
+      }
+    });
+    const sourceEfficiencyArray = Object.entries(sourceCounts).map(([source, data]) => ({
+      source,
+      total: data.total,
+      converted: data.converted,
+      rate: data.total > 0 ? Math.round((data.converted / data.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+
+    return {
+      wonList,
+      lostList,
+      openList,
+      totalWon,
+      totalLost,
+      totalOpen,
+      weightedOpenPipeline,
+      avgTicket,
+      globalWinRate,
+      avgCycleDays,
+      lossReasonsArray,
+      sourceEfficiencyArray
+    };
+  }, [opportunities, stages, leads]);
 
   const kpis = useMemo(() => {
     const totalOpps = opportunities.length;
     const totalPipelineAmount = opportunities
       .filter(o => o.stage !== 'LOST')
       .reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+
+    // Pipeline Ponderado (Forecast Realista)
+    const weightedPipelineAmount = opportunities
+      .filter(o => o.stage !== 'LOST' && o.stage !== 'WON')
+      .reduce((acc, o) => {
+        const prob = (o.probability_percent !== undefined ? o.probability_percent : 50) / 100;
+        return acc + ((Number(o.estimated_amount) || 0) * prob);
+      }, 0);
+
     const wonOpps = opportunities.filter(o => o.stage === 'WON');
     const wonAmount = wonOpps.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
     const conversionRate = totalOpps > 0 ? ((wonOpps.length / totalOpps) * 100).toFixed(1) : '0.0';
 
+    // Acompanhamento de Meta Comercial
+    const goalPercent = monthlySalesGoal > 0 ? Math.min(200, Math.round((wonAmount / monthlySalesGoal) * 100)) : 0;
+    const goalRemaining = Math.max(0, monthlySalesGoal - wonAmount);
+
+    // Contagem de Oportunidades Estagnadas
+    const stagnantCount = opportunities.filter(o => getOppInactivityInfo(o).isStagnant).length;
+
     return {
       totalOpps,
       totalPipelineAmount,
+      weightedPipelineAmount,
       wonOppsCount: wonOpps.length,
       wonAmount,
       conversionRate,
       totalLeads: leads.length,
-      qualifiedLeads: leads.filter(l => l.status === 'QUALIFIED' || l.status === 'CONVERTED').length
+      qualifiedLeads: leads.filter(l => l.status === 'QUALIFIED' || l.status === 'CONVERTED').length,
+      monthlySalesGoal,
+      goalPercent,
+      goalRemaining,
+      stagnantCount
     };
-  }, [opportunities, leads]);
+  }, [opportunities, leads, monthlySalesGoal, allInteractions]);
 
   const filteredOpportunities = useMemo(() => {
     return opportunities.filter(o => {
@@ -775,9 +1601,15 @@ export const CRM: React.FC = () => {
         o.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
         o.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
       const matchStage = stageFilter === 'ALL' || o.stage === stageFilter;
+
+      if (oppActivityFilter === 'STAGNANT') {
+        const inact = getOppInactivityInfo(o);
+        if (!inact.isStagnant) return false;
+      }
+
       return matchSearch && matchStage;
     });
-  }, [opportunities, searchTerm, stageFilter]);
+  }, [opportunities, searchTerm, stageFilter, oppActivityFilter, allInteractions]);
 
   const filteredLeads = useMemo(() => {
     return leads.filter(l => {
@@ -903,6 +1735,18 @@ export const CRM: React.FC = () => {
             </div>
 
             <div className="nav-group">
+              <span className="nav-group-title">Inteligência & Relatórios</span>
+              <button
+                type="button"
+                className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`}
+                onClick={() => setActiveTab('reports')}
+              >
+                <BarChart3 size={16} />
+                <span>Relatórios & Inteligência</span>
+              </button>
+            </div>
+
+            <div className="nav-group">
               <span className="nav-group-title">Configurações</span>
               <button
                 type="button"
@@ -931,6 +1775,7 @@ export const CRM: React.FC = () => {
                 {activeTab === 'leads' && 'Base de Leads & Prospecção'}
                 {activeTab === 'activities' && 'Central de Atividades & Follow-ups'}
                 {activeTab === 'stages' && 'Configuração das Etapas do Funil de Vendas'}
+                {activeTab === 'reports' && 'Inteligência Comercial & Relatórios'}
               </h1>
               <p className="subtitle">
                 {activeTab === 'dashboard' && 'Visão panorâmica de negociações, taxas de conversão e metas comerciais'}
@@ -939,6 +1784,7 @@ export const CRM: React.FC = () => {
                 {activeTab === 'leads' && 'Qualifique potenciais clientes e converta contatos em negociações ativas'}
                 {activeTab === 'activities' && 'Organize ligações, reuniões, conversas de WhatsApp e lembretes com prazos'}
                 {activeTab === 'stages' && 'Personalize a sequência, nomes e cores das colunas do quadro Kanban'}
+                {activeTab === 'reports' && 'Métricas de conversão, motivos de perda, tempo médio de fechamento e ticket médio'}
               </p>
             </div>
 
@@ -952,6 +1798,18 @@ export const CRM: React.FC = () => {
               >
                 <RefreshCw size={16} className={loading ? 'spinning' : ''} />
               </button>
+
+              {activeTab === 'reports' && (
+                <button
+                  type="button"
+                  className="btn-secondary ui-button ui-button--secondary"
+                  onClick={handleExportCSV}
+                  title="Baixar planilha consolidada de oportunidades"
+                >
+                  <Download size={16} />
+                  <span>Exportar CSV</span>
+                </button>
+              )}
 
               {activeTab === 'leads' && (
                 <button
@@ -975,7 +1833,7 @@ export const CRM: React.FC = () => {
                 </button>
               )}
 
-              {activeTab !== 'leads' && activeTab !== 'activities' && (
+              {activeTab !== 'leads' && activeTab !== 'activities' && activeTab !== 'reports' && (
                 <>
                   <button
                     type="button"
@@ -989,20 +1847,7 @@ export const CRM: React.FC = () => {
                   <button
                     type="button"
                     className="btn-primary ui-button ui-button--primary"
-                    onClick={() => {
-                      setConvertingLead(null);
-                      setOppForm({
-                        title: '',
-                        customer_id: '',
-                        customer_name: '',
-                        estimated_amount: '',
-                        probability_percent: 50,
-                        expected_closing_date: '',
-                        stage: stages[0]?.code || 'PROSPECTING',
-                        notes: ''
-                      });
-                      setIsOppModalOpen(true);
-                    }}
+                    onClick={() => handleOpenNewOppStudio()}
                   >
                     <Plus size={16} />
                     <span>+ Nova Oportunidade</span>
@@ -1016,20 +1861,29 @@ export const CRM: React.FC = () => {
           <section className="kpi-grid">
             <div className="kpi-card">
               <div className="kpi-top">
-                <span className="kpi-label">Pipeline Ativo</span>
+                <span className="kpi-label">Pipeline Bruto</span>
                 <DollarSign size={18} />
               </div>
               <span className="kpi-value">{fmtCurrency(kpis.totalPipelineAmount)}</span>
-              <span className="kpi-sub">{kpis.totalOpps} oportunidades em andamento</span>
+              <span className="kpi-sub">{kpis.totalOpps} oportunidades ativas</span>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-top">
+                <span className="kpi-label">Forecast Ponderado</span>
+                <Zap size={18} style={{ color: 'var(--accent-brand)' }} />
+              </div>
+              <span className="kpi-value brand">{fmtCurrency(kpis.weightedPipelineAmount)}</span>
+              <span className="kpi-sub">Previsão realista baseada em probabilidade</span>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-top">
                 <span className="kpi-label">Negócios Ganhos</span>
-                <CheckCircle2 size={18} />
+                <CheckCircle2 size={18} style={{ color: '#10b981' }} />
               </div>
-              <span className="kpi-value">{fmtCurrency(kpis.wonAmount)}</span>
-              <span className="kpi-sub">{kpis.wonOppsCount} negócios fechados com sucesso</span>
+              <span className="kpi-value green">{fmtCurrency(kpis.wonAmount)}</span>
+              <span className="kpi-sub">{kpis.wonOppsCount} negócios fechados</span>
             </div>
 
             <div className="kpi-card">
@@ -1043,11 +1897,11 @@ export const CRM: React.FC = () => {
 
             <div className="kpi-card">
               <div className="kpi-top">
-                <span className="kpi-label">Base de Leads</span>
-                <Users size={18} />
+                <span className="kpi-label">Negócios Estagnados</span>
+                <AlertTriangle size={18} style={{ color: kpis.stagnantCount > 0 ? '#f59e0b' : 'var(--text-muted)' }} />
               </div>
-              <span className="kpi-value">{kpis.totalLeads}</span>
-              <span className="kpi-sub">{kpis.qualifiedLeads} qualificados / convertidos</span>
+              <span className={`kpi-value ${kpis.stagnantCount > 0 ? 'amber' : ''}`}>{kpis.stagnantCount}</span>
+              <span className="kpi-sub">{kpis.stagnantCount > 0 ? 'Exigem follow-up emergencial' : 'Todos os negócios ativos'}</span>
             </div>
           </section>
 
@@ -1056,6 +1910,61 @@ export const CRM: React.FC = () => {
           {/* ================================================================= */}
           {activeTab === 'dashboard' && (
             <div className="dashboard-view">
+              {/* CARD DE META COMERCIAL DO MÊS (FASE 4) */}
+              <div className="sales-goal-card">
+                <div className="goal-header">
+                  <div className="goal-title-box">
+                    <Target size={20} className="text-brand" />
+                    <div>
+                      <h3>Meta Comercial do Mês</h3>
+                      <p>Acompanhamento de faturamento realizado vs. objetivo mensal da equipe</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-define-goal ui-button ui-button--secondary"
+                    onClick={() => {
+                      setTempGoalInput(monthlySalesGoal.toString());
+                      setIsGoalModalOpen(true);
+                    }}
+                  >
+                    <Edit3 size={13} />
+                    <span>Definir Meta</span>
+                  </button>
+                </div>
+
+                <div className="goal-progress-wrap">
+                  <div className="goal-progress-bar">
+                    <div
+                      className={`goal-progress-fill ${kpis.goalPercent >= 100 ? 'completed' : ''}`}
+                      style={{ width: `${Math.min(kpis.goalPercent, 100)}%` }}
+                    />
+                  </div>
+                  <div className={`goal-percent-badge ${kpis.goalPercent >= 100 ? 'completed' : ''}`}>
+                    {kpis.goalPercent}% Atingido
+                  </div>
+                </div>
+
+                <div className="goal-numbers-grid">
+                  <div className="goal-num-item">
+                    <span className="label">Meta Estabelecida</span>
+                    <strong className="val">{fmtCurrency(kpis.monthlySalesGoal)}</strong>
+                  </div>
+                  <div className="goal-num-item">
+                    <span className="label">Realizado (Ganhos)</span>
+                    <strong className="val green">{fmtCurrency(kpis.wonAmount)}</strong>
+                  </div>
+                  <div className="goal-num-item">
+                    <span className="label">Faltante p/ Meta</span>
+                    <strong className="val">{fmtCurrency(kpis.goalRemaining)}</strong>
+                  </div>
+                  <div className="goal-num-item">
+                    <span className="label">Forecast Ponderado</span>
+                    <strong className="val brand">{fmtCurrency(kpis.weightedPipelineAmount)}</strong>
+                  </div>
+                </div>
+              </div>
+
               <div className="dashboard-grid">
                 {/* Card de Oportunidades Recentes */}
                 <div className="dashboard-card">
@@ -1078,6 +1987,7 @@ export const CRM: React.FC = () => {
                     <div className="dashboard-opps-list">
                       {recentOpps.map(opp => {
                         const stg = stages.find(s => s.code === opp.stage);
+                        const inact = getOppInactivityInfo(opp);
                         return (
                           <div
                             key={opp.id}
@@ -1085,7 +1995,14 @@ export const CRM: React.FC = () => {
                             onClick={() => void loadOpportunityDetails(opp)}
                           >
                             <div className="opp-info">
-                              <h4>{opp.title}</h4>
+                              <div className="title-with-badge">
+                                <h4>{opp.title}</h4>
+                                {inact.isStagnant && (
+                                  <span className="mini-stagnant-tag" title={`${inact.daysInactive}d sem contato`}>
+                                    <AlertTriangle size={11} /> Estagnado
+                                  </span>
+                                )}
+                              </div>
                               <span>{opp.customer_name}</span>
                             </div>
                             <div className="opp-meta">
@@ -1182,20 +2099,7 @@ export const CRM: React.FC = () => {
                           <button
                             type="button"
                             className="btn-quick-add"
-                            onClick={() => {
-                              setConvertingLead(null);
-                              setOppForm({
-                                title: '',
-                                customer_id: '',
-                                customer_name: '',
-                                estimated_amount: '',
-                                probability_percent: 50,
-                                expected_closing_date: '',
-                                stage: stage.code,
-                                notes: ''
-                              });
-                              setIsOppModalOpen(true);
-                            }}
+                            onClick={() => handleOpenNewOppStudio(null, stage.code)}
                             title={`Criar oportunidade na etapa '${stage.name}'`}
                           >
                             <Plus size={13} />
@@ -1212,10 +2116,11 @@ export const CRM: React.FC = () => {
                         ) : (
                           stageOpps.map((opp) => {
                             const isDragging = draggedOppId === opp.id;
+                            const inact = getOppInactivityInfo(opp);
                             return (
                               <div
                                 key={opp.id}
-                                className={`kanban-card ${isDragging ? 'is-dragging' : ''}`}
+                                className={`kanban-card ${isDragging ? 'is-dragging' : ''} ${inact.isStagnant ? 'is-stagnant' : ''}`}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, opp.id)}
                                 onClick={() => void loadOpportunityDetails(opp)}
@@ -1245,6 +2150,27 @@ export const CRM: React.FC = () => {
                                   <div className="opp-loss-alert">
                                     <AlertTriangle size={12} />
                                     <span>{opp.loss_reason}</span>
+                                  </div>
+                                )}
+
+                                {inact.isStagnant && (
+                                  <div className="opp-stagnant-alert">
+                                    <div className="stagnant-pill">
+                                      <AlertTriangle size={11} />
+                                      <span>{inact.daysInactive > 0 ? `${inact.daysInactive}d sem contato` : 'Previsão vencida'}</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="btn-urgent-followup"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleScheduleUrgentFollowUp(opp);
+                                      }}
+                                      title="Agendar follow-up prioritário agora"
+                                    >
+                                      <Clock size={11} />
+                                      <span>Follow-up</span>
+                                    </button>
                                   </div>
                                 )}
 
@@ -1298,6 +2224,17 @@ export const CRM: React.FC = () => {
 
                 <div className="filter-select-wrapper">
                   <select
+                    value={oppActivityFilter}
+                    onChange={(e) => setOppActivityFilter(e.target.value as 'ALL' | 'STAGNANT')}
+                    className="select-activity-filter"
+                  >
+                    <option value="ALL">Todas as Atividades ({opportunities.length})</option>
+                    <option value="STAGNANT">🚨 Estagnadas / Sem Contato ({kpis.stagnantCount})</option>
+                  </select>
+                </div>
+
+                <div className="filter-select-wrapper">
+                  <select
                     value={stageFilter}
                     onChange={(e) => setStageFilter(e.target.value)}
                   >
@@ -1317,6 +2254,7 @@ export const CRM: React.FC = () => {
                     <th>Valor Estimado</th>
                     <th>Probabilidade</th>
                     <th>Estágio Atual</th>
+                    <th>Status de Atividade</th>
                     <th>Previsão Fechamento</th>
                     <th style={{ textAlign: 'center' }}>Ações</th>
                   </tr>
@@ -1324,11 +2262,12 @@ export const CRM: React.FC = () => {
                 <tbody>
                   {filteredOpportunities.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="empty-row">Nenhuma oportunidade encontrada com os filtros selecionados.</td>
+                      <td colSpan={8} className="empty-row">Nenhuma oportunidade encontrada com os filtros selecionados.</td>
                     </tr>
                   ) : (
                     filteredOpportunities.map(opp => {
                       const stg = stages.find(s => s.code === opp.stage);
+                      const inact = getOppInactivityInfo(opp);
                       return (
                         <tr key={opp.id} onClick={() => void loadOpportunityDetails(opp)} style={{ cursor: 'pointer' }}>
                           <td><strong>{opp.title}</strong></td>
@@ -1340,8 +2279,30 @@ export const CRM: React.FC = () => {
                               {stg?.name || opp.stage}
                             </span>
                           </td>
+                          <td>
+                            {inact.isStagnant ? (
+                              <div className="stagnant-table-pill" title={`${inact.daysInactive} dias sem nova atividade registrada`}>
+                                <AlertTriangle size={12} />
+                                <span>Estagnado ({inact.daysInactive}d)</span>
+                              </div>
+                            ) : (
+                              <div className="active-table-pill">
+                                <Check size={12} />
+                                <span>Ativo</span>
+                              </div>
+                            )}
+                          </td>
                           <td>{fmtDate(opp.expected_closing_date)}</td>
                           <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                            {inact.isStagnant && (
+                              <button
+                                className="btn-icon-action urgent"
+                                onClick={() => handleScheduleUrgentFollowUp(opp)}
+                                title="Agendar Follow-up Emergencial"
+                              >
+                                <Clock size={15} />
+                              </button>
+                            )}
                             <button
                               className="btn-icon-action"
                               onClick={() => void loadOpportunityDetails(opp)}
@@ -1783,272 +2744,246 @@ export const CRM: React.FC = () => {
               </div>
             </div>
           )}
-        </main>
-      </div>
 
-      {/* =================================================================== */}
-      {/* GAVETA / MODAL 360º DE DETALHE DA OPORTUNIDADE                      */}
-      {/* =================================================================== */}
-      {selectedOpp && (
-        <div className="opportunity-drawer-overlay" onClick={() => setSelectedOpp(null)}>
-          <div className="opportunity-drawer" onClick={(e) => e.stopPropagation()}>
-            {/* Header da Gaveta */}
-            <div className="drawer-header">
-              <div className="header-info">
-                <span className="drawer-customer-name">
-                  <Building2 size={14} /> {selectedOpp.customer_name}
-                </span>
-                <h2 className="drawer-title">{selectedOpp.title}</h2>
-              </div>
-              <div className="header-actions">
-                <button
-                  type="button"
-                  className="btn-drawer-action btn-won"
-                  onClick={() => void handleMoveStage(selectedOpp.id, 'WON')}
-                  title="Marcar como Ganho"
-                >
-                  <CheckCircle2 size={15} />
-                  <span>Ganho</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn-drawer-action btn-lost"
-                  onClick={() => {
-                    setLossModalOpp(selectedOpp);
-                    setLossReason(LOSS_REASONS[0]);
-                    setLossCompetitor('');
-                    setLossNotes('');
-                  }}
-                  title="Marcar como Perdido"
-                >
-                  <X size={15} />
-                  <span>Perdido</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn-drawer-close"
-                  onClick={() => setSelectedOpp(null)}
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            {/* Trilha de Estágios (Chevron Progress Tracker) */}
-            <div className="stage-chevron-tracker">
-              {stages.map((stg) => {
-                const isCurrent = selectedOpp.stage === stg.code;
-                return (
-                  <button
-                    key={stg.id || stg.code}
-                    type="button"
-                    className={`chevron-item ${isCurrent ? 'active' : ''}`}
-                    onClick={() => void handleMoveStage(selectedOpp.id, stg.code)}
-                    style={{
-                      borderBottomColor: isCurrent ? (stg.color || 'var(--accent-brand)') : 'transparent'
-                    }}
-                  >
-                    <span className="chevron-bullet" style={{ backgroundColor: stg.color || '#10b981' }} />
-                    <span className="chevron-label">{stg.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Cards de Resumo da Oportunidade */}
-            <div className="drawer-summary-grid">
-              <div className="summary-item">
-                <span className="label">Valor Estimado</span>
-                <span className="value-highlight">{fmtCurrency(selectedOpp.estimated_amount)}</span>
-              </div>
-              <div className="summary-item">
-                <span className="label">Probabilidade</span>
-                <span className="value">{selectedOpp.probability_percent}%</span>
-              </div>
-              <div className="summary-item">
-                <span className="label">Previsão Fechamento</span>
-                <span className="value">{fmtDate(selectedOpp.expected_closing_date)}</span>
-              </div>
-              <div className="summary-item">
-                <span className="label">Ação Rápida</span>
-                <button
-                  type="button"
-                  className="btn-emit-quote-fast"
-                  onClick={() => handleOpenQuoteModal(selectedOpp)}
-                >
-                  <FileText size={13} />
-                  <span>Emitir Proposta</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Abas Internas da Gaveta */}
-            <div className="drawer-tabs-nav">
-              <button
-                type="button"
-                className={`drawer-tab-btn ${oppDrawerTab === 'timeline' ? 'active' : ''}`}
-                onClick={() => setOppDrawerTab('timeline')}
-              >
-                <Clock size={14} />
-                <span>Timeline ({oppInteractions.length})</span>
-              </button>
-              <button
-                type="button"
-                className={`drawer-tab-btn ${oppDrawerTab === 'quotes' ? 'active' : ''}`}
-                onClick={() => setOppDrawerTab('quotes')}
-              >
-                <FileText size={14} />
-                <span>Propostas ({oppQuotes.length})</span>
-              </button>
-              <button
-                type="button"
-                className={`drawer-tab-btn ${oppDrawerTab === 'new_activity' ? 'active' : ''}`}
-                onClick={() => setOppDrawerTab('new_activity')}
-              >
-                <Plus size={14} />
-                <span>Registrar Ação</span>
-              </button>
-            </div>
-
-            {/* Corpo das Abas */}
-            <div className="drawer-tab-body">
-              {/* ABA 1: TIMELINE */}
-              {oppDrawerTab === 'timeline' && (
-                <div className="timeline-view">
-                  {oppInteractions.length === 0 ? (
-                    <div className="empty-timeline">
-                      <Clock size={32} />
-                      <p>Nenhuma atividade ou interação registrada para este negócio.</p>
-                      <button
-                        type="button"
-                        className="btn-primary ui-button"
-                        onClick={() => setOppDrawerTab('new_activity')}
-                      >
-                        <Plus size={14} /> Registrar Primeira Ação
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="timeline-list">
-                      {oppInteractions.map((act) => (
-                        <div key={act.id} className="timeline-item">
-                          <div className="timeline-icon">
-                            {act.interaction_type === 'CALL' && <Phone size={14} />}
-                            {act.interaction_type === 'WHATSAPP' && <MessageSquare size={14} />}
-                            {act.interaction_type === 'MEETING' && <Users size={14} />}
-                            {act.interaction_type === 'EMAIL' && <Mail size={14} />}
-                            {act.interaction_type === 'NOTE' && <FileText size={14} />}
-                          </div>
-                          <div className="timeline-content">
-                            <div className="timeline-top">
-                              <span className="timeline-type">{act.interaction_type}</span>
-                              <span className="timeline-date">{fmtDate(act.created_at)}</span>
-                            </div>
-                            <h4 className="timeline-summary">{act.summary}</h4>
-                            {act.details && <p className="timeline-details">{act.details}</p>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ABA 2: PROPOSTAS & COTAÇÕES */}
-              {oppDrawerTab === 'quotes' && (
-                <div className="drawer-quotes-view">
-                  <div className="quotes-header-row">
-                    <h4>Cotações e Propostas Vinculadas</h4>
-                    <button
-                      type="button"
-                      className="btn-primary ui-button"
-                      onClick={() => handleOpenQuoteModal(selectedOpp)}
-                    >
-                      <Plus size={14} /> Nova Cotação
-                    </button>
+          {/* ================================================================= */}
+          {/* TAB 6: RELATÓRIOS & INTELIGÊNCIA COMERCIAL (FASE 3)               */}
+          {/* ================================================================= */}
+          {activeTab === 'reports' && (
+            <div className="reports-view">
+              {/* Grid de KPIs Executivos */}
+              <section className="reports-kpi-grid">
+                <div className="rep-kpi-card">
+                  <div className="rep-kpi-header">
+                    <span className="rep-kpi-title">Ticket Médio</span>
+                    <DollarSign size={18} className="rep-kpi-icon brand" />
                   </div>
-                  {oppQuotes.length === 0 ? (
-                    <p className="empty-notice">Nenhuma cotação formal emitida para este negócio.</p>
+                  <span className="rep-kpi-value">{fmtCurrency(reportAnalytics.avgTicket)}</span>
+                  <span className="rep-kpi-sub">Por negócio ganho e fechado</span>
+                </div>
+
+                <div className="rep-kpi-card">
+                  <div className="rep-kpi-header">
+                    <span className="rep-kpi-title">Ciclo Médio de Fechamento</span>
+                    <Clock size={18} className="rep-kpi-icon blue" />
+                  </div>
+                  <span className="rep-kpi-value">{reportAnalytics.avgCycleDays} <small>dias</small></span>
+                  <span className="rep-kpi-sub">Tempo médio de maturação comercial</span>
+                </div>
+
+                <div className="rep-kpi-card">
+                  <div className="rep-kpi-header">
+                    <span className="rep-kpi-title">Taxa Global de Fechamento</span>
+                    <TrendingUp size={18} className="rep-kpi-icon green" />
+                  </div>
+                  <span className="rep-kpi-value">{reportAnalytics.globalWinRate}%</span>
+                  <span className="rep-kpi-sub">{reportAnalytics.wonList.length} ganhos / {reportAnalytics.wonList.length + reportAnalytics.lostList.length} finalizados</span>
+                </div>
+
+                <div className="rep-kpi-card">
+                  <div className="rep-kpi-header">
+                    <span className="rep-kpi-title">Faturamento Ganho</span>
+                    <CheckCircle2 size={18} className="rep-kpi-icon green" />
+                  </div>
+                  <span className="rep-kpi-value green">{fmtCurrency(reportAnalytics.totalWon)}</span>
+                  <span className="rep-kpi-sub">{reportAnalytics.wonList.length} negócios convertidos</span>
+                </div>
+
+                <div className="rep-kpi-card">
+                  <div className="rep-kpi-header">
+                    <span className="rep-kpi-title">Volume Perdido</span>
+                    <TrendingDown size={18} className="rep-kpi-icon red" />
+                  </div>
+                  <span className="rep-kpi-value red">{fmtCurrency(reportAnalytics.totalLost)}</span>
+                  <span className="rep-kpi-sub">{reportAnalytics.lostList.length} oportunidades descartadas</span>
+                </div>
+              </section>
+
+              {/* Grid Analítico: Motivos de Perda & Funil de Conversão */}
+              <div className="reports-analytics-grid">
+                {/* CARD 1: MOTIVOS DE PERDA */}
+                <div className="analytics-card">
+                  <div className="card-header-bar">
+                    <div className="title-wrapper">
+                      <TrendingDown size={18} className="text-danger" />
+                      <h3>Diagnóstico de Motivos de Perda</h3>
+                    </div>
+                    <span className="count-tag">{reportAnalytics.lostList.length} perdas</span>
+                  </div>
+                  <p className="card-desc">Identifique os principais obstáculos apontados pelos clientes durante a negociação.</p>
+
+                  {reportAnalytics.lossReasonsArray.length === 0 ? (
+                    <div className="empty-analytics-box">
+                      <CheckCircle2 size={28} />
+                      <p>Nenhuma oportunidade perdida registrada no histórico comercial.</p>
+                    </div>
                   ) : (
-                    <div className="quotes-list-card">
-                      {oppQuotes.map(q => (
-                        <div key={q.id} className="quote-item-row">
-                          <div className="q-info">
-                            <strong>{q.quote_number}</strong>
-                            <span>{fmtDate(q.created_at)} - Vencimento: {fmtDate(q.valid_until)}</span>
+                    <div className="loss-reasons-list">
+                      {reportAnalytics.lossReasonsArray.map((item, idx) => (
+                        <div key={idx} className="loss-reason-item">
+                          <div className="loss-item-header">
+                            <span className="loss-name">{item.reason}</span>
+                            <div className="loss-values">
+                              <strong>{item.count} {item.count === 1 ? 'negócio' : 'negócios'}</strong>
+                              <span className="loss-percent">({item.percent}%)</span>
+                            </div>
                           </div>
-                          <div className="q-values">
-                            <span className="q-amount">{fmtCurrency(q.total_amount)}</span>
-                            <span className={`q-status-badge ${q.status.toLowerCase()}`}>{q.status}</span>
+                          <div className="progress-bar-wrap">
+                            <div
+                              className="progress-bar-fill red"
+                              style={{ width: `${Math.max(item.percent, 4)}%` }}
+                            />
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
-              )}
 
-              {/* ABA 3: REGISTRAR NOVA ATIVIDADE */}
-              {oppDrawerTab === 'new_activity' && (
-                <form onSubmit={handleAddQuickActivity} className="quick-activity-form">
-                  <div className="activity-type-selector">
-                    {[
-                      { id: 'CALL', label: 'Ligação', icon: Phone },
-                      { id: 'WHATSAPP', label: 'WhatsApp', icon: MessageSquare },
-                      { id: 'MEETING', label: 'Reunião', icon: Users },
-                      { id: 'EMAIL', label: 'E-mail', icon: Mail },
-                      { id: 'NOTE', label: 'Anotação', icon: FileText }
-                    ].map(t => {
-                      const Icon = t.icon;
-                      const isSelected = quickActivityForm.type === t.id;
+                {/* CARD 2: FUNIL DE CONVERSÃO POR ETAPA */}
+                <div className="analytics-card">
+                  <div className="card-header-bar">
+                    <div className="title-wrapper">
+                      <BarChart3 size={18} className="text-brand" />
+                      <h3>Volume do Funil por Estágio</h3>
+                    </div>
+                    <span className="count-tag">{opportunities.length} oportunidades</span>
+                  </div>
+                  <p className="card-desc">Distribuição de oportunidades e volume financeiro em cada fase do funil.</p>
+
+                  <div className="stage-funnel-list">
+                    {stages.map((stg) => {
+                      const stageOpps = opportunities.filter(o => o.stage === stg.code);
+                      const stageTotal = stageOpps.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+                      const totalPipeline = kpis.totalPipelineAmount || 1;
+                      const percentOfPipeline = Math.min(100, Math.round((stageTotal / totalPipeline) * 100));
+
                       return (
-                        <button
-                          key={t.id}
-                          type="button"
-                          className={`type-btn ${isSelected ? 'selected' : ''}`}
-                          onClick={() => setQuickActivityForm({ ...quickActivityForm, type: t.id })}
-                        >
-                          <Icon size={14} />
-                          <span>{t.label}</span>
-                        </button>
+                        <div key={stg.id || stg.code} className="stage-funnel-item">
+                          <div className="stage-item-header">
+                            <div className="stage-name-box">
+                              <span className="stage-dot" style={{ backgroundColor: stg.color || '#10b981' }} />
+                              <span className="stage-label">{stg.name}</span>
+                            </div>
+                            <div className="stage-meta-box">
+                              <span className="stage-count">{stageOpps.length} {stageOpps.length === 1 ? 'negócio' : 'negócios'}</span>
+                              <strong className="stage-amount">{fmtCurrency(stageTotal)}</strong>
+                            </div>
+                          </div>
+                          <div className="progress-bar-wrap">
+                            <div
+                              className="progress-bar-fill"
+                              style={{
+                                width: `${Math.max(percentOfPipeline, stageOpps.length > 0 ? 6 : 0)}%`,
+                                backgroundColor: stg.color || 'var(--accent-brand)'
+                              }}
+                            />
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
+                </div>
+              </div>
 
-                  <div className="form-group">
-                    <label>Resumo da Ação / Próximo Passo *</label>
-                    <input
-                      type="text"
-                      required
-                      className="ui-input"
-                      placeholder="Ex: Alinhamento da proposta técnica com decisor"
-                      value={quickActivityForm.summary}
-                      onChange={(e) => setQuickActivityForm({ ...quickActivityForm, summary: e.target.value })}
-                    />
+              {/* Grid Analítico Inferior: Eficiência de Canais & Fechamentos Recentes */}
+              <div className="reports-analytics-grid bottom">
+                {/* CARD 3: EFICIÊNCIA DE CANAIS DE LEADS */}
+                <div className="analytics-card">
+                  <div className="card-header-bar">
+                    <div className="title-wrapper">
+                      <Users size={18} className="text-blue" />
+                      <h3>Eficiência por Canal de Prospecção</h3>
+                    </div>
+                    <span className="count-tag">{leads.length} leads</span>
                   </div>
+                  <p className="card-desc">Avalie quais canais de atração geram contatos mais qualificados para o time.</p>
 
-                  <div className="form-group">
-                    <label>Detalhes e Observações</label>
-                    <textarea
-                      rows={3}
-                      className="ui-input"
-                      placeholder="Registre os pontos acordados, prazos ou pendências..."
-                      value={quickActivityForm.details}
-                      onChange={(e) => setQuickActivityForm({ ...quickActivityForm, details: e.target.value })}
-                    />
+                  <div className="source-efficiency-table-wrap">
+                    <table className="source-efficiency-table">
+                      <thead>
+                        <tr>
+                          <th>Canal de Origem</th>
+                          <th style={{ width: '80px', textAlign: 'center' }}>Total</th>
+                          <th style={{ width: '100px', textAlign: 'center' }}>Qualificados</th>
+                          <th style={{ width: '130px', textAlign: 'right' }}>Conversão</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportAnalytics.sourceEfficiencyArray.map((src, idx) => (
+                          <tr key={idx}>
+                            <td>
+                              <strong className="source-name">{src.source}</strong>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>{src.total}</td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span className="qualified-tag">{src.converted}</span>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              <div className="source-rate-cell">
+                                <span className="rate-text">{src.rate}%</span>
+                                <div className="mini-progress-bar">
+                                  <div
+                                    className="mini-fill"
+                                    style={{ width: `${src.rate}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
+                </div>
 
-                  <div className="form-actions">
-                    <button type="submit" className="btn-primary ui-button" disabled={isSavingActivity}>
-                      <Send size={14} />
-                      <span>{isSavingActivity ? 'Salvando...' : 'Salvar Atividade na Timeline'}</span>
-                    </button>
+                {/* CARD 4: ÚLTIMAS NEGOCIAÇÕES FINALIZADAS */}
+                <div className="analytics-card">
+                  <div className="card-header-bar">
+                    <div className="title-wrapper">
+                      <Award size={18} className="text-purple" />
+                      <h3>Últimos Fechamentos Registrados</h3>
+                    </div>
+                    <span className="count-tag">{reportAnalytics.wonList.length + reportAnalytics.lostList.length} finalizados</span>
                   </div>
-                </form>
-              )}
+                  <p className="card-desc">Registro histórico dos negócios mais recentes que atingiram conclusão.</p>
+
+                  {[...reportAnalytics.wonList, ...reportAnalytics.lostList].length === 0 ? (
+                    <div className="empty-analytics-box">
+                      <Clock size={28} />
+                      <p>Nenhuma oportunidade foi concluída ainda.</p>
+                    </div>
+                  ) : (
+                    <div className="closed-opps-list">
+                      {[...reportAnalytics.wonList, ...reportAnalytics.lostList]
+                        .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime())
+                        .slice(0, 5)
+                        .map(opp => {
+                          const isWon = opp.stage === 'WON' || stages.find(s => s.code === opp.stage)?.is_won;
+                          return (
+                            <div key={opp.id} className="closed-opp-item">
+                              <div className="closed-opp-info">
+                                <strong>{opp.title}</strong>
+                                <span>{opp.customer_name} • {fmtDate(opp.updated_at || opp.created_at)}</span>
+                              </div>
+                              <div className="closed-opp-meta">
+                                <span className="closed-amount">{fmtCurrency(opp.estimated_amount)}</span>
+                                <span className={`status-badge-pill ${isWon ? 'won' : 'lost'}`}>
+                                  {isWon ? 'GANHO' : 'PERDIDO'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
+        </main>
+      </div>
+
+
 
       {/* =================================================================== */}
       {/* MODAL DE AGENDAR ATIVIDADE GLOBAL (FASE 2)                          */}
@@ -2517,192 +3452,1632 @@ export const CRM: React.FC = () => {
       </Modal>
 
       {/* =================================================================== */}
-      {/* MODAL NOVA OPORTUNIDADE                                             */}
+      {/* OPPORTUNITY STUDIO — WORKSPACE 360º DA OPORTUNIDADE COMERCIAL       */}
       {/* =================================================================== */}
-      <Modal
-        isOpen={isOppModalOpen}
-        onClose={() => setIsOppModalOpen(false)}
-        title={convertingLead ? `Converter Lead em Oportunidade: ${convertingLead.name}` : "Nova Oportunidade Comercial"}
-        subtitle="Vincule um cliente oficial cadastrado em Vendas para o controle do pipeline"
-        size="md"
-      >
-        <form onSubmit={handleCreateOpp} className="wizard-form">
-          <CustomerPicker
-            value={oppForm.customer_id}
-            onChange={(customer: Customer | null) => {
-              if (customer) {
-                setOppForm(prev => ({
-                  ...prev,
-                  customer_id: customer.id,
-                  customer_name: customer.trade_name || customer.name
-                }));
-              } else {
-                setOppForm(prev => ({ ...prev, customer_id: '', customer_name: '' }));
-              }
-            }}
-            label="Cliente / Empresa Vinculada *"
-            placeholder="Selecione o cliente oficial ou clique em + Novo Cliente..."
-          />
+      {isQuoteModalOpen && (
+        <div className="proposal-studio-overlay">
+          <div className="proposal-studio-modal">
+            
+            {/* 1. Header Banner & Top Bar */}
+            <div className="opp-studio-header">
+              <div className="header-left">
+                <div className="breadcrumb-row">
+                  <span className="breadcrumb-root">
+                    <Briefcase size={13} />
+                    <span>CRM & Pipeline</span>
+                  </span>
+                  <span className="breadcrumb-separator">/</span>
+                  <span className="code-badge">{proposalForm.quote_number}</span>
+                </div>
+                <div className="title-row">
+                  <h2 className="studio-main-title">
+                    {proposalForm.title || 'Nova Oportunidade Comercial'}
+                  </h2>
+                  {proposalForm.customer_name && (
+                    <span className="customer-subtitle">
+                      <Building2 size={13} />
+                      <span>{proposalForm.customer_name}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
 
-          <div className="form-group">
-            <label>Título do Negócio / Oportunidade *</label>
-            <input
-              type="text"
-              required
-              className="ui-input"
-              placeholder="Ex: Fornecimento Anual de Insumos - 2026"
-              value={oppForm.title}
-              onChange={(e) => setOppForm({ ...oppForm, title: e.target.value })}
-            />
+              <div className="header-actions">
+                <button
+                  type="button"
+                  className="btn-action-primary"
+                  onClick={handleSaveProposal}
+                  disabled={isSavingQuote}
+                >
+                  <CheckCheck size={16} />
+                  <span>{isSavingQuote ? 'Salvando...' : 'Salvar Negócio'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="btn-action-win"
+                  onClick={handleConvertAndWinFromStudio}
+                  title="Marcar como Ganha e Gerar Pedido de Venda"
+                >
+                  <Award size={16} />
+                  <span>Marcar como ganho</span>
+                </button>
+
+                <div className="actions-utility-group">
+                  <button
+                    type="button"
+                    className="btn-action-icon"
+                    onClick={handleSendProposalWhatsApp}
+                    title="Enviar resumo via WhatsApp"
+                  >
+                    <MessageSquare size={14} />
+                    <span>WhatsApp</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-action-icon"
+                    onClick={handleSendProposalEmail}
+                    title="Enviar via E-mail"
+                  >
+                    <Mail size={14} />
+                    <span>E-mail</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-action-icon"
+                    onClick={handlePrintProposal}
+                    title="Gerar PDF / Imprimir"
+                  >
+                    <Printer size={14} />
+                    <span>PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-action-icon icon-only"
+                    onClick={handleDuplicateProposal}
+                    title="Duplicar Oportunidade"
+                  >
+                    <Copy size={14} />
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn-close-modal"
+                  onClick={() => {
+                    setIsQuoteModalOpen(false);
+                    setSelectedOpp(null);
+                  }}
+                  title="Fechar Workspace"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Key Metrics Bar (Essential Decision Indicators) */}
+            <div className="opp-stat-strip">
+              <div className="stat-card stat-amount">
+                <span className="stat-label">Valor Estimado</span>
+                <div className="stat-main-row">
+                  <strong className="stat-val">{fmtCurrency(proposalFinalTotal)}</strong>
+                  <span className="stat-sub-tag">{quoteItems.length} {quoteItems.length === 1 ? 'item' : 'itens'}</span>
+                </div>
+              </div>
+
+              <div className="stat-card stat-stage">
+                <span className="stat-label">Etapa no Funil</span>
+                <div className="stat-select-wrap">
+                  <select
+                    value={proposalForm.pipeline_stage}
+                    onChange={(e) => setProposalForm({ ...proposalForm, pipeline_stage: e.target.value })}
+                    className="pipeline-stage-select"
+                  >
+                    {stages.map(st => (
+                      <option key={st.id || st.code} value={st.code}>{st.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="stat-card stat-forecast">
+                <span className="stat-label">Probabilidade & Forecast</span>
+                <div className="stat-main-row">
+                  <span className="forecast-prob-badge">{proposalForm.probability_percent}%</span>
+                  <span className="forecast-amount-text">
+                    {fmtCurrency((proposalFinalTotal * (proposalForm.probability_percent || 0)) / 100)} ponderado
+                  </span>
+                </div>
+              </div>
+
+              <div className="stat-card stat-closing">
+                <span className="stat-label">Previsão Fechamento</span>
+                <div className="stat-date-row">
+                  <CalendarDays size={14} className="date-icon" />
+                  <span className="date-text">{fmtDate(proposalForm.expected_closing_date)}</span>
+                </div>
+              </div>
+
+              <div className="stat-card stat-owner">
+                <span className="stat-label">Responsável</span>
+                <div className="owner-profile-row">
+                  <div className="avatar-circle">
+                    {proposalForm.responsible_name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase()}
+                  </div>
+                  <div className="owner-meta">
+                    <span className="owner-name">{proposalForm.responsible_name}</span>
+                    <span className="owner-team">{proposalForm.sales_team}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Main 2-Column Workspace */}
+            <div className="proposal-workspace-grid">
+              
+              {/* Left Column (70%) - Tabs & Enrichment Forms */}
+              <div className="proposal-main-pane">
+                
+                {/* Modern Pill Tabs */}
+                <div className="opp-nav-tabs">
+                  <button
+                    type="button"
+                    className={`nav-tab-item ${proposalActiveTab === 'general' ? 'active' : ''}`}
+                    onClick={() => setProposalActiveTab('general')}
+                  >
+                    <FileText size={15} />
+                    <span>Dados Gerais</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`nav-tab-item ${proposalActiveTab === 'customer' ? 'active' : ''}`}
+                    onClick={() => setProposalActiveTab('customer')}
+                  >
+                    <Building2 size={15} />
+                    <span>Cliente & LTV 360º</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`nav-tab-item ${proposalActiveTab === 'quotes' ? 'active' : ''}`}
+                    onClick={() => setProposalActiveTab('quotes')}
+                  >
+                    <FileCheck size={15} />
+                    <span>Cotações & Propostas</span>
+                    <span className="tab-count-badge">{oppQuotations.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`nav-tab-item ${proposalActiveTab === 'items' ? 'active' : ''}`}
+                    onClick={() => setProposalActiveTab('items')}
+                  >
+                    <Package size={15} />
+                    <span>Itens & Serviços</span>
+                    <span className="tab-count-badge">{quoteItems.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`nav-tab-item ${proposalActiveTab === 'terms' ? 'active' : ''}`}
+                    onClick={() => setProposalActiveTab('terms')}
+                  >
+                    <CreditCard size={15} />
+                    <span>Condições Comerciais</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`nav-tab-item ${proposalActiveTab === 'approvals' ? 'active' : ''}`}
+                    onClick={() => setProposalActiveTab('approvals')}
+                  >
+                    <ShieldCheck size={15} />
+                    <span>Aprovações</span>
+                  </button>
+                </div>
+
+                {/* Tab 1: Dados Gerais */}
+                {proposalActiveTab === 'general' && (
+                  <div className="opp-tab-content">
+                    
+                    {/* Card 1: Identificação & Cliente */}
+                    <div className="form-section-card">
+                      <div className="card-header">
+                        <Building2 size={16} className="card-header-icon" />
+                        <div>
+                          <h4>Identificação do Negócio & Cliente</h4>
+                          <p>Defina o título da oportunidade e selecione a conta do cliente</p>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        <div className="form-grid-2">
+                          <div className="form-group span-2">
+                            <label>Título da Oportunidade / Negócio *</label>
+                            <div className="input-with-icon-box">
+                              <Briefcase size={16} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input lg-input has-prefix-icon"
+                                value={proposalForm.title}
+                                onChange={(e) => setProposalForm({ ...proposalForm, title: e.target.value })}
+                                placeholder="Ex: Implantação de CFTV e Rede Estruturada - Unidade Sul"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group span-2">
+                            <CustomerPicker
+                              value={proposalForm.customer_id}
+                              onChange={(customer: Customer | null) => {
+                                if (customer) {
+                                  setProposalForm(prev => ({
+                                    ...prev,
+                                    customer_id: customer.id,
+                                    customer_name: customer.trade_name || customer.name,
+                                    customer_document: customer.document || '',
+                                    customer_email: customer.email || '',
+                                    customer_phone: customer.phone || ''
+                                  }));
+                                } else {
+                                  setProposalForm(prev => ({ ...prev, customer_id: '', customer_name: '' }));
+                                }
+                              }}
+                              label="Empresa / Cliente Vinculado *"
+                              placeholder="Selecione o cliente oficial ou clique para cadastrar..."
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>Contato Principal na Empresa</label>
+                            <div className="input-with-icon-box">
+                              <User size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.contact_person}
+                                onChange={(e) => setProposalForm({ ...proposalForm, contact_person: e.target.value })}
+                                placeholder="Ex: Carlos Mendes"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Origem do Negócio</label>
+                            <div className="select-with-icon-box">
+                              <Sparkles size={15} className="input-prefix-icon" />
+                              <select
+                                value={proposalForm.source}
+                                onChange={(e) => setProposalForm({ ...proposalForm, source: e.target.value })}
+                                className="ui-input custom-styled-select has-prefix-icon"
+                              >
+                                <option value="Indicação">Indicação</option>
+                                <option value="Site / Formulário">Site / Formulário</option>
+                                <option value="Contato Telefônico">Contato Telefônico</option>
+                                <option value="Prospecção Ativa">Prospecção Ativa</option>
+                                <option value="Evento / Feira">Evento / Feira</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 2: Gestão Comercial & Prazos */}
+                    <div className="form-section-card">
+                      <div className="card-header">
+                        <TrendingUp size={16} className="card-header-icon" />
+                        <div>
+                          <h4>Planejamento Comercial & Metas</h4>
+                          <p>Responsável, equipe, prazos previstos e probabilidades</p>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        <div className="form-grid-3">
+                          <div className="form-group">
+                            <label>Vendedor Responsável</label>
+                            <div className="input-with-icon-box">
+                              <UserCheck size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.responsible_name}
+                                onChange={(e) => setProposalForm({ ...proposalForm, responsible_name: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Equipe Comercial</label>
+                            <div className="input-with-icon-box">
+                              <Users size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.sales_team}
+                                onChange={(e) => setProposalForm({ ...proposalForm, sales_team: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Nível de Prioridade</label>
+                            <div className="priority-pills-container">
+                              {[
+                                { id: 'HIGH', label: 'Alta', dotColor: '#ef4444' },
+                                { id: 'MEDIUM', label: 'Média', dotColor: '#f59e0b' },
+                                { id: 'LOW', label: 'Baixa', dotColor: '#10b981' }
+                              ].map(pr => (
+                                <button
+                                  key={pr.id}
+                                  type="button"
+                                  className={`priority-pill-btn ${proposalForm.priority === pr.id ? 'active' : ''} ${pr.id.toLowerCase()}`}
+                                  onClick={() => setProposalForm({ ...proposalForm, priority: pr.id as any })}
+                                >
+                                  <span className="priority-indicator-dot" style={{ backgroundColor: pr.dotColor }} />
+                                  <span>{pr.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Data de Criação</label>
+                            <div className="input-with-icon-box">
+                              <Calendar size={15} className="input-prefix-icon" />
+                              <input
+                                type="date"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.creation_date}
+                                onChange={(e) => setProposalForm({ ...proposalForm, creation_date: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Previsão de Fechamento</label>
+                            <div className="input-with-icon-box">
+                              <CalendarDays size={15} className="input-prefix-icon" />
+                              <input
+                                type="date"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.expected_closing_date}
+                                onChange={(e) => setProposalForm({ ...proposalForm, expected_closing_date: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <div className="label-with-prob-val">
+                              <label>Probabilidade de Fechamento</label>
+                              <span className="prob-display-badge">{proposalForm.probability_percent}%</span>
+                            </div>
+                            <div className="custom-slider-container">
+                              <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="5"
+                                value={proposalForm.probability_percent}
+                                onChange={(e) => setProposalForm({ ...proposalForm, probability_percent: Number(e.target.value) })}
+                                className="custom-range-slider"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 3: Categorização & Escopo */}
+                    <div className="form-section-card">
+                      <div className="card-header">
+                        <Tag size={16} className="card-header-icon" />
+                        <div>
+                          <h4>Tags & Escopo do Projeto</h4>
+                          <p>Categorias de produto e detalhamento técnico do fornecimento</p>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        {/* Tags */}
+                        <div className="form-group">
+                          <label>Tags & Categorias Comerciais</label>
+                          <div className="modern-tags-container">
+                            <div className="tag-list">
+                              {proposalForm.tags.map(tag => (
+                                <span key={tag} className="modern-tag-pill">
+                                  <Tag size={12} />
+                                  <span>{tag}</span>
+                                  <button
+                                    type="button"
+                                    className="btn-remove-tag"
+                                    onClick={() => handleRemoveTag(tag)}
+                                    title="Remover tag"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                            <div className="tag-input-box">
+                              <input
+                                type="text"
+                                placeholder="Digitar tag (ex: CFTV, Fibra, Servidor)..."
+                                value={tagInput}
+                                onChange={(e) => setTagInput(e.target.value)}
+                                onKeyDown={handleAddTag}
+                                className="ui-input tag-field"
+                              />
+                              <button
+                                type="button"
+                                className="btn-tag-add"
+                                onClick={handleAddTag}
+                              >
+                                <Plus size={14} />
+                                <span>Adicionar</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Escopo */}
+                        <div className="form-group" style={{ marginTop: '0.5rem' }}>
+                          <div className="label-with-counter">
+                            <label>Escopo Técnico & Detalhes da Negociação</label>
+                            <span className="char-counter">{proposalForm.notes.length} / 1000</span>
+                          </div>
+                          <textarea
+                            rows={4}
+                            className="ui-input modern-textarea"
+                            placeholder="Descreva as especificações técnicas, escopo acordado com o decisor, necessidades e detalhes operacionais..."
+                            value={proposalForm.notes}
+                            onChange={(e) => setProposalForm({ ...proposalForm, notes: e.target.value })}
+                            maxLength={1000}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
+                {/* Tab 2: Cliente & LTV 360º */}
+                {proposalActiveTab === 'customer' && (
+                  <div className="opp-tab-content">
+                    
+                    {/* Card de Dados Cadastrais */}
+                    <div className="form-section-card">
+                      <div className="card-header">
+                        <Building2 size={16} className="card-header-icon" />
+                        <div>
+                          <h4>Dados Cadastrais do Cliente</h4>
+                          <p>Informações de contato e faturamento corporativo</p>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        <div className="form-grid-2">
+                          <div className="form-group">
+                            <label>Razão Social / Nome Fantasia</label>
+                            <div className="input-with-icon-box">
+                              <Building2 size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.customer_name}
+                                onChange={(e) => setProposalForm({ ...proposalForm, customer_name: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>CNPJ / CPF</label>
+                            <div className="input-with-icon-box">
+                              <FileText size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                placeholder="00.000.000/0000-00"
+                                value={proposalForm.customer_document}
+                                onChange={(e) => setProposalForm({ ...proposalForm, customer_document: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="form-grid-3" style={{ marginTop: '0.85rem' }}>
+                          <div className="form-group">
+                            <label>E-mail Comercial</label>
+                            <div className="input-with-icon-box">
+                              <Mail size={15} className="input-prefix-icon" />
+                              <input
+                                type="email"
+                                className="ui-input has-prefix-icon"
+                                placeholder="contato@empresa.com.br"
+                                value={proposalForm.customer_email}
+                                onChange={(e) => setProposalForm({ ...proposalForm, customer_email: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Telefone / WhatsApp</label>
+                            <div className="input-with-action">
+                              <div className="input-with-icon-box" style={{ flex: 1 }}>
+                                <Phone size={15} className="input-prefix-icon" />
+                                <input
+                                  type="text"
+                                  className="ui-input has-prefix-icon"
+                                  placeholder="(11) 99999-9999"
+                                  value={proposalForm.customer_phone}
+                                  onChange={(e) => setProposalForm({ ...proposalForm, customer_phone: e.target.value })}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className="btn-phone-quick"
+                                onClick={() => handleOpenWhatsApp(proposalForm.customer_phone, proposalForm.customer_name)}
+                                title="Abrir conversa no WhatsApp"
+                              >
+                                <MessageSquare size={15} />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Contato Principal</label>
+                            <div className="input-with-icon-box">
+                              <User size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.contact_person}
+                                onChange={(e) => setProposalForm({ ...proposalForm, contact_person: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Resumo Financeiro e LTV 360 */}
+                    <div className="form-section-card">
+                      <div className="card-header">
+                        <TrendingUp size={16} className="card-header-icon" />
+                        <div>
+                          <h4>Indicadores de LTV & Relacionamento</h4>
+                          <p>Histórico financeiro consolidado com a conta do cliente</p>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        <div className="ltv-stat-grid">
+                          <div className="ltv-box ltv-won">
+                            <span className="box-label">LTV Total Faturado</span>
+                            <strong className="box-value">{fmtCurrency(selectedOppCustomerLTV.totalLTV)}</strong>
+                            <span className="box-sub">{selectedOppCustomerLTV.wonCount} negócios fechados</span>
+                          </div>
+                          <div className="ltv-box ltv-open">
+                            <span className="box-label">Em Aberto no Funil</span>
+                            <strong className="box-value">
+                              {fmtCurrency(selectedOppCustomerLTV.customerOpps.filter(o => o.stage !== 'WON' && o.stage !== 'LOST').reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0))}
+                            </strong>
+                            <span className="box-sub">{selectedOppCustomerLTV.openCount} negociações ativas</span>
+                          </div>
+                          <div className="ltv-box ltv-total">
+                            <span className="box-label">Histórico de Oportunidades</span>
+                            <strong className="box-value">{selectedOppCustomerLTV.customerOpps.length}</strong>
+                            <span className="box-sub">Total de negócios com a empresa</span>
+                          </div>
+                        </div>
+
+                        {selectedOppCustomerLTV.customerOpps.length > 0 && (
+                          <div className="customer-opps-wrapper">
+                            <h5 className="sub-title">Negociações com este Cliente</h5>
+                            <div className="customer-opps-list">
+                              {selectedOppCustomerLTV.customerOpps.map(opp => {
+                                const stg = stages.find(s => s.code === opp.stage);
+                                const isCurrent = opp.id === selectedOpp?.id;
+                                return (
+                                  <div key={opp.id} className={`cust-opp-row ${isCurrent ? 'is-current' : ''}`}>
+                                    <div className="opp-info">
+                                      <div className="title-row">
+                                        <strong>{opp.title}</strong>
+                                        {isCurrent && <span className="current-tag">Negócio Atual</span>}
+                                      </div>
+                                      <span className="date-sub">Criado em {fmtDate(opp.created_at)}</span>
+                                    </div>
+                                    <div className="opp-vals">
+                                      <span className="amount">{fmtCurrency(opp.estimated_amount)}</span>
+                                      <span
+                                        className="stage-pill"
+                                        style={{
+                                          backgroundColor: stg?.color ? `${stg.color}22` : 'var(--accent-brand-subtle)',
+                                          color: stg?.color || 'var(--accent-brand)'
+                                        }}
+                                      >
+                                        {stg?.name || opp.stage}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
+                {/* Tab: Propostas Comerciais & Cotações Vinculadas */}
+                {proposalActiveTab === 'quotes' && (
+                  <div className="opp-tab-content">
+                    <div className="form-section-card">
+                      <div className="card-header quotes-header-flex">
+                        <div className="header-left-flex">
+                          <FileCheck size={18} className="card-header-icon" />
+                          <div>
+                            <h4>Propostas Comerciais & Cotações Vinculadas</h4>
+                            <p>Histórico de orçamentos e versões de propostas geradas para esta oportunidade</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-create-quote-primary ui-button ui-button--primary ui-button--sm"
+                          onClick={handleOpenNewQuoteModal}
+                        >
+                          <Plus size={14} />
+                          <span>Nova Cotação / Versão</span>
+                        </button>
+                      </div>
+
+                      <div className="card-body">
+                        {oppQuotations.length === 0 ? (
+                          <div className="empty-quotes-state">
+                            <div className="empty-icon-wrap">
+                              <FileCheck size={36} />
+                            </div>
+                            <h4>Nenhuma Cotação Formal Registrada</h4>
+                            <p>Crie versões de orçamentos detalhadas com itens do catálogo, descontos, prazos e condições para envio ao cliente.</p>
+                            <button
+                              type="button"
+                              className="btn-create-first-quote ui-button ui-button--primary ui-button--sm"
+                              onClick={handleOpenNewQuoteModal}
+                            >
+                              <Plus size={14} />
+                              <span>Criar Primeira Cotação</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="quotes-cards-grid">
+                            {oppQuotations.map((q, idx) => {
+                              const isMain = activeQuoteId === q.id || (idx === 0 && !activeQuoteId);
+                              const quoteTotal = q.items ? q.items.reduce((acc: number, it: any) => acc + ((it.quantity * it.unit_price) - (it.discount_amount || 0)), 0) : 0;
+                              return (
+                                <div key={q.id} className={`quote-item-card ${isMain ? 'is-main-quote' : ''}`}>
+                                  <div className="quote-card-header">
+                                    <div className="quote-title-box">
+                                      <div className="quote-id-row">
+                                        <span className="quote-code-badge">{q.quote_number}</span>
+                                        {isMain && <span className="main-quote-tag">★ Cotação Principal</span>}
+                                      </div>
+                                      <h4 className="quote-title">{(q as any).title || `Proposta Comercial v${oppQuotations.length - idx}`}</h4>
+                                    </div>
+                                    <span className={`quote-status-badge status-${(q.status || 'DRAFT').toLowerCase()}`}>
+                                      {q.status === 'APPROVED' ? '✓ Aprovada' : (q.status === 'SENT' ? '✉️ Enviada' : (q.status === 'REJECTED' ? '✕ Recusada' : '📝 Rascunho'))}
+                                    </span>
+                                  </div>
+
+                                  <div className="quote-card-meta-grid">
+                                    <div className="meta-cell">
+                                      <span className="meta-label">Valor Total</span>
+                                      <strong className="meta-val price-val">{fmtCurrency(quoteTotal)}</strong>
+                                    </div>
+                                    <div className="meta-cell">
+                                      <span className="meta-label">Itens Cotados</span>
+                                      <strong className="meta-val">{q.items?.length || 0} produtos</strong>
+                                    </div>
+                                    <div className="meta-cell">
+                                      <span className="meta-label">Validade</span>
+                                      <strong className="meta-val">{fmtDate(q.valid_until)}</strong>
+                                    </div>
+                                    <div className="meta-cell">
+                                      <span className="meta-label">Condição</span>
+                                      <strong className="meta-val">{q.payment_terms || '30 DDL'}</strong>
+                                    </div>
+                                  </div>
+
+                                  {q.notes && (
+                                    <p className="quote-card-notes">
+                                      <strong>Obs:</strong> {q.notes}
+                                    </p>
+                                  )}
+
+                                  <div className="quote-card-actions">
+                                    {!isMain && (
+                                      <button
+                                        type="button"
+                                        className="btn-set-main"
+                                        onClick={() => handleSetMainQuote(q)}
+                                        title="Definir itens e valor como os principais do negócio"
+                                      >
+                                        <CheckCheck size={13} />
+                                        <span>Tornar Principal</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="btn-edit-quote"
+                                      onClick={() => handleOpenEditQuoteModal(q)}
+                                    >
+                                      <ExternalLink size={13} />
+                                      <span>Editar Cotação</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 3: Itens da Oportunidade & Catálogo */}
+                {proposalActiveTab === 'items' && (
+                  <div className="opp-tab-content">
+                    <div className="form-section-card">
+                      <div className="card-header flex-between">
+                        <div className="header-left-flex">
+                          <Package size={16} className="card-header-icon" />
+                          <div>
+                            <h4>Itens, Produtos & Serviços Cotados</h4>
+                            <p>Adicione itens do catálogo de materiais ou serviços sob medida</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-add-item ui-button ui-button--primary ui-button--sm"
+                          onClick={handleAddQuoteItem}
+                        >
+                          <Plus size={14} />
+                          <span>Adicionar Item</span>
+                        </button>
+                      </div>
+
+                      <div className="card-body">
+                        {quoteItems.length === 0 ? (
+                          <div className="empty-items-box">
+                            <Package size={32} />
+                            <p>Nenhum item inserido na oportunidade.</p>
+                            <button
+                              type="button"
+                              className="ui-button ui-button--secondary ui-button--sm"
+                              onClick={handleAddQuoteItem}
+                            >
+                              <Plus size={14} /> Adicionar Primeiro Item
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="proposal-items-table-wrap">
+                            <table className="proposal-items-table">
+                              <thead>
+                                <tr>
+                                  <th style={{ width: '40px' }}>#</th>
+                                  <th>Descrição / Produto</th>
+                                  <th style={{ width: '90px' }}>Qtd</th>
+                                  <th style={{ width: '130px' }}>Valor Unitário</th>
+                                  <th style={{ width: '110px' }}>Desconto (R$)</th>
+                                  <th style={{ width: '130px' }}>Total</th>
+                                  <th style={{ width: '40px', textAlign: 'center' }}></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {quoteItems.map((item, idx) => {
+                                  const itemSub = (item.quantity * item.unit_price) - (item.discount_amount || 0);
+                                  return (
+                                    <tr key={idx}>
+                                      <td className="row-num">{idx + 1}</td>
+                                      <td>
+                                        <select
+                                          value={item.product_id}
+                                          onChange={(e) => handleQuoteItemChange(idx, 'product_id', e.target.value)}
+                                          className="ui-input custom-styled-select item-select"
+                                        >
+                                          {products.map(p => (
+                                            <option key={p.id} value={p.id}>
+                                              {p.name} {p.sku ? `(${p.sku})` : ''}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </td>
+                                      <td>
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          value={item.quantity}
+                                          onChange={(e) => handleQuoteItemChange(idx, 'quantity', e.target.value)}
+                                          className="ui-input text-center"
+                                        />
+                                      </td>
+                                      <td>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          value={item.unit_price}
+                                          onChange={(e) => handleQuoteItemChange(idx, 'unit_price', e.target.value)}
+                                          className="ui-input"
+                                        />
+                                      </td>
+                                      <td>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          value={item.discount_amount}
+                                          onChange={(e) => handleQuoteItemChange(idx, 'discount_amount', e.target.value)}
+                                          className="ui-input text-danger"
+                                        />
+                                      </td>
+                                      <td className="row-total">
+                                        <strong>{fmtCurrency(Math.max(0, itemSub))}</strong>
+                                      </td>
+                                      <td style={{ textAlign: 'center' }}>
+                                        <button
+                                          type="button"
+                                          className="btn-remove-item"
+                                          onClick={() => handleRemoveQuoteItem(idx)}
+                                          title="Remover item"
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {/* Financial Summary Box */}
+                        <div className="proposal-financial-summary-panel">
+                          <div className="summary-rows">
+                            <div className="fin-row">
+                              <span>Subtotal dos itens:</span>
+                              <strong>{fmtCurrency(proposalItemsSubtotal)}</strong>
+                            </div>
+                            <div className="fin-row discount-row">
+                              <span>Descontos comerciais:</span>
+                              <strong className="text-danger">- {fmtCurrency(proposalTotalDiscount)}</strong>
+                            </div>
+                            <div className="fin-row">
+                              <span>Impostos estimados:</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={proposalForm.tax_amount}
+                                onChange={(e) => setProposalForm({ ...proposalForm, tax_amount: Number(e.target.value) })}
+                                className="ui-input mini-input"
+                                placeholder="0,00"
+                              />
+                            </div>
+                            <div className="fin-row">
+                              <span>Frete / Deslocamento:</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={proposalForm.freight_amount}
+                                onChange={(e) => setProposalForm({ ...proposalForm, freight_amount: Number(e.target.value) })}
+                                className="ui-input mini-input"
+                                placeholder="0,00"
+                              />
+                            </div>
+                            <div className="fin-row total-highlight-row">
+                              <span>Valor Total da Oportunidade:</span>
+                              <strong className="final-price">{fmtCurrency(proposalFinalTotal)}</strong>
+                            </div>
+                          </div>
+                        </div>
+
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 4: Condições Comerciais */}
+                {proposalActiveTab === 'terms' && (
+                  <div className="opp-tab-content">
+                    <div className="form-section-card">
+                      <div className="card-header">
+                        <CreditCard size={16} className="card-header-icon" />
+                        <div>
+                          <h4>Condições Comerciais & Faturamento</h4>
+                          <p>Defina as modalidades de pagamento, prazos de entrega e garantias</p>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        <div className="form-grid-3">
+                          <div className="form-group">
+                            <label>Forma de Pagamento *</label>
+                            <div className="select-with-icon-box">
+                              <CreditCard size={15} className="input-prefix-icon" />
+                              <select
+                                value={proposalForm.payment_method}
+                                onChange={(e) => setProposalForm({ ...proposalForm, payment_method: e.target.value })}
+                                className="ui-input custom-styled-select has-prefix-icon"
+                              >
+                                <option value="Transferência Bancária">Transferência Bancária (TED/Pix)</option>
+                                <option value="Boleto Bancário">Boleto Bancário</option>
+                                <option value="Faturado 30 DDL">Faturado 30 DDL</option>
+                                <option value="Faturado 30/60/90 DDL">Faturado 30/60/90 DDL</option>
+                                <option value="Cartão de Crédito Corporativo">Cartão de Crédito Corporativo</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Parcelamento / Entrada</label>
+                            <div className="input-with-icon-box">
+                              <DollarSign size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                placeholder="Ex: 30% entrada + 2x boletos"
+                                value={proposalForm.installment_terms}
+                                onChange={(e) => setProposalForm({ ...proposalForm, installment_terms: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Prazo de Entrega</label>
+                            <div className="input-with-icon-box">
+                              <Clock size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                placeholder="Ex: 15 dias úteis"
+                                value={proposalForm.delivery_deadline}
+                                onChange={(e) => setProposalForm({ ...proposalForm, delivery_deadline: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="form-grid-3" style={{ marginTop: '0.85rem' }}>
+                          <div className="form-group">
+                            <label>Validade da Proposta</label>
+                            <div className="input-with-icon-box">
+                              <Calendar size={15} className="input-prefix-icon" />
+                              <input
+                                type="date"
+                                className="ui-input has-prefix-icon"
+                                value={proposalForm.valid_until}
+                                onChange={(e) => setProposalForm({ ...proposalForm, valid_until: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Garantia dos Equipamentos / Serviços</label>
+                            <div className="input-with-icon-box">
+                              <ShieldCheck size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                placeholder="Ex: 12 meses"
+                                value={proposalForm.warranty_terms}
+                                onChange={(e) => setProposalForm({ ...proposalForm, warranty_terms: e.target.value })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>SLA & Suporte Técnico</label>
+                            <div className="input-with-icon-box">
+                              <Zap size={15} className="input-prefix-icon" />
+                              <input
+                                type="text"
+                                className="ui-input has-prefix-icon"
+                                placeholder="Ex: 8x5 - Atendimento Remoto"
+                                value={proposalForm.sla_support}
+                                onChange={(e) => setProposalForm({ ...proposalForm, sla_support: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="form-group" style={{ marginTop: '0.85rem' }}>
+                          <label>Condições Especiais e Cláusulas Comerciais</label>
+                          <textarea
+                            rows={3}
+                            className="ui-input modern-textarea"
+                            placeholder="Descreva detalhes de frete, instalação, alçadas e responsabilidades do cliente..."
+                            value={proposalForm.special_conditions}
+                            onChange={(e) => setProposalForm({ ...proposalForm, special_conditions: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="acceptance-toggle-box" style={{ marginTop: '1rem' }}>
+                          <div className="toggle-left">
+                            <ShieldCheck size={20} className="shield-icon" />
+                            <div>
+                              <strong>Aceite Digital & Validação Jurídica</strong>
+                              <p>Habilita link de assinatura digital para envio e aprovação do cliente via portal online.</p>
+                            </div>
+                          </div>
+                          <label className="switch-control">
+                            <input
+                              type="checkbox"
+                              checked={proposalForm.digital_acceptance}
+                              onChange={(e) => setProposalForm({ ...proposalForm, digital_acceptance: e.target.checked })}
+                            />
+                            <span className="slider-round"></span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 5: Aprovações & Governança */}
+                {proposalActiveTab === 'approvals' && (
+                  <div className="opp-tab-content">
+                    <div className="form-section-card">
+                      <div className="card-header flex-between">
+                        <div className="header-left-flex">
+                          <ShieldCheck size={18} className="card-header-icon" />
+                          <div>
+                            <h4>Alçadas de Aprovação & Governança</h4>
+                            <p>Status das validações de política comercial, margem e análise técnica</p>
+                          </div>
+                        </div>
+                        <div className="gov-progress-pill">
+                          <span className="gov-progress-label">2 de 3 Aprovadas</span>
+                          <div className="gov-progress-bar">
+                            <div className="gov-progress-fill" style={{ width: '66%' }} />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="card-body">
+                        <div className="gov-levels-list">
+                          
+                          {/* Alçada 1 */}
+                          <div className="gov-level-card approved">
+                            <div className="gov-level-header">
+                              <div className="gov-level-type">
+                                <div className="gov-icon-badge icon-green">
+                                  <DollarSign size={16} />
+                                </div>
+                                <div className="gov-level-meta">
+                                  <strong>Aprovação Comercial & Margem</strong>
+                                  <span className="gov-level-desc">Validação de preço de tabela e desconto concedido</span>
+                                </div>
+                              </div>
+                              <span className="gov-status-tag tag-approved">
+                                <CheckCircle2 size={13} />
+                                <span>Aprovado</span>
+                              </span>
+                            </div>
+
+                            <div className="gov-level-body">
+                              <div className="gov-detail-grid">
+                                <div className="gov-detail-item">
+                                  <span className="gov-detail-label">Responsável / Alçada</span>
+                                  <div className="gov-approver-row">
+                                    <div className="approver-avatar">RF</div>
+                                    <span className="approver-name">Gerente de Vendas (Roberto Farias)</span>
+                                  </div>
+                                </div>
+
+                                <div className="gov-detail-item">
+                                  <span className="gov-detail-label">Data da Decisão</span>
+                                  <div className="gov-date-row">
+                                    <Calendar size={13} />
+                                    <span>{fmtDate(proposalForm.creation_date)} às 14:30</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="gov-comment-box">
+                                <span className="comment-label">Parecer Comercial:</span>
+                                <p className="comment-text">Margem e desconto de 5% dentro da política comercial aprovada para clientes de telecom.</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Alçada 2 */}
+                          <div className="gov-level-card approved">
+                            <div className="gov-level-header">
+                              <div className="gov-level-type">
+                                <div className="gov-icon-badge icon-blue">
+                                  <CreditCard size={16} />
+                                </div>
+                                <div className="gov-level-meta">
+                                  <strong>Aprovação Financeira & Crédito</strong>
+                                  <span className="gov-level-desc">Análise de limite corporativo e prazo faturado 30 DDL</span>
+                                </div>
+                              </div>
+                              <span className="gov-status-tag tag-approved">
+                                <CheckCircle2 size={13} />
+                                <span>Aprovado</span>
+                              </span>
+                            </div>
+
+                            <div className="gov-level-body">
+                              <div className="gov-detail-grid">
+                                <div className="gov-detail-item">
+                                  <span className="gov-detail-label">Responsável / Alçada</span>
+                                  <div className="gov-approver-row">
+                                    <div className="approver-avatar avatar-blue">AP</div>
+                                    <span className="approver-name">Controladoria & Crédito (Ana Paula)</span>
+                                  </div>
+                                </div>
+
+                                <div className="gov-detail-item">
+                                  <span className="gov-detail-label">Data da Decisão</span>
+                                  <div className="gov-date-row">
+                                    <Calendar size={13} />
+                                    <span>{fmtDate(proposalForm.creation_date)} às 16:15</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="gov-comment-box">
+                                <span className="comment-label">Parecer Financeiro:</span>
+                                <p className="comment-text">Limite de crédito do cliente verificado e aprovado. Condição faturada liberada.</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Alçada 3 */}
+                          <div className="gov-level-card pending">
+                            <div className="gov-level-header">
+                              <div className="gov-level-type">
+                                <div className="gov-icon-badge icon-amber">
+                                  <Zap size={16} />
+                                </div>
+                                <div className="gov-level-meta">
+                                  <strong>Aprovação Técnica & Engenharia</strong>
+                                  <span className="gov-level-desc">Viabilidade técnica de infraestrutura física e materiais</span>
+                                </div>
+                              </div>
+                              <span className="gov-status-tag tag-pending">
+                                <Clock size={13} />
+                                <span>Aguardando Vistoria</span>
+                              </span>
+                            </div>
+
+                            <div className="gov-level-body">
+                              <div className="gov-detail-grid">
+                                <div className="gov-detail-item">
+                                  <span className="gov-detail-label">Responsável / Alçada</span>
+                                  <div className="gov-approver-row">
+                                    <div className="approver-avatar avatar-amber">MS</div>
+                                    <span className="approver-name">Líder de Projetos (Marcos Silva)</span>
+                                  </div>
+                                </div>
+
+                                <div className="gov-detail-item">
+                                  <span className="gov-detail-label">Data da Decisão</span>
+                                  <div className="gov-date-row">
+                                    <Clock size={13} />
+                                    <span className="text-warning">Em análise na unidade</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="gov-comment-box">
+                                <span className="comment-label">Instrução Técnica:</span>
+                                <p className="comment-text">Validar disponibilidade de passagem de cabeamento na infraestrutura física do rack central.</p>
+                              </div>
+                            </div>
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+
+              {/* Right Column (30%) - Real-Time Follow-up & Activity Sidebar */}
+              <div className="opp-sidebar-pane">
+                
+                {/* Header da Sidebar */}
+                <div className="sidebar-header-bar">
+                  <div className="header-title-box">
+                    <Clock size={16} className="title-icon" />
+                    <h4>Follow-ups & Atividades</h4>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-add-activity-pill"
+                    onClick={() => setIsAddingSidebarActivity(!isAddingSidebarActivity)}
+                  >
+                    <Plus size={13} />
+                    <span>{isAddingSidebarActivity ? 'Fechar' : 'Nova Ação'}</span>
+                  </button>
+                </div>
+
+                {/* Inline Activity Scheduler Form */}
+                {isAddingSidebarActivity && (
+                  <form onSubmit={handleSaveSidebarActivity} className="modern-inline-activity-card">
+                    <div className="activity-type-chips">
+                      {[
+                        { id: 'CALL', label: 'Ligação', icon: Phone },
+                        { id: 'WHATSAPP', label: 'WhatsApp', icon: MessageSquare },
+                        { id: 'MEETING', label: 'Reunião', icon: Users },
+                        { id: 'EMAIL', label: 'E-mail', icon: Mail },
+                        { id: 'NOTE', label: 'Nota', icon: FileText }
+                      ].map(t => {
+                        const Icon = t.icon;
+                        const isSelected = sidebarActivityForm.type === t.id;
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            className={`type-chip chip-${t.id.toLowerCase()} ${isSelected ? 'selected' : ''}`}
+                            onClick={() => setSidebarActivityForm({ ...sidebarActivityForm, type: t.id as any })}
+                          >
+                            <Icon size={12} />
+                            <span>{t.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="input-with-icon-box">
+                      <FileText size={14} className="input-prefix-icon" />
+                      <input
+                        type="text"
+                        placeholder="Resumo da ação (ex: Ligar para alinhar proposta)..."
+                        value={sidebarActivityForm.summary}
+                        onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, summary: e.target.value })}
+                        className="ui-input has-prefix-icon sm"
+                        required
+                      />
+                    </div>
+
+                    <div className="date-time-row">
+                      <div className="input-with-icon-box">
+                        <Calendar size={14} className="input-prefix-icon" />
+                        <input
+                          type="date"
+                          value={sidebarActivityForm.date}
+                          onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, date: e.target.value })}
+                          className="ui-input has-prefix-icon sm"
+                        />
+                      </div>
+                      <div className="input-with-icon-box">
+                        <Clock size={14} className="input-prefix-icon" />
+                        <input
+                          type="time"
+                          value={sidebarActivityForm.time}
+                          onChange={(e) => setSidebarActivityForm({ ...sidebarActivityForm, time: e.target.value })}
+                          className="ui-input has-prefix-icon sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="activity-card-actions">
+                      <button
+                        type="button"
+                        className="btn-cancel-action"
+                        onClick={() => setIsAddingSidebarActivity(false)}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="btn-submit-action"
+                      >
+                        <Plus size={13} />
+                        <span>Agendar Ação</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Próxima Ação Destaque */}
+                <div className="modern-spotlight-card">
+                  <div className="spotlight-top">
+                    <span className="spotlight-tag">Próxima Ação</span>
+                    <span className="priority-tag">Prioritária</span>
+                  </div>
+                  <div className="spotlight-content">
+                    <div className="icon-wrapper">
+                      <Phone size={15} />
+                    </div>
+                    <div className="info-wrapper">
+                      <strong>Follow-up com Decisor</strong>
+                      <span className="due-time">{fmtDate(proposalForm.expected_closing_date)} às 10:00</span>
+                      <span className="agent-text">{proposalForm.responsible_name}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Linha do Tempo Conectada */}
+                <div className="modern-timeline-container">
+                  <div className="timeline-title-row">
+                    <span>Histórico de Atividades</span>
+                    <span className="count-tag">{oppInteractions.length}</span>
+                  </div>
+
+                  <div className="timeline-track">
+                    {oppInteractions.length > 0 ? (
+                      oppInteractions.map((act) => (
+                        <div key={act.id} className="timeline-entry">
+                          <div className={`timeline-node ${act.interaction_type.toLowerCase()}`}>
+                            {act.interaction_type === 'CALL' && <Phone size={12} />}
+                            {act.interaction_type === 'WHATSAPP' && <MessageSquare size={12} />}
+                            {act.interaction_type === 'MEETING' && <Users size={12} />}
+                            {act.interaction_type === 'EMAIL' && <Mail size={12} />}
+                            {act.interaction_type === 'NOTE' && <FileText size={12} />}
+                          </div>
+                          <div className="timeline-card">
+                            <div className="card-top">
+                              <span className="card-title">{act.summary}</span>
+                              <span className="card-time">{fmtDate(act.interaction_date || act.created_at)}</span>
+                            </div>
+                            {act.details && <p className="card-details">{act.details}</p>}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <>
+                        <div className="timeline-entry">
+                          <div className="timeline-node call">
+                            <Phone size={12} />
+                          </div>
+                          <div className="timeline-card">
+                            <div className="card-top">
+                              <span className="card-title">Alinhamento Comercial Inicial</span>
+                              <span className="card-time">Hoje</span>
+                            </div>
+                            <p className="card-details">Apresentação dos serviços e levantamento de necessidades.</p>
+                          </div>
+                        </div>
+
+                        <div className="timeline-entry">
+                          <div className="timeline-node mail">
+                            <Mail size={12} />
+                          </div>
+                          <div className="timeline-card">
+                            <div className="card-top">
+                              <span className="card-title">Envio da Proposta Comercial</span>
+                              <span className="card-time">{fmtDate(proposalForm.creation_date)}</span>
+                            </div>
+                            <p className="card-details">Proposta formal enviada com escopo e condições.</p>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Próximo Passo Acordado */}
+                <div className="modern-next-step-box">
+                  <div className="step-icon-wrap">
+                    <Star size={15} />
+                  </div>
+                  <div className="step-body">
+                    <span className="step-label">Próximo Passo</span>
+                    <p>Alinhamento dos itens e fechamento com {proposalForm.contact_person || proposalForm.customer_name}.</p>
+                  </div>
+                  <span className="step-date">{fmtDate(proposalForm.expected_closing_date)}</span>
+                </div>
+
+                {/* Feed de Auditoria */}
+                <div className="audit-history-footer">
+                  <span className="audit-title">Registro do Negócio</span>
+                  <div className="audit-row">
+                    <span className="audit-dot" />
+                    <span>Criado em {fmtDate(proposalForm.creation_date)} por {proposalForm.responsible_name}</span>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+
           </div>
+        </div>
+      )}
 
-          <div className="form-row cols-2">
-            <div className="form-group flex-1">
-              <label>Valor Estimado (R$)</label>
+      {/* =================================================================== */}
+      {/* MODAL DE DEFINIR META COMERCIAL DO MÊS (FASE 4)                     */}
+      {/* =================================================================== */}
+      {isGoalModalOpen && (
+        <Modal
+          isOpen={true}
+          onClose={() => setIsGoalModalOpen(false)}
+          title="Definir Meta Comercial do Mês"
+          subtitle="Estabeleça o objetivo financeiro de faturamento em negociações ganhas para a equipe"
+          size="sm"
+        >
+          <form onSubmit={handleSaveGoal} className="wizard-form">
+            <div className="form-group">
+              <label>Valor da Meta Mensal (R$) *</label>
               <input
                 type="number"
-                step="0.01"
-                min="0"
-                className="ui-input"
-                placeholder="0.00"
-                value={oppForm.estimated_amount}
-                onChange={(e) => setOppForm({ ...oppForm, estimated_amount: e.target.value })}
-              />
-            </div>
-
-            <div className="form-group flex-1">
-              <label>Probabilidade de Fechamento (%)</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                className="ui-input"
-                value={oppForm.probability_percent}
-                onChange={(e) => setOppForm({ ...oppForm, probability_percent: parseInt(e.target.value) || 50 })}
-              />
-            </div>
-          </div>
-
-          <div className="form-row cols-2">
-            <div className="form-group flex-1">
-              <label>Previsão de Fechamento</label>
-              <input
-                type="date"
-                className="ui-input"
-                value={oppForm.expected_closing_date}
-                onChange={(e) => setOppForm({ ...oppForm, expected_closing_date: e.target.value })}
-              />
-            </div>
-
-            <div className="form-group flex-1">
-              <label>Estágio Inicial no Funil</label>
-              <select
-                value={oppForm.stage}
-                onChange={(e) => setOppForm({ ...oppForm, stage: e.target.value })}
-                className="ui-input"
-              >
-                {stages.map(stg => (
-                  <option key={stg.id || stg.code} value={stg.code}>{stg.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="modal-footer ui-form__actions">
-            <button
-              type="button"
-              className="btn-secondary ui-button ui-button--secondary"
-              onClick={() => setIsOppModalOpen(false)}
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              className="btn-primary ui-button ui-button--primary"
-            >
-              {convertingLead ? 'Converter e Criar Oportunidade' : 'Criar Oportunidade'}
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* =================================================================== */}
-      {/* MODAL NOVA COTAÇÃO VINCULADA                                        */}
-      {/* =================================================================== */}
-      <Modal
-        isOpen={isQuoteModalOpen}
-        onClose={() => setIsQuoteModalOpen(false)}
-        title={`Emitir Cotação Comercial: ${selectedOppForQuote?.title || ''}`}
-        subtitle={`Cliente: ${selectedOppForQuote?.customer_name || ''}`}
-        size="lg"
-      >
-        <form onSubmit={handleSaveQuotation} className="wizard-form">
-          <div className="form-row cols-2">
-            <div className="form-group flex-1">
-              <label>Validade da Proposta *</label>
-              <input
-                type="date"
+                step="1000"
+                min="1000"
                 required
                 className="ui-input"
-                value={quoteValidUntil}
-                onChange={(e) => setQuoteValidUntil(e.target.value)}
+                placeholder="Ex: 150000"
+                value={tempGoalInput}
+                onChange={(e) => setTempGoalInput(e.target.value)}
               />
+              <span className="field-hint">
+                Meta atual: {fmtCurrency(monthlySalesGoal)} • Realizado até o momento: {fmtCurrency(kpis.wonAmount)}
+              </span>
             </div>
-            <div className="form-group flex-1">
-              <label>Condição de Pagamento</label>
-              <input
-                type="text"
-                className="ui-input"
-                placeholder="Ex: 30 DDL, À Vista com 5% de desconto"
-                value={quotePaymentTerms}
-                onChange={(e) => setQuotePaymentTerms(e.target.value)}
-              />
-            </div>
-          </div>
 
-          <div className="items-section">
-            <div className="items-header-line">
-              <h4>Itens e Produtos da Proposta ({quoteItems.length})</h4>
+            <div className="modal-footer ui-form__actions">
               <button
                 type="button"
-                className="btn-secondary sm ui-button ui-button--secondary ui-button--sm"
-                onClick={handleAddQuoteItem}
+                className="btn-secondary ui-button ui-button--secondary"
+                onClick={() => setIsGoalModalOpen(false)}
               >
-                <Plus size={14} /> Adicionar Item
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="btn-primary ui-button ui-button--primary"
+              >
+                <Target size={14} />
+                <span>Salvar Meta</span>
               </button>
             </div>
+          </form>
+        </Modal>
+      )}
 
-            {quoteItems.length === 0 ? (
-              <div className="empty-items-box">
-                <Package size={24} />
-                <p>Nenhum item adicionado à proposta. Clique acima para incluir produtos cadastrados no Estoque.</p>
+      {/* =================================================================== */}
+      {/* MODAL DEDICADO DE COTAÇÃO / PROPOSTA COMERCIAL (FASE 3)              */}
+      {/* =================================================================== */}
+      {isDedicatedQuoteModalOpen && (
+        <Modal
+          isOpen={isDedicatedQuoteModalOpen}
+          onClose={() => setIsDedicatedQuoteModalOpen(false)}
+          title={editingQuoteId ? `Editar Cotação (${quoteFormState.quote_number})` : `Nova Cotação Comercial`}
+          subtitle={`Vinculada ao negócio '${selectedOpp?.title || proposalForm.title}'`}
+          size="lg"
+        >
+          <form onSubmit={handleSaveQuoteModal} className="dedicated-quote-modal-form">
+            
+            {/* 1. Cabeçalho & Metadados da Cotação */}
+            <div className="quote-modal-section">
+              <div className="section-title-row">
+                <FileCheck size={16} className="sec-icon" />
+                <h4>Dados Gerais do Orçamento</h4>
               </div>
-            ) : (
-              <div className="quote-items-table-wrap">
-                <table className="quote-items-table">
+              <div className="quote-form-grid-3">
+                <div className="form-group grid-span-2">
+                  <label>Título da Versão / Proposta *</label>
+                  <div className="input-with-icon-box">
+                    <FileText size={15} className="input-prefix-icon" />
+                    <input
+                      type="text"
+                      value={quoteFormState.title}
+                      onChange={(e) => setQuoteFormState({ ...quoteFormState, title: e.target.value })}
+                      className="ui-input has-prefix-icon"
+                      placeholder="Ex: Proposta Comercial v2 - Com 5% de desconto"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Número do Orçamento</label>
+                  <div className="input-with-icon-box">
+                    <Tag size={15} className="input-prefix-icon" />
+                    <input
+                      type="text"
+                      value={quoteFormState.quote_number}
+                      className="ui-input has-prefix-icon readonly-input"
+                      readOnly
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Validade da Proposta</label>
+                  <div className="input-with-icon-box">
+                    <Calendar size={15} className="input-prefix-icon" />
+                    <input
+                      type="date"
+                      value={quoteFormState.valid_until}
+                      onChange={(e) => setQuoteFormState({ ...quoteFormState, valid_until: e.target.value })}
+                      className="ui-input has-prefix-icon"
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Prazo de Entrega</label>
+                  <div className="input-with-icon-box">
+                    <Clock size={15} className="input-prefix-icon" />
+                    <input
+                      type="text"
+                      value={quoteFormState.delivery_deadline}
+                      onChange={(e) => setQuoteFormState({ ...quoteFormState, delivery_deadline: e.target.value })}
+                      className="ui-input has-prefix-icon"
+                      placeholder="Ex: 15 dias úteis"
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Condição de Pagamento</label>
+                  <div className="select-with-icon-box">
+                    <CreditCard size={15} className="input-prefix-icon" />
+                    <select
+                      value={quoteFormState.payment_terms}
+                      onChange={(e) => setQuoteFormState({ ...quoteFormState, payment_terms: e.target.value })}
+                      className="custom-styled-select has-prefix-icon"
+                    >
+                      <option value="À Vista / PIX (5% desc)">À Vista / PIX (5% desc)</option>
+                      <option value="Faturado 15 DDL">Faturado 15 DDL</option>
+                      <option value="Faturado 30 DDL">Faturado 30 DDL</option>
+                      <option value="Faturado 30/60 DDL">Faturado 30/60 DDL</option>
+                      <option value="30% entrada + 2x boleto">30% entrada + 2x boleto</option>
+                      <option value="Cartão de Crédito até 10x">Cartão de Crédito até 10x</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Tabela de Itens e Produtos da Cotação */}
+            <div className="quote-modal-section">
+              <div className="section-header-flex">
+                <div className="section-title-row">
+                  <Package size={16} className="sec-icon" />
+                  <h4>Produtos & Serviços Cotados ({quoteFormState.items.length})</h4>
+                </div>
+                <button
+                  type="button"
+                  className="btn-add-item-sm ui-button ui-button--primary ui-button--sm"
+                  onClick={handleAddQuoteFormItem}
+                >
+                  <Plus size={13} />
+                  <span>Adicionar Produto</span>
+                </button>
+              </div>
+
+              <div className="quote-modal-table-wrap">
+                <table className="quote-modal-table">
                   <thead>
                     <tr>
-                      <th>Produto</th>
-                      <th style={{ width: '100px' }}>Qtd</th>
-                      <th style={{ width: '130px' }}>Preço Un.</th>
-                      <th style={{ width: '120px' }}>Desconto</th>
-                      <th style={{ width: '130px' }}>Subtotal</th>
-                      <th style={{ width: '50px', textAlign: 'center' }}></th>
+                      <th style={{ width: '45%' }}>Item / Produto do Almoxarifado</th>
+                      <th style={{ width: '15%', textAlign: 'center' }}>Qtd</th>
+                      <th style={{ width: '18%', textAlign: 'right' }}>Preço Unitário</th>
+                      <th style={{ width: '15%', textAlign: 'right' }}>Desconto (R$)</th>
+                      <th style={{ width: '17%', textAlign: 'right' }}>Total do Item</th>
+                      <th style={{ width: '50px' }}></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {quoteItems.map((item, idx) => {
-                      const subtotal = (item.quantity * item.unit_price) - (item.discount_amount || 0);
+                    {quoteFormState.items.map((item, idx) => {
+                      const itemTotal = (item.quantity * item.unit_price) - (item.discount_amount || 0);
                       return (
                         <tr key={idx}>
                           <td>
                             <select
                               value={item.product_id}
-                              onChange={(e) => handleQuoteItemChange(idx, 'product_id', e.target.value)}
-                              className="ui-input item-product-select"
+                              onChange={(e) => handleQuoteFormItemChange(idx, 'product_id', e.target.value)}
+                              className="custom-styled-select table-select"
                             >
                               {products.map(p => (
-                                <option key={p.id} value={p.id}>{p.name} ({p.sku || 'Sem SKU'})</option>
+                                <option key={p.id} value={p.id}>
+                                  {p.name} {p.sku ? `(${p.sku})` : ''} - {fmtCurrency(p.sale_price || p.reference_price)}
+                                </option>
                               ))}
                             </select>
                           </td>
@@ -2710,42 +5085,43 @@ export const CRM: React.FC = () => {
                             <input
                               type="number"
                               min="1"
+                              step="1"
                               value={item.quantity}
-                              onChange={(e) => handleQuoteItemChange(idx, 'quantity', e.target.value)}
-                              className="ui-input"
+                              onChange={(e) => handleQuoteFormItemChange(idx, 'quantity', e.target.value)}
+                              className="ui-input table-input text-center"
                             />
                           </td>
                           <td>
                             <input
                               type="number"
-                              step="0.01"
                               min="0"
+                              step="0.01"
                               value={item.unit_price}
-                              onChange={(e) => handleQuoteItemChange(idx, 'unit_price', e.target.value)}
-                              className="ui-input"
+                              onChange={(e) => handleQuoteFormItemChange(idx, 'unit_price', e.target.value)}
+                              className="ui-input table-input text-right"
                             />
                           </td>
                           <td>
                             <input
                               type="number"
-                              step="0.01"
                               min="0"
+                              step="0.01"
                               value={item.discount_amount}
-                              onChange={(e) => handleQuoteItemChange(idx, 'discount_amount', e.target.value)}
-                              className="ui-input"
+                              onChange={(e) => handleQuoteFormItemChange(idx, 'discount_amount', e.target.value)}
+                              className="ui-input table-input text-right"
                             />
                           </td>
-                          <td>
-                            <strong className="subtotal-val">{fmtCurrency(subtotal)}</strong>
+                          <td className="text-right">
+                            <strong className="item-total-cell">{fmtCurrency(itemTotal)}</strong>
                           </td>
-                          <td style={{ textAlign: 'center' }}>
+                          <td className="text-center">
                             <button
                               type="button"
-                              className="btn-remove-item"
-                              onClick={() => handleRemoveQuoteItem(idx)}
-                              title="Remover Item"
+                              className="btn-remove-row"
+                              onClick={() => handleRemoveQuoteFormItem(idx)}
+                              title="Remover item"
                             >
-                              <Trash2 size={15} />
+                              <Trash2 size={14} />
                             </button>
                           </td>
                         </tr>
@@ -2754,32 +5130,91 @@ export const CRM: React.FC = () => {
                   </tbody>
                 </table>
               </div>
-            )}
-
-            <div className="quote-total-bar">
-              <span>Total da Cotação:</span>
-              <strong className="total-highlight">{fmtCurrency(quoteTotalAmount)}</strong>
             </div>
-          </div>
 
-          <div className="modal-footer ui-form__actions">
-            <button
-              type="button"
-              className="btn-secondary ui-button ui-button--secondary"
-              onClick={() => setIsQuoteModalOpen(false)}
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              className="btn-primary ui-button ui-button--primary"
-              disabled={isSavingQuote}
-            >
-              {isSavingQuote ? 'Gerando Cotação...' : 'Gerar e Vincular Cotação'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+            {/* 3. Resumo Financeiro & Condições */}
+            <div className="quote-modal-section quote-bottom-grid">
+              <div className="quote-notes-col">
+                <label>Observações & Condições Específicas desta Proposta</label>
+                <textarea
+                  rows={4}
+                  value={quoteFormState.notes}
+                  onChange={(e) => setQuoteFormState({ ...quoteFormState, notes: e.target.value })}
+                  className="ui-input full-textarea"
+                  placeholder="Instruções de fornecimento, escopo de garantia, prazos especiais ou detalhes acordados nesta versão..."
+                />
+                <label className="custom-checkbox-row" style={{ marginTop: '0.75rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={quoteFormState.is_main_for_opp}
+                    onChange={(e) => setQuoteFormState({ ...quoteFormState, is_main_for_opp: e.target.checked })}
+                  />
+                  <span>Definir esta cotação e seus itens como o valor principal da oportunidade</span>
+                </label>
+              </div>
+
+              <div className="quote-summary-col">
+                <div className="summary-box">
+                  <div className="summary-row">
+                    <span>Subtotal dos Produtos:</span>
+                    <strong>{fmtCurrency(quoteFormSubtotal)}</strong>
+                  </div>
+                  <div className="summary-row text-discount">
+                    <span>Desconto Total:</span>
+                    <strong>- {fmtCurrency(quoteFormDiscount)}</strong>
+                  </div>
+                  <div className="summary-row">
+                    <span>Impostos / Tributos:</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={quoteFormState.tax_amount}
+                      onChange={(e) => setQuoteFormState({ ...quoteFormState, tax_amount: parseFloat(e.target.value) || 0 })}
+                      className="mini-sum-input"
+                    />
+                  </div>
+                  <div className="summary-row">
+                    <span>Frete / Instalação:</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={quoteFormState.freight_amount}
+                      onChange={(e) => setQuoteFormState({ ...quoteFormState, freight_amount: parseFloat(e.target.value) || 0 })}
+                      className="mini-sum-input"
+                    />
+                  </div>
+                  <div className="summary-row total-highlight">
+                    <span>Valor Total da Proposta:</span>
+                    <span className="final-sum-val">{fmtCurrency(quoteFormTotal)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Rodapé de Ações */}
+            <div className="modal-footer ui-form__actions">
+              <button
+                type="button"
+                className="btn-secondary ui-button ui-button--secondary"
+                onClick={() => setIsDedicatedQuoteModalOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="btn-primary ui-button ui-button--primary"
+                disabled={isSavingQuote}
+              >
+                <CheckCircle2 size={16} />
+                <span>{isSavingQuote ? 'Salvando...' : (editingQuoteId ? 'Salvar Alterações da Cotação' : 'Gerar e Salvar Cotação')}</span>
+              </button>
+            </div>
+
+          </form>
+        </Modal>
+      )}
     </div>
   );
 };

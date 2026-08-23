@@ -1415,6 +1415,15 @@ export const crmService = {
     cacheManager.invalidate(`crm:opportunity:${oppId}`);
     cacheManager.invalidate('sales:quotes');
     return response.data;
+  },
+
+  async convertQuoteToOrder(quoteId: string): Promise<import('@/types').SalesOrder> {
+    const response = await api.post<import('@/types').SalesOrder>(`/sales/quotes/${quoteId}/convert`);
+    cacheManager.invalidate('sales:quotes');
+    cacheManager.invalidate(`sales:quote:${quoteId}`);
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('crm:opportunities');
+    return response.data;
   }
 };
 
@@ -1489,6 +1498,15 @@ export const salesService = {
     });
     cacheManager.invalidate('sales:quotes');
     cacheManager.invalidate(`sales:quote:${quoteId}`);
+    cacheManager.invalidate('crm:opportunities');
+    return response.data;
+  },
+
+  async convertQuoteToOrder(quoteId: string): Promise<import('@/types').SalesOrder> {
+    const response = await api.post<import('@/types').SalesOrder>(`/sales/quotes/${quoteId}/convert`);
+    cacheManager.invalidate('sales:quotes');
+    cacheManager.invalidate(`sales:quote:${quoteId}`);
+    cacheManager.invalidate('sales:orders');
     cacheManager.invalidate('crm:opportunities');
     return response.data;
   },
@@ -1696,15 +1714,6 @@ export const salesService = {
 
   async deleteOrder(orderId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/sales/orders/${orderId}`);
-    cacheManager.invalidate('sales:orders');
-    cacheManager.invalidate('sales:analytics');
-    return response.data;
-  },
-
-  // --- CONVERSÃO DE PROPOSTA ---
-  async convertQuoteToOrder(quoteId: string): Promise<import('@/types').SalesOrder> {
-    const response = await api.post<import('@/types').SalesOrder>(`/sales/quotes/${quoteId}/convert`);
-    cacheManager.invalidate('sales:quotes');
     cacheManager.invalidate('sales:orders');
     cacheManager.invalidate('sales:analytics');
     return response.data;
