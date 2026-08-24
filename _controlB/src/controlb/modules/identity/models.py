@@ -20,7 +20,7 @@ from controlb.db import Base
 
 
 # ==============================================================================
-# 0. TABELA ASSOCIATIVA N:N (Role <-> Permission)
+# 0. TABELAS ASSOCIATIVAS N:N (Role <-> Permission, Team <-> User)
 # ==============================================================================
 
 role_permission = Table(
@@ -28,6 +28,14 @@ role_permission = Table(
     Base.metadata,
     Column("role_id", UUID(as_uuid=True), ForeignKey("role.id", ondelete="CASCADE"), primary_key=True),
     Column("permission_id", UUID(as_uuid=True), ForeignKey("permission.id", ondelete="CASCADE"), primary_key=True)
+)
+
+team_member = Table(
+    "team_member",
+    Base.metadata,
+    Column("team_id", UUID(as_uuid=True), ForeignKey("team.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_in_team", String(50), default="MEMBER")
 )
 
 
@@ -55,9 +63,10 @@ class Organization(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
-    # Relacionamentos 1-para-N (Uma organização possui múltiplos usuários, cargos e contatos)
+    # Relacionamentos 1-para-N (Uma organização possui múltiplos usuários, cargos, equipes e contatos)
     users: Mapped[list["User"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     roles: Mapped[list["Role"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    teams: Mapped[list["Team"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     contacts: Mapped[list["Contact"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
 
 
@@ -98,7 +107,7 @@ class Role(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Chave estrangeira ligando o cargo obrigatoriamente a uma organização existente
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
 
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str | None] = mapped_column(String(200), nullable=True) # Descrição opcional
@@ -131,9 +140,9 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Chave estrangeira obrigatória para a organização
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
     # Chave estrangeira opcional para o cargo (pode ser nulo)
-    role_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("role.id", ondelete="SET NULL"), nullable=True)
+    role_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("role.id", ondelete="SET NULL"), nullable=True)
 
     # E-mail com índice exclusivo (não permite e-mails duplicados e acelera buscas no login)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
@@ -141,12 +150,14 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False) # Hash seguro Argon2
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_seller: Mapped[bool] = mapped_column(Boolean, default=False, index=True) # Identifica colaboradores que atuam como Vendedores
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamentos ORM
     organization: Mapped["Organization"] = relationship(back_populates="users")
     role: Mapped["Role"] = relationship(back_populates="users", lazy="selectin")
+    teams: Mapped[list["Team"]] = relationship(secondary=team_member, back_populates="members", lazy="selectin")
 
 
 # ==============================================================================
@@ -165,7 +176,7 @@ class Contact(Base):
     __tablename__ = "contact"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
 
     person_type: Mapped[str] = mapped_column(String(10), default="PJ", index=True)  # "PJ" ou "PF"
     document: Mapped[str | None] = mapped_column(String(30), index=True, nullable=True)  # CNPJ ou CPF
@@ -205,3 +216,34 @@ class Contact(Base):
 
     # Relacionamentos
     organization: Mapped["Organization"] = relationship(back_populates="contacts")
+
+
+# ==============================================================================
+# 6. MODELO EQUIPE / GRUPO DE TRABALHO MULTIMODULAR (Team)
+# ==============================================================================
+
+class Team(Base):
+    """
+    Tabela 'team' - Equipes e Grupos de Trabalho Multimodulares.
+    Organiza colaboradores por carteiras comerciais (SALES), compras (PURCHASING),
+    estoque (INVENTORY), etc., com controle de liderança/gestão e escopo de visibilidade.
+    """
+    __tablename__ = "team"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    module_category: Mapped[str] = mapped_column(String(50), default="SALES", nullable=False, index=True) # SALES, PURCHASING, INVENTORY, FINANCE, SUPPORT, CRM
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    leader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    # Relacionamentos
+    organization: Mapped["Organization"] = relationship(back_populates="teams")
+    leader: Mapped["User | None"] = relationship(foreign_keys=[leader_id], lazy="selectin")
+    members: Mapped[list["User"]] = relationship(secondary=team_member, back_populates="teams", lazy="selectin")

@@ -81,17 +81,39 @@ Criado um diálogo moderno com **3 abas dinâmicas especializadas**:
 ### G. Extrato Cronológico de Movimentações (*Kardex*)
 * Tabela completa exibindo data/hora, produto, tipo de movimento com badges coloridos (`Entrada por NF`, `Entrada por Compra`, `Sobra de Inventário (+)`, `Falta de Inventário (-)`, `Baixa por Perda/Avaria`), quantidade, custo unitário, documento de referência com anexo de NF e saldo final após a movimentação.
 
+### H. Importação e Sincronização de Planilha de Estoque (XLSX)
+* **Ingestão Direta de Planilhas de Inventário:** Processamento em milissegundos via motor in-memory de relatórios `.xlsx` de inventário e estoque.
+* **Classificação Taxonômica Automática:** Mapeamento inteligente de categorias por NCM (`3004` Medicamentos, `3304` Cosméticos, `2106` Suplementos, etc.) com criação dinâmica de grupos inexistentes.
+* **Reconciliação Baseada em Delta Diário:**
+  * Detecta e registra **Vendas (Saídas - `out_sale`)** quando o saldo da planilha for menor que o do sistema.
+  * Detecta e registra **Entradas/Reposições (`in_purchase_sync`)** quando o saldo for maior.
+  * Cadastra produtos novos e atualiza preços de custo e venda ao consumidor.
+
+### I. Reserva de Estoque por Pedido de Venda
+* **Reserva Integral e Explícita:** pedidos confirmados reservam todos os itens ou nenhum, evitando reservas parciais silenciosas.
+* **Disponibilidade Segura:** `disponível = estoque físico - reservas ativas`; reservar não baixa o saldo físico.
+* **Concorrência e Idempotência:** locks ordenados impedem overbooking e chamadas repetidas reutilizam a mesma reserva.
+* **Ciclo de Vida:** reservas podem ser liberadas e reativadas; cancelar o pedido libera a reserva automaticamente.
+* **Rastreabilidade:** cada reserva é um documento relacionado ao pedido, com eventos próprios na timeline.
+* **Integração com PDV:** vendas de balcão não consomem unidades já comprometidas por pedidos.
+
 ---
 
 ## 3. O que Falta Implementar (Roadmap & Próximas Fases)
 
 De acordo com o roadmap de estoque ([`docs/04-roadmap.md`](file:///c:/Users/jeffe/ControlB/docs/04-roadmap.md) e [`docs/05-backlog.md`](file:///c:/Users/jeffe/ControlB/docs/05-backlog.md)):
 
-1. **Recebimento Parcial Fracionado de Ordens de Compra:**
+1. **Mecanismo Universal de Importação & Mapeador Dinâmico de Planilhas (XLSX / CSV):**
+   - Assistente visual de "De-Para" de colunas para importar dados de qualquer sistema legado desconhecido sem necessidade de alterar o código-fonte.
+   - Pré-visualização com simulação de impacto (*Dry-Run Sandbox*) e salvamento de modelos/templates reutilizáveis por organização.
+   - *Especificação completa:* [docs/propostas/modelo-importacao-dinamica-planilhas.md](../propostas/modelo-importacao-dinamica-planilhas.md).
+2. **Recebimento Parcial Fracionado de Ordens de Compra:**
    - Permitir que uma Ordem de Compra de 100 frascos seja recebida em 2 entregas (ex: 60 frascos na NF 101 e 40 frascos na NF 108), mantendo o status `partially_received` até a liquidação final.
-2. **Inventário Físico com Contagem Cega (*Blind Count*):**
+3. **Inventário Físico com Contagem Cega (*Blind Count*):**
    - Emissão de folhas de contagem onde o almoxarife não enxerga o saldo cadastrado no sistema antes de digitar a contagem real, prevenindo vícios de conferência.
-3. **Leitura de Código de Barras / QR Code via Câmera ou Coletor:**
+4. **Leitura de Código de Barras / QR Code via Câmera ou Coletor:**
    - Integração com coletores de dados e câmeras de dispositivos móveis para conferência ágil de SKU, EAN e lote.
-4. **Gestão Multi-Almoxarifado & Transferência entre Depósitos:**
+5. **Gestão Multi-Almoxarifado & Transferência entre Depósitos:**
    - Criação de múltiplos depósitos (ex: *Almoxarifado Central*, *Farmácia Satélite UTI*, *Depósito Centro Cirúrgico*) com solicitações e transferências internas de estoque.
+6. **Separação, Expedição e Baixa da Reserva:**
+   - Transformar a reserva em tarefas de picking, conferir quantidades e efetivar a saída física somente na expedição/faturamento definido pelo fluxo operacional.

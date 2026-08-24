@@ -5,6 +5,9 @@ Use um ADR quando uma decisão tiver impacto duradouro, alternativas reais ou cu
 ## Índice
 
 - [ADR-0001 — Monólito modular](ADR-0001-monolito-modular.md)
+- [ADR-0002 — Equipe comercial compartilhada no Identity](ADR-0002-equipe-comercial-identity.md)
+- [ADR-0003 — Notas e atividades do CRM](ADR-0003-notas-e-atividades-crm.md)
+- [ADR-0004 — Solicitação de faturamento](ADR-0004-solicitacao-de-faturamento.md)
 
 ## Modelo
 

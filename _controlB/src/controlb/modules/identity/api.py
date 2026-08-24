@@ -315,3 +315,111 @@ def delete_contact(
     return service.delete_contact(db, contact_id, current_user.organization_id)
 
 
+# ==============================================================================
+# 7. ENDPOINTS DE EQUIPES E GRUPOS MULTIMODULARES (Team)
+# ==============================================================================
+
+@router.get("/teams", response_model=list[schemas.TeamResponse], summary="Listar Equipes de Trabalho")
+def list_teams(
+    module_category: str | None = Query(None, description="Filtrar por módulo (SALES, PURCHASING, INVENTORY, etc.)"),
+    is_active: bool | None = Query(None, description="Filtrar por status ativo"),
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Lista as equipes da organização atual."""
+    teams = service.list_teams(db, current_user.organization_id, module_category=module_category, is_active=is_active)
+    # Formata a resposta com nome do líder
+    result = []
+    for t in teams:
+        item = schemas.TeamResponse.model_validate(t)
+        if t.leader:
+            item.leader_name = t.leader.full_name
+        result.append(item)
+    return result
+
+
+@router.post("/teams", response_model=schemas.TeamResponse, status_code=status.HTTP_201_CREATED, summary="Criar Equipe")
+def create_team(
+    payload: schemas.TeamCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Cria uma nova equipe multimodular."""
+    payload.organization_id = current_user.organization_id
+    team = service.create_team(db, current_user.organization_id, payload)
+    item = schemas.TeamResponse.model_validate(team)
+    if team.leader:
+        item.leader_name = team.leader.full_name
+    return item
+
+
+@router.get("/teams/{team_id}", response_model=schemas.TeamResponse, summary="Obter Equipe por ID")
+def get_team(
+    team_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Busca detalhes de uma equipe."""
+    team = service.get_team(db, team_id, current_user.organization_id)
+    item = schemas.TeamResponse.model_validate(team)
+    if team.leader:
+        item.leader_name = team.leader.full_name
+    return item
+
+
+@router.put("/teams/{team_id}", response_model=schemas.TeamResponse, summary="Atualizar Equipe")
+def update_team(
+    team_id: uuid.UUID,
+    payload: schemas.TeamUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Atualiza dados e membros de uma equipe."""
+    team = service.update_team(db, team_id, current_user.organization_id, payload)
+    item = schemas.TeamResponse.model_validate(team)
+    if team.leader:
+        item.leader_name = team.leader.full_name
+    return item
+
+
+@router.delete("/teams/{team_id}", status_code=status.HTTP_200_OK, summary="Excluir Equipe")
+def delete_team(
+    team_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Remove uma equipe da organização."""
+    return service.delete_team(db, team_id, current_user.organization_id)
+
+
+@router.post("/teams/{team_id}/members", response_model=schemas.TeamResponse, summary="Adicionar Membros à Equipe")
+def add_team_members(
+    team_id: uuid.UUID,
+    payload: schemas.TeamMemberAddRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Adiciona múltiplos usuários à equipe."""
+    team = service.add_team_members(db, team_id, current_user.organization_id, payload.user_ids)
+    item = schemas.TeamResponse.model_validate(team)
+    if team.leader:
+        item.leader_name = team.leader.full_name
+    return item
+
+
+@router.delete("/teams/{team_id}/members/{user_id}", response_model=schemas.TeamResponse, summary="Remover Membro da Equipe")
+def remove_team_member(
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Remove um usuário da equipe."""
+    team = service.remove_team_member(db, team_id, current_user.organization_id, user_id)
+    item = schemas.TeamResponse.model_validate(team)
+    if team.leader:
+        item.leader_name = team.leader.full_name
+    return item
+
+
+

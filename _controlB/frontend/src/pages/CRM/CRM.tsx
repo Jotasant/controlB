@@ -11,9 +11,10 @@
  * 7. ⚙️ Gestão Dinâmica de Etapas do Funil com Cores, Ordenação e Contadores
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Kanban, ListFilter, Users,
+  LayoutDashboard, Kanban, Users,
   Clock, Phone, Mail, FileText,
   Trash2, Settings, CheckCircle2, Layers,
   Package, Plus, DollarSign, TrendingUp,
@@ -27,10 +28,11 @@ import {
   ShieldCheck, Star, CheckCheck,
   Briefcase, CreditCard,
   User, UserCheck, Calendar, Sparkles,
-  FileCheck, ExternalLink, GitBranch
+  FileCheck, ExternalLink, GitBranch,
+  SlidersHorizontal, List, LayoutGrid
 } from 'lucide-react';
 import { crmService, salesService, inventoryService, documentService, formatApiError } from '@/services/api';
-import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction, BusinessDocumentChain } from '@/types';
+import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction, BusinessDocumentChain, SellerResponse } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
 import { CustomerPicker } from '@/components/CustomerPicker';
 import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
@@ -64,17 +66,52 @@ export const DEFAULT_FALLBACK_STAGES: CRMStage[] = [
   { id: '6', organization_id: '', code: 'LOST', name: 'Perdido', color: '#ef4444', order: 5, is_won: false, is_lost: true, is_system: true, created_at: '', updated_at: '' },
 ];
 
+const DEFAULT_OPP_COLUMNS: Record<string, boolean> = {
+  title: true,
+  customer: true,
+  estimated_amount: true,
+  probability_percent: true,
+  stage: true,
+  activity_status: true,
+  expected_closing_date: true,
+  responsible_name: true,
+  sales_team: true,
+  actions: true,
+};
+
 export const CRM: React.FC = () => {
   const toast = useToast();
+  const navigate = useNavigate();
 
-  // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pipeline' | 'opportunities_list' | 'leads' | 'activities' | 'stages' | 'reports'>('pipeline');
+  // Tab & View Switcher State
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pipeline' | 'leads' | 'activities' | 'stages' | 'reports'>('pipeline');
+  const [oppViewMode, setOppViewMode] = useState<'kanban' | 'list'>('kanban');
+  const [isColumnSelectorOpen, setIsColumnSelectorOpen] = useState<boolean>(false);
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('controlb_crm_opp_columns');
+      return saved ? { ...DEFAULT_OPP_COLUMNS, ...JSON.parse(saved) } : DEFAULT_OPP_COLUMNS;
+    } catch {
+      return DEFAULT_OPP_COLUMNS;
+    }
+  });
+
   const [loading, setLoading] = useState<boolean>(true);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [stages, setStages] = useState<CRMStage[]>(DEFAULT_FALLBACK_STAGES);
   const [products, setProducts] = useState<Product[]>([]);
   const [allInteractions, setAllInteractions] = useState<CustomerInteraction[]>([]);
+  const [sellersList, setSellersList] = useState<SellerResponse[]>([]);
+  const [pendingSidebarActivities, setPendingSidebarActivities] = useState<any[]>([]);
+
+  const toggleColumnVisibility = (colKey: string) => {
+    setVisibleColumns(prev => {
+      const next = { ...prev, [colKey]: !prev[colKey] };
+      localStorage.setItem('controlb_crm_opp_columns', JSON.stringify(next));
+      return next;
+    });
+  };
 
   // Metas Comerciais & Previsibilidade (Fase 4)
   const [monthlySalesGoal, setMonthlySalesGoal] = useState<number>(() => {
@@ -172,6 +209,28 @@ export const CRM: React.FC = () => {
     }
   };
 
+  /** Handler de navegação clicável na cadeia documental */
+  const handleTimelineNavigate = useCallback((documentType: string, nativeId: string) => {
+    // Fecha o modal de rastreabilidade
+    setIsDocumentTimelineOpen(false);
+
+    if (documentType === 'OPPORTUNITY') {
+      // Encontra e abre o detalhe da oportunidade no próprio CRM
+      const opp = opportunities.find(o => o.id === nativeId);
+      if (opp) {
+        setActiveTab('pipeline');
+        setSelectedOpp(opp);
+      } else {
+        toast.info('Oportunidade não encontrada na listagem atual.');
+      }
+    } else if (documentType === 'LEAD') {
+      setActiveTab('leads');
+    } else {
+      // SALES_QUOTE, SALES_ORDER, INVOICE, etc. → módulo de Vendas
+      navigate('/vendas');
+    }
+  }, [opportunities, navigate, toast]);
+
   // Form Lead
   const [leadForm, setLeadForm] = useState({
     customer_id: '',
@@ -207,6 +266,7 @@ export const CRM: React.FC = () => {
     customer_email: '',
     customer_phone: '',
     contact_person: 'Carlos Mendes',
+    assigned_to_id: '' as string | undefined,
     responsible_name: 'Jefferson Santos',
     sales_team: 'Equipe Comercial Principal',
     pipeline_stage: 'PROPOSAL',
@@ -266,12 +326,13 @@ export const CRM: React.FC = () => {
   const loadCRMData = async (forceRefresh = false) => {
     setLoading(true);
     try {
-      const [fetchedStages, fetchedLeads, fetchedOpps, fetchedProducts, fetchedInteractions] = await Promise.all([
+      const [fetchedStages, fetchedLeads, fetchedOpps, fetchedProducts, fetchedInteractions, fetchedSellers] = await Promise.all([
         crmService.getStages(forceRefresh).catch(() => []),
         crmService.getLeads(undefined, forceRefresh).catch(() => []),
         crmService.getOpportunities(undefined, forceRefresh).catch(() => []),
         inventoryService.getProducts(undefined, forceRefresh).catch(() => []),
-        crmService.getInteractions(undefined, undefined, forceRefresh).catch(() => [])
+        crmService.getInteractions(undefined, undefined, forceRefresh).catch(() => []),
+        salesService.getSellers(forceRefresh).catch(() => [])
       ]);
 
       if (fetchedStages && fetchedStages.length > 0) {
@@ -285,6 +346,7 @@ export const CRM: React.FC = () => {
       setOpportunities(fetchedOpps || []);
       setProducts(fetchedProducts || []);
       setAllInteractions(fetchedInteractions || []);
+      setSellersList(fetchedSellers || []);
     } catch (err: any) {
       toast.error(formatApiError(err, "Falha ao carregar dados do CRM."));
     } finally {
@@ -491,6 +553,9 @@ export const CRM: React.FC = () => {
         setLinkedCustomer(null);
       }
 
+      const matchedSeller = sellersList.find(s => s.id === opp.assigned_to_id);
+      setPendingSidebarActivities([]);
+
       setProposalForm({
         quote_number: `OP-${opp.id.slice(0, 8).toUpperCase()}`,
         title: opp.title,
@@ -501,8 +566,9 @@ export const CRM: React.FC = () => {
         customer_email: opp.lead?.email || '',
         customer_phone: opp.lead?.phone || '',
         contact_person: opp.lead?.name || 'Contato Principal',
-        responsible_name: 'Jefferson Santos',
-        sales_team: 'Equipe Comercial Principal',
+        assigned_to_id: opp.assigned_to_id || undefined,
+        responsible_name: matchedSeller ? matchedSeller.full_name : ((opp as any).assigned_to?.full_name || 'Vendedor Comercial'),
+        sales_team: matchedSeller?.sales_team_name || 'Equipe Comercial',
         pipeline_stage: opp.stage,
         priority: 'HIGH',
         source: opp.lead?.source || 'Indicação',
@@ -536,7 +602,10 @@ export const CRM: React.FC = () => {
     setActiveQuoteId(null);
     setProposalActiveTab('general');
     setOppInteractions([]);
+    setPendingSidebarActivities([]);
     initDefaultItems();
+
+    const defaultSeller = sellersList.length > 0 ? sellersList[0] : null;
 
     if (leadToConvert) {
       setProposalForm({
@@ -549,8 +618,9 @@ export const CRM: React.FC = () => {
         customer_email: leadToConvert.email || '',
         customer_phone: leadToConvert.phone || '',
         contact_person: leadToConvert.name,
-        responsible_name: 'Jefferson Santos',
-        sales_team: 'Equipe Comercial Principal',
+        assigned_to_id: defaultSeller?.id || undefined,
+        responsible_name: defaultSeller ? defaultSeller.full_name : 'Vendedor Comercial',
+        sales_team: defaultSeller?.sales_team_name || 'Equipe Comercial',
         pipeline_stage: initialStage || stages[0]?.code || 'PROSPECTING',
         priority: 'HIGH',
         source: leadToConvert.source || 'Indicação',
@@ -581,8 +651,9 @@ export const CRM: React.FC = () => {
         customer_email: '',
         customer_phone: '',
         contact_person: '',
-        responsible_name: 'Jefferson Santos',
-        sales_team: 'Equipe Comercial Principal',
+        assigned_to_id: defaultSeller?.id || undefined,
+        responsible_name: defaultSeller ? defaultSeller.full_name : 'Vendedor Comercial',
+        sales_team: defaultSeller?.sales_team_name || 'Equipe Comercial',
         pipeline_stage: initialStage || stages[0]?.code || 'PROSPECTING',
         priority: 'HIGH',
         source: 'Indicação',
@@ -838,95 +909,6 @@ export const CRM: React.FC = () => {
     }
   };
 
-  const handleOpenQuoteModal = (opp: Opportunity, existingQuote?: SalesQuote | null) => {
-    setSelectedOppForQuote(opp);
-    setProposalActiveTab('general');
-    
-    if (existingQuote) {
-      setActiveQuoteId(existingQuote.id);
-      setProposalForm({
-        quote_number: existingQuote.quote_number || `PR-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-        title: opp.title,
-        status: (existingQuote.status as any) || 'DRAFT',
-        customer_id: opp.customer_id || '',
-        customer_name: existingQuote.customer_name || opp.customer_name,
-        customer_document: existingQuote.customer_document || '',
-        customer_email: existingQuote.customer_email || '',
-        customer_phone: existingQuote.customer_phone || '',
-        contact_person: existingQuote.contact_person || 'Carlos Mendes',
-        responsible_name: existingQuote.responsible_name || 'Jefferson Santos',
-        sales_team: 'Equipe Comercial Principal',
-        pipeline_stage: opp.stage,
-        priority: existingQuote.priority || 'HIGH',
-        source: opp.lead?.source || 'Indicação',
-        creation_date: existingQuote.created_at ? existingQuote.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
-        expected_closing_date: opp.expected_closing_date || new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
-        probability_percent: opp.probability_percent || 70,
-        tags: existingQuote.tags && existingQuote.tags.length > 0 ? existingQuote.tags : ['CFTV', 'Rede', 'Infraestrutura'],
-        notes: existingQuote.notes || `Cliente busca modernização do sistema de segurança e rede da nova unidade.\nProjeto inclui instalação, configuração e treinamento da equipe interna.`,
-        payment_method: 'Transferência Bancária',
-        installment_terms: existingQuote.installment_terms || existingQuote.payment_terms || '30% entrada + 2x',
-        delivery_deadline: existingQuote.delivery_deadline || '15 dias úteis',
-        valid_until: existingQuote.valid_until ? existingQuote.valid_until.split('T')[0] : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-        warranty_terms: existingQuote.warranty_terms || '12 meses',
-        sla_support: existingQuote.sla_support || '8x5 - NBR 15965',
-        special_conditions: existingQuote.special_conditions || 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
-        digital_acceptance: existingQuote.digital_acceptance !== false,
-        tax_amount: existingQuote.tax_amount || 0,
-        freight_amount: existingQuote.freight_amount || 0
-      });
-
-      if (existingQuote.items && existingQuote.items.length > 0) {
-        setQuoteItems(existingQuote.items.map(it => ({
-          product_id: it.product_id,
-          product_name: it.product?.name,
-          quantity: it.quantity,
-          unit_price: it.unit_price,
-          discount_amount: it.discount_amount || 0,
-          notes: it.notes || ''
-        })));
-      } else {
-        initDefaultItems();
-      }
-    } else {
-      setActiveQuoteId(null);
-      setProposalForm({
-        quote_number: `PR-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-        title: opp.title,
-        status: 'DRAFT',
-        customer_id: opp.customer_id || '',
-        customer_name: opp.customer_name,
-        customer_document: '',
-        customer_email: '',
-        customer_phone: '',
-        contact_person: 'Carlos Mendes',
-        responsible_name: 'Jefferson Santos',
-        sales_team: 'Equipe Comercial Principal',
-        pipeline_stage: opp.stage,
-        priority: 'HIGH',
-        source: opp.lead?.source || 'Indicação',
-        creation_date: new Date().toISOString().split('T')[0],
-        expected_closing_date: opp.expected_closing_date || new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
-        probability_percent: opp.probability_percent || 70,
-        tags: ['CFTV', 'Rede', 'Infraestrutura'],
-        notes: `Cliente busca modernização do sistema de segurança e rede da nova unidade.\nProjeto inclui fornecimento, configuração e treinamento da equipe interna.`,
-        payment_method: 'Transferência Bancária',
-        installment_terms: '30% entrada + 2x',
-        delivery_deadline: '15 dias úteis',
-        valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-        warranty_terms: '12 meses',
-        sla_support: '8x5 - NBR 15965',
-        special_conditions: 'Treinamento incluso e suporte remoto nos primeiros 30 dias.',
-        digital_acceptance: true,
-        tax_amount: 0,
-        freight_amount: 0
-      });
-      initDefaultItems();
-    }
-
-    setIsQuoteModalOpen(true);
-  };
-
   const handleAddQuoteItem = () => {
     if (products.length === 0) {
       toast.warning("Cadastre produtos no Almoxarifado / Estoque para adicioná-los à proposta.", "Catálogo Vazio");
@@ -1103,10 +1085,35 @@ export const CRM: React.FC = () => {
       if (selectedOppForQuote) {
         // Atualiza oportunidade existente no funil
         await crmService.updateOpportunityStage(selectedOppForQuote.id, proposalForm.pipeline_stage);
+        await crmService.updateOpportunity(selectedOppForQuote.id, {
+          title: proposalForm.title.trim(),
+          customer_name: proposalForm.customer_name.trim(),
+          estimated_amount: proposalFinalTotal,
+          probability_percent: proposalForm.probability_percent,
+          expected_closing_date: proposalForm.expected_closing_date,
+          assigned_to_id: proposalForm.assigned_to_id || undefined,
+        });
         
         // Emite/atualiza itens cotados
         if (quoteItems.length > 0) {
           await crmService.createQuoteFromOpportunity(selectedOppForQuote.id, quoteItems);
+        }
+
+        // Persiste atividades pendentes se houver
+        if (pendingSidebarActivities.length > 0) {
+          for (const act of pendingSidebarActivities) {
+            try {
+              await crmService.createInteraction({
+                opportunity_id: selectedOppForQuote.id,
+                interaction_type: act.interaction_type,
+                summary: act.summary,
+                interaction_date: act.interaction_date
+              });
+            } catch (err) {
+              console.error("Erro ao salvar atividade pendente:", err);
+            }
+          }
+          setPendingSidebarActivities([]);
         }
 
         setOpportunities(prev => prev.map(o => o.id === selectedOppForQuote.id ? {
@@ -1116,7 +1123,8 @@ export const CRM: React.FC = () => {
           estimated_amount: proposalFinalTotal,
           probability_percent: proposalForm.probability_percent,
           expected_closing_date: proposalForm.expected_closing_date,
-          stage: proposalForm.pipeline_stage || o.stage
+          stage: proposalForm.pipeline_stage || o.stage,
+          assigned_to_id: proposalForm.assigned_to_id || o.assigned_to_id
         } : o));
 
         toast.success(`Oportunidade '${proposalForm.title}' atualizada com sucesso!`, "Negócio Salvo");
@@ -1126,6 +1134,7 @@ export const CRM: React.FC = () => {
           title: proposalForm.title.trim(),
           customer_name: proposalForm.customer_name.trim() || 'Cliente sem identificação',
           customer_id: proposalForm.customer_id || undefined,
+          assigned_to_id: proposalForm.assigned_to_id || undefined,
           estimated_amount: proposalFinalTotal,
           probability_percent: proposalForm.probability_percent || 50,
           expected_closing_date: proposalForm.expected_closing_date || undefined,
@@ -1135,6 +1144,23 @@ export const CRM: React.FC = () => {
 
         if (quoteItems.length > 0) {
           await crmService.createQuoteFromOpportunity(created.id, quoteItems);
+        }
+
+        // Persiste anotações/follow-ups adicionados durante a criação
+        if (pendingSidebarActivities.length > 0) {
+          for (const act of pendingSidebarActivities) {
+            try {
+              await crmService.createInteraction({
+                opportunity_id: created.id,
+                interaction_type: act.interaction_type,
+                summary: act.summary,
+                interaction_date: act.interaction_date
+              });
+            } catch (err) {
+              console.error("Erro ao salvar atividade pendente na nova oportunidade:", err);
+            }
+          }
+          setPendingSidebarActivities([]);
         }
 
         if (convertingLead) {
@@ -1225,10 +1251,32 @@ export const CRM: React.FC = () => {
       toast.warning("Informe o resumo do follow-up.", "Resumo Obrigatório");
       return;
     }
-    if (!selectedOppForQuote) return;
+
+    const scheduledDate = `${sidebarActivityForm.date}T${sidebarActivityForm.time}:00Z`;
+
+    if (!selectedOppForQuote) {
+      // Registro em rascunho de proposta ainda não persistida
+      const draftActivity = {
+        id: `draft_${Date.now()}`,
+        interaction_type: sidebarActivityForm.type,
+        summary: sidebarActivityForm.summary.trim(),
+        interaction_date: scheduledDate,
+        created_at: new Date().toISOString(),
+        is_pending: true
+      };
+      setPendingSidebarActivities(prev => [draftActivity, ...prev]);
+      setIsAddingSidebarActivity(false);
+      setSidebarActivityForm({
+        type: 'NOTE',
+        summary: '',
+        date: new Date().toISOString().split('T')[0],
+        time: new Date().toTimeString().slice(0, 5)
+      });
+      toast.info("Anotação adicionada ao rascunho. Será salva junto com a oportunidade!", "Rascunho Adicionado");
+      return;
+    }
 
     try {
-      const scheduledDate = `${sidebarActivityForm.date}T${sidebarActivityForm.time}:00Z`;
       const interaction = await crmService.createInteraction({
         opportunity_id: selectedOppForQuote.id,
         interaction_type: sidebarActivityForm.type,
@@ -1250,6 +1298,16 @@ export const CRM: React.FC = () => {
     } catch (err: any) {
       toast.error(formatApiError(err, "Falha ao registrar atualização."));
     }
+  };
+
+  const handleApproveProposal = () => {
+    setProposalForm(prev => ({ ...prev, status: 'APPROVED' }));
+    toast.success("Proposta aprovada com sucesso na governança comercial!", "Proposta Aprovada");
+  };
+
+  const handleRejectProposal = () => {
+    setProposalForm(prev => ({ ...prev, status: 'REJECTED' }));
+    toast.warning("Proposta rejeitada / devolvida para revisão comercial.", "Revisão Solicitada");
   };
 
   const handleConvertAndWinFromStudio = async () => {
@@ -1608,17 +1666,8 @@ export const CRM: React.FC = () => {
                 onClick={() => setActiveTab('pipeline')}
               >
                 <Kanban size={16} />
-                <span>Funil de Vendas (Kanban)</span>
+                <span>Funil de Vendas</span>
                 <span className="nav-badge">{opportunities.length}</span>
-              </button>
-              <button
-                type="button"
-                className={`nav-item ${activeTab === 'opportunities_list' ? 'active' : ''}`}
-                onClick={() => setActiveTab('opportunities_list')}
-              >
-                <ListFilter size={16} />
-                <span>Lista de Oportunidades</span>
-                <span className="nav-badge-subtle">{opportunities.length}</span>
               </button>
               <button
                 type="button"
@@ -1680,8 +1729,7 @@ export const CRM: React.FC = () => {
             <div className="header-titles">
               <h1>
                 {activeTab === 'dashboard' && 'Dashboard Executivo do CRM'}
-                {activeTab === 'pipeline' && 'Funil de Vendas Comercial'}
-                {activeTab === 'opportunities_list' && 'Gestão de Oportunidades'}
+                {activeTab === 'pipeline' && (oppViewMode === 'kanban' ? 'Funil de Vendas (Kanban)' : 'Lista de Oportunidades')}
                 {activeTab === 'leads' && 'Base de Leads & Prospecção'}
                 {activeTab === 'activities' && 'Central de Atividades & Follow-ups'}
                 {activeTab === 'stages' && 'Configuração das Etapas do Funil de Vendas'}
@@ -1689,8 +1737,7 @@ export const CRM: React.FC = () => {
               </h1>
               <p className="subtitle">
                 {activeTab === 'dashboard' && 'Visão panorâmica de negociações, taxas de conversão e metas comerciais'}
-                {activeTab === 'pipeline' && 'Arraste os cards entre as colunas para atualizar a fase de cada negociação'}
-                {activeTab === 'opportunities_list' && 'Listagem tabular de todos os negócios com filtros rápidos e valores'}
+                {activeTab === 'pipeline' && (oppViewMode === 'kanban' ? 'Arraste os cards entre as colunas para atualizar a fase de cada negociação' : 'Listagem tabular com personalização de colunas, valores e follow-ups')}
                 {activeTab === 'leads' && 'Qualifique potenciais clientes e converta contatos em negociações ativas'}
                 {activeTab === 'activities' && 'Organize ligações, reuniões, conversas de WhatsApp e lembretes com prazos'}
                 {activeTab === 'stages' && 'Personalize a sequência, nomes e cores das colunas do quadro Kanban'}
@@ -1699,6 +1746,29 @@ export const CRM: React.FC = () => {
             </div>
 
             <div className="header-actions">
+              {activeTab === 'pipeline' && (
+                <div className="view-mode-toggle-group">
+                  <button
+                    type="button"
+                    className={`btn-view-toggle ${oppViewMode === 'kanban' ? 'active' : ''}`}
+                    onClick={() => setOppViewMode('kanban')}
+                    title="Visualização em Quadro Kanban"
+                  >
+                    <LayoutGrid size={15} />
+                    <span>Kanban</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn-view-toggle ${oppViewMode === 'list' ? 'active' : ''}`}
+                    onClick={() => setOppViewMode('list')}
+                    title="Visualização em Lista Tabular"
+                  >
+                    <List size={15} />
+                    <span>Lista</span>
+                  </button>
+                </div>
+              )}
+
               <button
                 type="button"
                 className="btn-refresh"
@@ -1976,265 +2046,338 @@ export const CRM: React.FC = () => {
           )}
 
           {/* ================================================================= */}
-          {/* TAB 2: PIPELINE KANBAN (DRAG AND DROP)                            */}
+          {/* TAB 2: PIPELINE COMERCIAL (KANBAN & LISTA TABULAR UNIFICADOS)     */}
           {/* ================================================================= */}
           {activeTab === 'pipeline' && (
-            <div className="kanban-container">
-              <div className="kanban-board">
-                {stages.map((stage) => {
-                  const stageOpps = opportunities.filter(o => o.stage === stage.code);
-                  const stageTotalAmount = stageOpps.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
-                  const isDragOver = dragOverStageCode === stage.code;
+            <>
+              {oppViewMode === 'kanban' ? (
+                <div className="kanban-container">
+                  <div className="kanban-board">
+                    {stages.map((stage) => {
+                      const stageOpps = opportunities.filter(o => o.stage === stage.code);
+                      const stageTotalAmount = stageOpps.reduce((acc, o) => acc + (Number(o.estimated_amount) || 0), 0);
+                      const isDragOver = dragOverStageCode === stage.code;
 
-                  return (
-                    <div
-                      key={stage.id || stage.code}
-                      className={`kanban-column ${isDragOver ? 'drag-over' : ''}`}
-                      onDragOver={(e) => handleDragOver(e, stage.code)}
-                      onDragLeave={(e) => handleDragLeave(e, stage.code)}
-                      onDrop={(e) => handleDrop(e, stage.code)}
-                    >
-                      {/* Cabeçalho da Coluna com Totais */}
-                      <div className="column-header" style={{ borderTopColor: stage.color || 'var(--accent-brand)' }}>
-                        <div className="header-main-info">
-                          <div className="title-wrapper">
-                            <span className="stage-bullet" style={{ backgroundColor: stage.color || '#10b981' }} />
-                            <h3 className="column-title">{stage.name}</h3>
+                      return (
+                        <div
+                          key={stage.id || stage.code}
+                          className={`kanban-column ${isDragOver ? 'drag-over' : ''}`}
+                          onDragOver={(e) => handleDragOver(e, stage.code)}
+                          onDragLeave={(e) => handleDragLeave(e, stage.code)}
+                          onDrop={(e) => handleDrop(e, stage.code)}
+                        >
+                          {/* Cabeçalho da Coluna com Totais */}
+                          <div className="column-header" style={{ borderTopColor: stage.color || 'var(--accent-brand)' }}>
+                            <div className="header-main-info">
+                              <div className="title-wrapper">
+                                <span className="stage-bullet" style={{ backgroundColor: stage.color || '#10b981' }} />
+                                <h3 className="column-title">{stage.name}</h3>
+                              </div>
+                              <span className="count-pill">{stageOpps.length}</span>
+                            </div>
+
+                            <div className="column-sub-info">
+                              <span className="column-amount">{fmtCurrency(stageTotalAmount)}</span>
+                              <button
+                                type="button"
+                                className="btn-quick-add"
+                                onClick={() => handleOpenNewOppStudio(null, stage.code)}
+                                title={`Criar oportunidade na etapa '${stage.name}'`}
+                              >
+                                <Plus size={13} />
+                              </button>
+                            </div>
                           </div>
-                          <span className="count-pill">{stageOpps.length}</span>
-                        </div>
 
-                        <div className="column-sub-info">
-                          <span className="column-amount">{fmtCurrency(stageTotalAmount)}</span>
-                          <button
-                            type="button"
-                            className="btn-quick-add"
-                            onClick={() => handleOpenNewOppStudio(null, stage.code)}
-                            title={`Criar oportunidade na etapa '${stage.name}'`}
-                          >
-                            <Plus size={13} />
-                          </button>
+                          {/* Lista de Cards da Coluna */}
+                          <div className="cards-list">
+                            {stageOpps.length === 0 ? (
+                              <div className="empty-column-dropzone">
+                                <span>Arraste oportunidades para esta etapa</span>
+                              </div>
+                            ) : (
+                              stageOpps.map((opp) => {
+                                const isDragging = draggedOppId === opp.id;
+                                const inact = getOppInactivityInfo(opp);
+                                return (
+                                  <div
+                                    key={opp.id}
+                                    className={`kanban-card ${isDragging ? 'is-dragging' : ''} ${inact.isStagnant ? 'is-stagnant' : ''}`}
+                                    draggable
+                                    onDragStart={(e) => handleDragStart(e, opp.id)}
+                                    onClick={() => void loadOpportunityDetails(opp)}
+                                  >
+                                    <div className="card-top-row">
+                                      <h4 className="opp-title">{opp.title}</h4>
+                                      <span className="opp-prob">{opp.probability_percent}%</span>
+                                    </div>
+
+                                    <div className="opp-customer">
+                                      <Building2 size={13} />
+                                      <span>{opp.customer_name}</span>
+                                    </div>
+
+                                    <div className="opp-amount-row">
+                                      <span className="opp-amount">{fmtCurrency(opp.estimated_amount)}</span>
+                                    </div>
+
+                                    {opp.expected_closing_date && (
+                                      <div className="opp-date">
+                                        <Clock size={12} />
+                                        <span>Previsão: {fmtDate(opp.expected_closing_date)}</span>
+                                      </div>
+                                    )}
+
+                                    {opp.loss_reason && (
+                                      <div className="opp-loss-alert">
+                                        <AlertTriangle size={12} />
+                                        <span>{opp.loss_reason}</span>
+                                      </div>
+                                    )}
+
+                                    {inact.isStagnant && (
+                                      <div className="opp-stagnant-alert">
+                                        <div className="stagnant-pill">
+                                          <AlertTriangle size={11} />
+                                          <span>{inact.daysInactive > 0 ? `${inact.daysInactive}d sem contato` : 'Previsão vencida'}</span>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          className="btn-urgent-followup"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleScheduleUrgentFollowUp(opp);
+                                          }}
+                                          title="Agendar follow-up prioritário agora"
+                                        >
+                                          <Clock size={11} />
+                                          <span>Follow-up</span>
+                                        </button>
+                                      </div>
+                                    )}
+
+                                    <div className="card-footer-actions" onClick={(e) => e.stopPropagation()}>
+                                      <button
+                                        type="button"
+                                        className="btn-card-action"
+                                        onClick={() => void loadOpportunityDetails(opp)}
+                                        title="Emitir Proposta Comercial"
+                                      >
+                                        <FileText size={13} />
+                                        <span>Proposta</span>
+                                      </button>
+
+                                      <select
+                                        value={opp.stage}
+                                        onChange={(e) => void handleMoveStage(opp.id, e.target.value)}
+                                        className="stage-selector-select"
+                                      >
+                                        {stages.map(stg => (
+                                          <option key={stg.id || stg.code} value={stg.code}>{stg.name}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
                         </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="table-card">
+                  <div className="table-toolbar flex-between">
+                    <div className="toolbar-left-filters" style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div className="search-box">
+                        <input
+                          type="text"
+                          placeholder="Pesquisar por título ou cliente..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                        />
                       </div>
 
-                      {/* Lista de Cards da Coluna */}
-                      <div className="cards-list">
-                        {stageOpps.length === 0 ? (
-                          <div className="empty-column-dropzone">
-                            <span>Arraste oportunidades para esta etapa</span>
+                      <div className="filter-select-wrapper">
+                        <select
+                          value={oppActivityFilter}
+                          onChange={(e) => setOppActivityFilter(e.target.value as 'ALL' | 'STAGNANT')}
+                          className="select-activity-filter"
+                        >
+                          <option value="ALL">Todas as Atividades ({opportunities.length})</option>
+                          <option value="STAGNANT">🚨 Estagnadas / Sem Contato ({kpis.stagnantCount})</option>
+                        </select>
+                      </div>
+
+                      <div className="filter-select-wrapper">
+                        <select
+                          value={stageFilter}
+                          onChange={(e) => setStageFilter(e.target.value)}
+                        >
+                          <option value="ALL">Todos os Estágios ({opportunities.length})</option>
+                          {stages.map(stg => (
+                            <option key={stg.id || stg.code} value={stg.code}>{stg.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Dropdown de Personalização de Colunas com Flags */}
+                    <div className="column-customizer-wrapper" style={{ position: 'relative' }}>
+                      <button
+                        type="button"
+                        className="btn-custom-columns ui-button ui-button--secondary"
+                        onClick={() => setIsColumnSelectorOpen(!isColumnSelectorOpen)}
+                        title="Personalizar colunas visíveis da tabela"
+                      >
+                        <SlidersHorizontal size={14} />
+                        <span>Personalizar Colunas</span>
+                      </button>
+
+                      {isColumnSelectorOpen && (
+                        <div className="column-customizer-popover">
+                          <div className="customizer-title">
+                            <span>Exibir Colunas</span>
+                            <button
+                              type="button"
+                              className="btn-close-popover"
+                              onClick={() => setIsColumnSelectorOpen(false)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                            >
+                              <X size={14} />
+                            </button>
                           </div>
+                          <div className="customizer-items">
+                            {[
+                              { key: 'title', label: 'Título do Negócio' },
+                              { key: 'customer', label: 'Cliente / Empresa' },
+                              { key: 'estimated_amount', label: 'Valor Estimado' },
+                              { key: 'probability_percent', label: 'Probabilidade' },
+                              { key: 'stage', label: 'Estágio Atual' },
+                              { key: 'activity_status', label: 'Status de Atividade' },
+                              { key: 'expected_closing_date', label: 'Previsão de Fechamento' },
+                              { key: 'responsible_name', label: 'Vendedor Responsável' },
+                              { key: 'sales_team', label: 'Equipe Comercial' },
+                              { key: 'actions', label: 'Ações' }
+                            ].map(col => (
+                              <label key={col.key} className="customizer-item">
+                                <input
+                                  type="checkbox"
+                                  checked={!!visibleColumns[col.key]}
+                                  onChange={() => toggleColumnVisibility(col.key)}
+                                />
+                                <span>{col.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="table-responsive">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          {visibleColumns.title && <th>Título do Negócio</th>}
+                          {visibleColumns.customer && <th>Cliente / Empresa</th>}
+                          {visibleColumns.estimated_amount && <th>Valor Estimado</th>}
+                          {visibleColumns.probability_percent && <th>Probabilidade</th>}
+                          {visibleColumns.stage && <th>Estágio Atual</th>}
+                          {visibleColumns.activity_status && <th>Status de Atividade</th>}
+                          {visibleColumns.expected_closing_date && <th>Previsão Fechamento</th>}
+                          {visibleColumns.responsible_name && <th>Vendedor</th>}
+                          {visibleColumns.sales_team && <th>Equipe</th>}
+                          {visibleColumns.actions && <th style={{ textAlign: 'center' }}>Ações</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredOpportunities.length === 0 ? (
+                          <tr>
+                            <td colSpan={10} className="empty-row">Nenhuma oportunidade encontrada com os filtros selecionados.</td>
+                          </tr>
                         ) : (
-                          stageOpps.map((opp) => {
-                            const isDragging = draggedOppId === opp.id;
+                          filteredOpportunities.map(opp => {
+                            const stg = stages.find(s => s.code === opp.stage);
                             const inact = getOppInactivityInfo(opp);
+                            const matchedSeller = sellersList.find(s => s.id === opp.assigned_to_id);
                             return (
-                              <div
-                                key={opp.id}
-                                className={`kanban-card ${isDragging ? 'is-dragging' : ''} ${inact.isStagnant ? 'is-stagnant' : ''}`}
-                                draggable
-                                onDragStart={(e) => handleDragStart(e, opp.id)}
-                                onClick={() => void loadOpportunityDetails(opp)}
-                              >
-                                <div className="card-top-row">
-                                  <h4 className="opp-title">{opp.title}</h4>
-                                  <span className="opp-prob">{opp.probability_percent}%</span>
-                                </div>
-
-                                <div className="opp-customer">
-                                  <Building2 size={13} />
-                                  <span>{opp.customer_name}</span>
-                                </div>
-
-                                <div className="opp-amount-row">
-                                  <span className="opp-amount">{fmtCurrency(opp.estimated_amount)}</span>
-                                </div>
-
-                                {opp.expected_closing_date && (
-                                  <div className="opp-date">
-                                    <Clock size={12} />
-                                    <span>Previsão: {fmtDate(opp.expected_closing_date)}</span>
-                                  </div>
+                              <tr key={opp.id} onClick={() => void loadOpportunityDetails(opp)} style={{ cursor: 'pointer' }}>
+                                {visibleColumns.title && <td><strong>{opp.title}</strong></td>}
+                                {visibleColumns.customer && <td>{opp.customer_name}</td>}
+                                {visibleColumns.estimated_amount && (
+                                  <td><span className="opp-val-highlight">{fmtCurrency(opp.estimated_amount)}</span></td>
                                 )}
-
-                                {opp.loss_reason && (
-                                  <div className="opp-loss-alert">
-                                    <AlertTriangle size={12} />
-                                    <span>{opp.loss_reason}</span>
-                                  </div>
+                                {visibleColumns.probability_percent && <td>{opp.probability_percent}%</td>}
+                                {visibleColumns.stage && (
+                                  <td>
+                                    <span className="stage-pill" style={{ backgroundColor: stg?.color ? `${stg.color}22` : 'var(--accent-brand-subtle)', color: stg?.color || 'var(--accent-brand)' }}>
+                                      {stg?.name || opp.stage}
+                                    </span>
+                                  </td>
                                 )}
-
-                                {inact.isStagnant && (
-                                  <div className="opp-stagnant-alert">
-                                    <div className="stagnant-pill">
-                                      <AlertTriangle size={11} />
-                                      <span>{inact.daysInactive > 0 ? `${inact.daysInactive}d sem contato` : 'Previsão vencida'}</span>
-                                    </div>
+                                {visibleColumns.activity_status && (
+                                  <td>
+                                    {inact.isStagnant ? (
+                                      <div className="stagnant-table-pill" title={`${inact.daysInactive} dias sem nova atividade registrada`}>
+                                        <AlertTriangle size={12} />
+                                        <span>Estagnado ({inact.daysInactive}d)</span>
+                                      </div>
+                                    ) : (
+                                      <div className="active-table-pill">
+                                        <Check size={12} />
+                                        <span>Ativo</span>
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+                                {visibleColumns.expected_closing_date && <td>{fmtDate(opp.expected_closing_date)}</td>}
+                                {visibleColumns.responsible_name && (
+                                  <td>
+                                    <span className="seller-name-cell">
+                                      {matchedSeller ? matchedSeller.full_name : ((opp as any).assigned_to?.full_name || '-')}
+                                    </span>
+                                  </td>
+                                )}
+                                {visibleColumns.sales_team && (
+                                  <td>
+                                    <span className="team-badge-cell">
+                                      {matchedSeller?.sales_team_name || '-'}
+                                    </span>
+                                  </td>
+                                )}
+                                {visibleColumns.actions && (
+                                  <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                                    {inact.isStagnant && (
+                                      <button
+                                        className="btn-icon-action urgent"
+                                        onClick={() => handleScheduleUrgentFollowUp(opp)}
+                                        title="Agendar Follow-up Emergencial"
+                                      >
+                                        <Clock size={15} />
+                                      </button>
+                                    )}
                                     <button
-                                      type="button"
-                                      className="btn-urgent-followup"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleScheduleUrgentFollowUp(opp);
-                                      }}
-                                      title="Agendar follow-up prioritário agora"
+                                      className="btn-icon-action"
+                                      onClick={() => void loadOpportunityDetails(opp)}
+                                      title="Ver Detalhes e Proposta"
                                     >
-                                      <Clock size={11} />
-                                      <span>Follow-up</span>
+                                      <Eye size={15} />
                                     </button>
-                                  </div>
+                                  </td>
                                 )}
-
-                                <div className="card-footer-actions" onClick={(e) => e.stopPropagation()}>
-                                  <button
-                                    type="button"
-                                    className="btn-card-action"
-                                    onClick={() => handleOpenQuoteModal(opp)}
-                                    title="Emitir Proposta Comercial"
-                                  >
-                                    <FileText size={13} />
-                                    <span>Proposta</span>
-                                  </button>
-
-                                  <select
-                                    value={opp.stage}
-                                    onChange={(e) => void handleMoveStage(opp.id, e.target.value)}
-                                    className="stage-selector-select"
-                                  >
-                                    {stages.map(stg => (
-                                      <option key={stg.id || stg.code} value={stg.code}>{stg.name}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
+                              </tr>
                             );
                           })
                         )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ================================================================= */}
-          {/* TAB 3: LISTA TABULAR DE OPORTUNIDADES                             */}
-          {/* ================================================================= */}
-          {activeTab === 'opportunities_list' && (
-            <div className="table-card">
-              <div className="table-toolbar">
-                <div className="search-box">
-                  <input
-                    type="text"
-                    placeholder="Pesquisar por título ou cliente..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-
-                <div className="filter-select-wrapper">
-                  <select
-                    value={oppActivityFilter}
-                    onChange={(e) => setOppActivityFilter(e.target.value as 'ALL' | 'STAGNANT')}
-                    className="select-activity-filter"
-                  >
-                    <option value="ALL">Todas as Atividades ({opportunities.length})</option>
-                    <option value="STAGNANT">🚨 Estagnadas / Sem Contato ({kpis.stagnantCount})</option>
-                  </select>
-                </div>
-
-                <div className="filter-select-wrapper">
-                  <select
-                    value={stageFilter}
-                    onChange={(e) => setStageFilter(e.target.value)}
-                  >
-                    <option value="ALL">Todos os Estágios ({opportunities.length})</option>
-                    {stages.map(stg => (
-                      <option key={stg.id || stg.code} value={stg.code}>{stg.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Título do Negócio</th>
-                    <th>Cliente / Empresa</th>
-                    <th>Valor Estimado</th>
-                    <th>Probabilidade</th>
-                    <th>Estágio Atual</th>
-                    <th>Status de Atividade</th>
-                    <th>Previsão Fechamento</th>
-                    <th style={{ textAlign: 'center' }}>Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredOpportunities.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="empty-row">Nenhuma oportunidade encontrada com os filtros selecionados.</td>
-                    </tr>
-                  ) : (
-                    filteredOpportunities.map(opp => {
-                      const stg = stages.find(s => s.code === opp.stage);
-                      const inact = getOppInactivityInfo(opp);
-                      return (
-                        <tr key={opp.id} onClick={() => void loadOpportunityDetails(opp)} style={{ cursor: 'pointer' }}>
-                          <td><strong>{opp.title}</strong></td>
-                          <td>{opp.customer_name}</td>
-                          <td><span className="opp-val-highlight">{fmtCurrency(opp.estimated_amount)}</span></td>
-                          <td>{opp.probability_percent}%</td>
-                          <td>
-                            <span className="stage-pill" style={{ backgroundColor: stg?.color ? `${stg.color}22` : 'var(--accent-brand-subtle)', color: stg?.color || 'var(--accent-brand)' }}>
-                              {stg?.name || opp.stage}
-                            </span>
-                          </td>
-                          <td>
-                            {inact.isStagnant ? (
-                              <div className="stagnant-table-pill" title={`${inact.daysInactive} dias sem nova atividade registrada`}>
-                                <AlertTriangle size={12} />
-                                <span>Estagnado ({inact.daysInactive}d)</span>
-                              </div>
-                            ) : (
-                              <div className="active-table-pill">
-                                <Check size={12} />
-                                <span>Ativo</span>
-                              </div>
-                            )}
-                          </td>
-                          <td>{fmtDate(opp.expected_closing_date)}</td>
-                          <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                            {inact.isStagnant && (
-                              <button
-                                className="btn-icon-action urgent"
-                                onClick={() => handleScheduleUrgentFollowUp(opp)}
-                                title="Agendar Follow-up Emergencial"
-                              >
-                                <Clock size={15} />
-                              </button>
-                            )}
-                            <button
-                              className="btn-icon-action"
-                              onClick={() => void loadOpportunityDetails(opp)}
-                              title="Ver Detalhes 360º"
-                            >
-                              <Eye size={15} />
-                            </button>
-                            <button
-                              className="btn-icon-action"
-                              onClick={() => handleOpenQuoteModal(opp)}
-                              title="Emitir Proposta"
-                            >
-                              <FileText size={15} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+              )}
+            </>
           )}
 
           {/* ================================================================= */}
@@ -3694,27 +3837,44 @@ export const CRM: React.FC = () => {
                       <div className="card-body">
                         <div className="form-grid-3">
                           <div className="form-group">
-                            <label>Vendedor Responsável</label>
+                            <label>Vendedor Responsável (Força de Vendas)</label>
                             <div className="input-with-icon-box">
                               <UserCheck size={15} className="input-prefix-icon" />
-                              <input
-                                type="text"
+                              <select
                                 className="ui-input has-prefix-icon"
-                                value={proposalForm.responsible_name}
-                                onChange={(e) => setProposalForm({ ...proposalForm, responsible_name: e.target.value })}
-                              />
+                                value={proposalForm.assigned_to_id || ''}
+                                onChange={(e) => {
+                                  const selectedId = e.target.value;
+                                  const seller = sellersList.find(s => s.id === selectedId);
+                                  setProposalForm({
+                                    ...proposalForm,
+                                    assigned_to_id: selectedId || undefined,
+                                    responsible_name: seller ? seller.full_name : (selectedId ? proposalForm.responsible_name : ''),
+                                    sales_team: seller?.sales_team_name || (selectedId ? 'Sem Equipe Comercial' : '')
+                                  });
+                                }}
+                              >
+                                <option value="">Selecione o Vendedor Responsável...</option>
+                                {sellersList.map(seller => (
+                                  <option key={seller.id} value={seller.id}>
+                                    {seller.full_name} {seller.sales_team_name ? `• ${seller.sales_team_name}` : '• Sem Equipe'}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                           </div>
 
                           <div className="form-group">
-                            <label>Equipe Comercial</label>
+                            <label>Equipe Comercial Vinculada</label>
                             <div className="input-with-icon-box">
                               <Users size={15} className="input-prefix-icon" />
                               <input
                                 type="text"
                                 className="ui-input has-prefix-icon"
-                                value={proposalForm.sales_team}
-                                onChange={(e) => setProposalForm({ ...proposalForm, sales_team: e.target.value })}
+                                value={proposalForm.sales_team || 'Nenhuma equipe vinculada'}
+                                readOnly
+                                placeholder="Vinculada automaticamente ao vendedor"
+                                style={{ backgroundColor: 'var(--bg-muted, rgba(255,255,255,0.03))', cursor: 'not-allowed' }}
                               />
                             </div>
                           </div>
@@ -4496,153 +4656,82 @@ export const CRM: React.FC = () => {
                         <div className="header-left-flex">
                           <ShieldCheck size={18} className="card-header-icon" />
                           <div>
-                            <h4>Alçadas de Aprovação & Governança</h4>
-                            <p>Status das validações de política comercial, margem e análise técnica</p>
+                            <h4>Governança Comercial & Alçadas</h4>
+                            <p>Validação de desconto, margem de contribuição e aprovação de gestores</p>
                           </div>
                         </div>
-                        <div className="gov-progress-pill">
-                          <span className="gov-progress-label">2 de 3 Aprovadas</span>
-                          <div className="gov-progress-bar">
-                            <div className="gov-progress-fill" style={{ width: '66%' }} />
-                          </div>
+                        <div className={`gov-status-pill ${proposalForm.status.toLowerCase()}`}>
+                          {proposalForm.status === 'APPROVED' && <CheckCircle2 size={14} />}
+                          {proposalForm.status === 'REJECTED' && <X size={14} />}
+                          {proposalForm.status === 'DRAFT' && <FileText size={14} />}
+                          <span>
+                            {proposalForm.status === 'APPROVED' ? 'Proposta Aprovada' :
+                             proposalForm.status === 'REJECTED' ? 'Devolvida para Revisão' :
+                             proposalForm.status === 'CONVERTED' ? 'Convertida em Pedido' :
+                             'Rascunho Comercial'}
+                          </span>
                         </div>
                       </div>
 
                       <div className="card-body">
-                        <div className="gov-levels-list">
-                          
-                          {/* Alçada 1 */}
-                          <div className="gov-level-card approved">
-                            <div className="gov-level-header">
-                              <div className="gov-level-type">
-                                <div className="gov-icon-badge icon-green">
-                                  <DollarSign size={16} />
-                                </div>
-                                <div className="gov-level-meta">
-                                  <strong>Aprovação Comercial & Margem</strong>
-                                  <span className="gov-level-desc">Validação de preço de tabela e desconto concedido</span>
-                                </div>
-                              </div>
-                              <span className="gov-status-tag tag-approved">
-                                <CheckCircle2 size={13} />
-                                <span>Aprovado</span>
-                              </span>
-                            </div>
-
-                            <div className="gov-level-body">
-                              <div className="gov-detail-grid">
-                                <div className="gov-detail-item">
-                                  <span className="gov-detail-label">Responsável / Alçada</span>
-                                  <div className="gov-approver-row">
-                                    <div className="approver-avatar">RF</div>
-                                    <span className="approver-name">Gerente de Vendas (Roberto Farias)</span>
-                                  </div>
-                                </div>
-
-                                <div className="gov-detail-item">
-                                  <span className="gov-detail-label">Data da Decisão</span>
-                                  <div className="gov-date-row">
-                                    <Calendar size={13} />
-                                    <span>{fmtDate(proposalForm.creation_date)} às 14:30</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="gov-comment-box">
-                                <span className="comment-label">Parecer Comercial:</span>
-                                <p className="comment-text">Margem e desconto de 5% dentro da política comercial aprovada para clientes de telecom.</p>
-                              </div>
-                            </div>
+                        {/* Resumo Financeiro da Proposta */}
+                        <div className="gov-summary-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem', background: 'var(--bg-surface-elevated, rgba(255,255,255,0.02))', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                          <div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Valor Total do Negócio</span>
+                            <h3 style={{ margin: '0.2rem 0 0', color: 'var(--text-primary)' }}>{fmtCurrency(proposalFinalTotal)}</h3>
                           </div>
-
-                          {/* Alçada 2 */}
-                          <div className="gov-level-card approved">
-                            <div className="gov-level-header">
-                              <div className="gov-level-type">
-                                <div className="gov-icon-badge icon-blue">
-                                  <CreditCard size={16} />
-                                </div>
-                                <div className="gov-level-meta">
-                                  <strong>Aprovação Financeira & Crédito</strong>
-                                  <span className="gov-level-desc">Análise de limite corporativo e prazo faturado 30 DDL</span>
-                                </div>
-                              </div>
-                              <span className="gov-status-tag tag-approved">
-                                <CheckCircle2 size={13} />
-                                <span>Aprovado</span>
-                              </span>
-                            </div>
-
-                            <div className="gov-level-body">
-                              <div className="gov-detail-grid">
-                                <div className="gov-detail-item">
-                                  <span className="gov-detail-label">Responsável / Alçada</span>
-                                  <div className="gov-approver-row">
-                                    <div className="approver-avatar avatar-blue">AP</div>
-                                    <span className="approver-name">Controladoria & Crédito (Ana Paula)</span>
-                                  </div>
-                                </div>
-
-                                <div className="gov-detail-item">
-                                  <span className="gov-detail-label">Data da Decisão</span>
-                                  <div className="gov-date-row">
-                                    <Calendar size={13} />
-                                    <span>{fmtDate(proposalForm.creation_date)} às 16:15</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="gov-comment-box">
-                                <span className="comment-label">Parecer Financeiro:</span>
-                                <p className="comment-text">Limite de crédito do cliente verificado e aprovado. Condição faturada liberada.</p>
-                              </div>
-                            </div>
+                          <div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Desconto Total Aplicado</span>
+                            <h3 style={{ margin: '0.2rem 0 0', color: proposalTotalDiscount > 0 ? '#f59e0b' : 'var(--text-secondary)' }}>
+                              {fmtCurrency(proposalTotalDiscount)}
+                            </h3>
                           </div>
-
-                          {/* Alçada 3 */}
-                          <div className="gov-level-card pending">
-                            <div className="gov-level-header">
-                              <div className="gov-level-type">
-                                <div className="gov-icon-badge icon-amber">
-                                  <Zap size={16} />
-                                </div>
-                                <div className="gov-level-meta">
-                                  <strong>Aprovação Técnica & Engenharia</strong>
-                                  <span className="gov-level-desc">Viabilidade técnica de infraestrutura física e materiais</span>
-                                </div>
-                              </div>
-                              <span className="gov-status-tag tag-pending">
-                                <Clock size={13} />
-                                <span>Aguardando Vistoria</span>
-                              </span>
-                            </div>
-
-                            <div className="gov-level-body">
-                              <div className="gov-detail-grid">
-                                <div className="gov-detail-item">
-                                  <span className="gov-detail-label">Responsável / Alçada</span>
-                                  <div className="gov-approver-row">
-                                    <div className="approver-avatar avatar-amber">MS</div>
-                                    <span className="approver-name">Líder de Projetos (Marcos Silva)</span>
-                                  </div>
-                                </div>
-
-                                <div className="gov-detail-item">
-                                  <span className="gov-detail-label">Data da Decisão</span>
-                                  <div className="gov-date-row">
-                                    <Clock size={13} />
-                                    <span className="text-warning">Em análise na unidade</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="gov-comment-box">
-                                <span className="comment-label">Instrução Técnica:</span>
-                                <p className="comment-text">Validar disponibilidade de passagem de cabeamento na infraestrutura física do rack central.</p>
-                              </div>
-                            </div>
+                          <div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Vendedor Responsável</span>
+                            <div style={{ fontWeight: 600, marginTop: '0.2rem', color: 'var(--text-primary)' }}>{proposalForm.responsible_name}</div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--accent-brand)' }}>{proposalForm.sales_team || 'Sem Equipe'}</span>
                           </div>
+                        </div>
 
+                        {/* Painel de Ações de Governança para Gestores */}
+                        <div className="gov-action-box" style={{ background: 'var(--bg-surface)', padding: '1.2rem', borderRadius: '8px', border: '1px solid var(--border-subtle)', marginBottom: '1rem' }}>
+                          <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Parecer e Decisão do Gestor</h4>
+                          <p style={{ margin: '0 0 1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Gestores comerciais e administradores podem aprovar ou devolver esta proposta comercial para adequação de margem e escopo.
+                          </p>
+
+                          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="ui-button ui-button--primary"
+                              onClick={handleApproveProposal}
+                              disabled={proposalForm.status === 'APPROVED'}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: '#10b981', borderColor: '#10b981' }}
+                            >
+                              <CheckCircle2 size={15} />
+                              <span>{proposalForm.status === 'APPROVED' ? 'Proposta Já Aprovada' : 'Aprovar Proposta'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="ui-button ui-button--secondary"
+                              onClick={handleRejectProposal}
+                              disabled={proposalForm.status === 'REJECTED'}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: '#ef4444' }}
+                            >
+                              <X size={15} />
+                              <span>Solicitar Revisão / Rejeitar</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="ui-button ui-button--secondary"
+                              onClick={() => setProposalForm(prev => ({ ...prev, status: 'DRAFT' }))}
+                              disabled={proposalForm.status === 'DRAFT'}
+                            >
+                              Voltar para Rascunho
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -4778,29 +4867,49 @@ export const CRM: React.FC = () => {
                 <div className="modern-timeline-container">
                   <div className="timeline-title-row">
                     <span>Histórico de Atualizações</span>
-                    <span className="count-tag">{oppInteractions.length}</span>
+                    <span className="count-tag">{pendingSidebarActivities.length + oppInteractions.length}</span>
                   </div>
 
                   <div className="timeline-track">
-                    {oppInteractions.length > 0 ? (
-                      oppInteractions.map((act) => (
-                        <div key={act.id} className="timeline-entry">
-                          <div className={`timeline-node ${act.interaction_type.toLowerCase()}`}>
-                            {act.interaction_type === 'CALL' && <Phone size={12} />}
-                            {act.interaction_type === 'WHATSAPP' && <MessageSquare size={12} />}
-                            {act.interaction_type === 'MEETING' && <Users size={12} />}
-                            {act.interaction_type === 'EMAIL' && <Mail size={12} />}
-                            {act.interaction_type === 'NOTE' && <FileText size={12} />}
-                          </div>
-                          <div className="timeline-card">
-                            <div className="card-top">
-                              <span className="card-title">{act.summary}</span>
-                              <span className="card-time">{fmtDate(act.interaction_date || act.created_at)}</span>
+                    {(pendingSidebarActivities.length > 0 || oppInteractions.length > 0) ? (
+                      <>
+                        {/* Atividades em Rascunho */}
+                        {pendingSidebarActivities.map((act) => (
+                          <div key={act.id} className="timeline-entry pending-entry">
+                            <div className={`timeline-node ${act.interaction_type.toLowerCase()}`}>
+                              <FileText size={12} />
                             </div>
-                            {act.details && <p className="card-details">{act.details}</p>}
+                            <div className="timeline-card pending-card">
+                              <div className="card-top">
+                                <span className="card-title">{act.summary}</span>
+                                <span className="pending-badge" style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                                  Pendente a salvar
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      ))
+                        ))}
+
+                        {/* Atividades Persistidas */}
+                        {oppInteractions.map((act) => (
+                          <div key={act.id} className="timeline-entry">
+                            <div className={`timeline-node ${act.interaction_type.toLowerCase()}`}>
+                              {act.interaction_type === 'CALL' && <Phone size={12} />}
+                              {act.interaction_type === 'WHATSAPP' && <MessageSquare size={12} />}
+                              {act.interaction_type === 'MEETING' && <Users size={12} />}
+                              {act.interaction_type === 'EMAIL' && <Mail size={12} />}
+                              {act.interaction_type === 'NOTE' && <FileText size={12} />}
+                            </div>
+                            <div className="timeline-card">
+                              <div className="card-top">
+                                <span className="card-title">{act.summary}</span>
+                                <span className="card-time">{fmtDate(act.interaction_date || act.created_at)}</span>
+                              </div>
+                              {act.details && <p className="card-details">{act.details}</p>}
+                            </div>
+                          </div>
+                        ))}
+                      </>
                     ) : (
                       <div className="empty-timeline-hint">
                         <p>Nenhuma atualização registrada ainda.</p>
@@ -5018,7 +5127,7 @@ export const CRM: React.FC = () => {
             {documentTimelineError}
           </div>
         ) : documentChain ? (
-          <DocumentTimeline chain={documentChain} />
+          <DocumentTimeline chain={documentChain} onNavigate={handleTimelineNavigate} />
         ) : (
           <div className="ui-empty-state" style={{ padding: '2rem', textAlign: 'center' }}>Nenhuma cadeia documental disponível.</div>
         )}

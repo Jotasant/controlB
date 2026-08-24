@@ -13,11 +13,13 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
 from controlb.modules.identity import repository
-from controlb.modules.identity.models import User
+from controlb.modules.identity.models import User, Team
 from controlb.modules.identity.schemas import (
     UserCreate, UserUpdate,
     OrganizationCreate, OrganizationUpdate,
-    RoleCreate, RoleUpdate
+    RoleCreate, RoleUpdate,
+    ContactCreate, ContactUpdate,
+    TeamCreate, TeamUpdate
 )
 
 # Re-exporta utilitários e guards de segurança a partir de security.py
@@ -343,3 +345,108 @@ def delete_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUI
     contact = get_contact(db, contact_id, organization_id)
     repository.delete_contact(db, contact)
     return {"message": "Contato excluído com sucesso."}
+
+
+# ==============================================================================
+# 5. REGRAS DE NEGÓCIO DE EQUIPE E ESCOPO DE VISIBILIDADE (Team & Row-Level Scope)
+# ==============================================================================
+
+def list_teams(
+    db: Session,
+    organization_id: uuid.UUID,
+    module_category: str | None = None,
+    is_active: bool | None = None
+):
+    """Lista as equipes da organização com filtro opcional por módulo."""
+    return repository.list_teams(db, organization_id, module_category, is_active)
+
+
+def get_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID):
+    """Busca uma equipe específica, validando o tenant da organização."""
+    team = repository.get_team_by_id(db, team_id, organization_id)
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Equipe não encontrada."
+        )
+    return team
+
+
+def create_team(db: Session, organization_id: uuid.UUID, data: TeamCreate):
+    """Cria uma nova equipe multimodular vinculando membros."""
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O nome da equipe é obrigatório."
+        )
+    data.name = name
+    return repository.create_team(db, organization_id, data)
+
+
+def update_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, data: TeamUpdate):
+    """Atualiza dados e membros de uma equipe existente."""
+    team = get_team(db, team_id, organization_id)
+    return repository.update_team(db, team, data)
+
+
+def delete_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID):
+    """Remove uma equipe da organização."""
+    team = get_team(db, team_id, organization_id)
+    repository.delete_team(db, team)
+    return {"message": "Equipe removida com sucesso."}
+
+
+def add_team_members(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, user_ids: list[uuid.UUID]):
+    """Adiciona colaboradores à equipe."""
+    team = get_team(db, team_id, organization_id)
+    return repository.add_team_members(db, team, user_ids)
+
+
+def remove_team_member(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, user_id: uuid.UUID):
+    """Remove um colaborador da equipe."""
+    team = get_team(db, team_id, organization_id)
+    return repository.remove_team_member(db, team, user_id)
+
+
+def get_accessible_user_ids(
+    db: Session,
+    current_user: User,
+    module_category: str = "SALES"
+) -> set[uuid.UUID] | None:
+    """
+    Retorna o conjunto de IDs de usuários cujos registros o `current_user` tem permissão de visualizar.
+    
+    Regras de Escopo (Row-Level Security):
+    1. Usuários Administradores, Diretores, Gestores Globais, Marketing ou Consultores:
+       -> Retorna `None` (significa ACESSO GLOBAL a 100% dos registros da organização).
+    2. Gestores / Líderes de Equipe (onde `team.leader_id == current_user.id` na categoria do módulo):
+       -> Retorna `{current_user.id, ...membros_das_equipes_lideradas}`.
+    3. Usuários Comuns / Vendedores:
+       -> Retorna `{current_user.id}` (visualiza estritamente seus próprios registros vinculados).
+    """
+    role_name = (current_user.role.name if current_user.role else "").lower()
+    
+    # Perfis com visão irrestrita/global
+    broad_roles = ["admin", "administrador", "diretor", "diretoria", "gerente geral", "marketing", "consultor", "consultoria"]
+    if any(br in role_name for br in broad_roles):
+        return None
+
+    # Verifica permissões explícitas amplas
+    perms = get_user_permissions(current_user)
+    if any(p in perms for p in ["crm:view_all", "sales:view_all", "crm:manage_all", "sales:manage_all", "*:*"]):
+        return None
+
+    # Verifica se o usuário é líder de equipes no módulo informado
+    teams = repository.list_teams(db, current_user.organization_id, module_category=module_category, is_active=True)
+    led_teams = [t for t in teams if t.leader_id == current_user.id]
+
+    if led_teams:
+        accessible_ids = {current_user.id}
+        for team in led_teams:
+            for member in team.members:
+                accessible_ids.add(member.id)
+        return accessible_ids
+
+    # Usuário comum / vendedor: apenas seu próprio ID
+    return {current_user.id}

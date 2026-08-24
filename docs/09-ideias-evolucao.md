@@ -3,6 +3,7 @@
 Priorizar somente após estabilizar o fluxo central e medir valor.
 
 - Importação e validação de XML de NF-e.
+- Motor universal de importação com mapeador dinâmico de colunas ("De-Para") para XLSX/CSV de sistemas legados com sandbox de conciliação prévia ([proposta arquitetural](propostas/modelo-importacao-dinamica-planilhas.md)).
 - Reposição por estoque mínimo, consumo e lead time.
 - Score de fornecedores e sugestão de cotação.
 - Detecção de duplicidades e preços fora do padrão.

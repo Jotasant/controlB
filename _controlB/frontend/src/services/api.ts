@@ -255,16 +255,18 @@ export const identityService = {
     );
   },
 
-  async createUser(data: { full_name: string; email: string; password: string; organization_id?: string; role_id?: string }): Promise<User> {
+  async createUser(data: { full_name: string; email: string; password: string; organization_id?: string; role_id?: string; is_seller?: boolean }): Promise<User> {
     const response = await api.post<User>('/identity/users', data);
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate('sales:sellers');
     return response.data;
   },
 
-  async updateUser(userId: string, data: { full_name?: string; email?: string; password?: string; organization_id?: string; role_id?: string; is_active?: boolean }): Promise<User> {
+  async updateUser(userId: string, data: { full_name?: string; email?: string; password?: string; organization_id?: string; role_id?: string; is_active?: boolean; is_seller?: boolean }): Promise<User> {
     const response = await api.put<User>(`/identity/users/${userId}`, data);
     cacheManager.invalidate('identity:users');
     cacheManager.invalidate('identity:me');
+    cacheManager.invalidate('sales:sellers');
     return response.data;
   },
 
@@ -419,6 +421,52 @@ export const identityService = {
   async deleteContact(contactId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/identity/contacts/${contactId}`);
     cacheManager.invalidate('identity:contacts');
+    return response.data;
+  },
+
+  // --- EQUIPES / GRUPOS DE TRABALHO (TEAMS) ---
+  async getTeams(moduleCategory?: string, forceRefresh = false): Promise<import('@/types').Team[]> {
+    const key = `identity:teams:${moduleCategory || 'all'}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get<import('@/types').Team[]>('/identity/teams', {
+          params: moduleCategory ? { module_category: moduleCategory } : undefined
+        });
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async createTeam(data: { name: string; code?: string; module_category?: string; description?: string; leader_id?: string; member_ids?: string[] }): Promise<import('@/types').Team> {
+    const response = await api.post<import('@/types').Team>('/identity/teams', data);
+    cacheManager.invalidate('identity:teams');
+    return response.data;
+  },
+
+  async updateTeam(teamId: string, data: { name?: string; code?: string; module_category?: string; description?: string; leader_id?: string; is_active?: boolean; member_ids?: string[] }): Promise<import('@/types').Team> {
+    const response = await api.put<import('@/types').Team>(`/identity/teams/${teamId}`, data);
+    cacheManager.invalidate('identity:teams');
+    return response.data;
+  },
+
+  async deleteTeam(teamId: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/identity/teams/${teamId}`);
+    cacheManager.invalidate('identity:teams');
+    return response.data;
+  },
+
+  async addTeamMembers(teamId: string, userIds: string[]): Promise<import('@/types').Team> {
+    const response = await api.post<import('@/types').Team>(`/identity/teams/${teamId}/members`, { user_ids: userIds });
+    cacheManager.invalidate('identity:teams');
+    return response.data;
+  },
+
+  async removeTeamMember(teamId: string, userId: string): Promise<import('@/types').Team> {
+    const response = await api.delete<import('@/types').Team>(`/identity/teams/${teamId}/members/${userId}`);
+    cacheManager.invalidate('identity:teams');
     return response.data;
   }
 };
@@ -1895,5 +1943,18 @@ export const salesService = {
 
   async getAnalytics(forceRefresh = false): Promise<import('@/types').SalesAnalytics> {
     return this.getSalesAnalytics(forceRefresh);
+  },
+
+  // --- FORÇA DE VENDAS / VENDEDORES ---
+  async getSellers(forceRefresh = false): Promise<import('@/types').SellerResponse[]> {
+    return cacheManager.fetchWithCache(
+      'sales:sellers',
+      async () => {
+        const response = await api.get<import('@/types').SellerResponse[]>('/sales/sellers');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
   }
 };

@@ -13,7 +13,9 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -27,7 +29,7 @@ def utcnow() -> datetime:
 
 
 class BusinessDocument(Base):
-    """Identidade transversal de um documento pertencente a um módulo de domínio."""
+    """Identidade transversal e persistência central de um documento transacional do sistema."""
 
     __tablename__ = "business_document"
     __table_args__ = (
@@ -45,6 +47,7 @@ class BusinessDocument(Base):
         ),
         UniqueConstraint("id", "organization_id", name="uq_business_document_id_org"),
         Index("ix_business_document_org_type", "organization_id", "document_type"),
+        Index("ix_business_document_org_cat", "organization_id", "category"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -53,11 +56,22 @@ class BusinessDocument(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organization.id", ondelete="CASCADE"), nullable=False
     )
+    category: Mapped[str] = mapped_column(String(100), default="generic", index=True, nullable=False)
     document_type: Mapped[str] = mapped_column(String(50), nullable=False)
     native_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     document_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     current_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    priority: Mapped[str] = mapped_column(String(20), default="MEDIUM", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    origin_module: Mapped[str] = mapped_column(String(50), default="DOCUMENTS", nullable=False)
+    responsible_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
@@ -85,6 +99,34 @@ class BusinessDocument(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
         order_by="DocumentEvent.created_at",
+    )
+
+
+# Alias semântico
+Document = BusinessDocument
+
+
+class DocumentSequence(Base):
+    """Controle atômico de sequências de numeração por organização e categoria de documento."""
+
+    __tablename__ = "document_sequence"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "category", "year", name="uq_document_sequence_org_cat_year"),
+        Index("ix_document_sequence_lookup", "organization_id", "category", "year"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_value: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prefix: Mapped[str] = mapped_column(String(20), default="DOC", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
 

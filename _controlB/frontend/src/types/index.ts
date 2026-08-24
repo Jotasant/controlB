@@ -65,6 +65,8 @@ export interface User {
   email: string;
   full_name: string;
   is_active: boolean;
+  is_seller?: boolean;
+  teams?: Team[];
   created_at: string;
   updated_at: string;
 }
@@ -72,6 +74,38 @@ export interface User {
 export interface UserMe extends User {
   role_name: string | null;
   permissions: string[];  // Lista de códigos: ["users:view", "dashboard:view", ...]
+}
+
+export interface TeamMemberInfo {
+  id: string;
+  full_name: string;
+  email: string;
+  is_seller?: boolean;
+  is_active?: boolean;
+}
+
+export interface Team {
+  id: string;
+  organization_id: string;
+  name: string;
+  code?: string | null;
+  module_category: string; // SALES, PURCHASING, INVENTORY, FINANCE, SUPPORT, CRM
+  description?: string | null;
+  leader_id?: string | null;
+  leader_name?: string | null;
+  is_active: boolean;
+  members: TeamMemberInfo[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SellerResponse {
+  id: string;
+  full_name: string;
+  email: string;
+  is_seller: boolean;
+  sales_team_id?: string | null;
+  sales_team_name?: string | null;
 }
 
 export interface Organization {

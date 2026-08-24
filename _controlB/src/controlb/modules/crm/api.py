@@ -64,7 +64,7 @@ def list_leads(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.list_leads(db, current_user.organization_id, status)
+    return service.list_leads(db, current_user.organization_id, status, current_user=current_user)
 
 
 @router.post("/leads", response_model=schemas.LeadResponse, status_code=status.HTTP_201_CREATED, summary="Cadastrar Lead")
@@ -105,7 +105,7 @@ def list_opportunities(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.list_opportunities(db, current_user.organization_id, stage)
+    return service.list_opportunities(db, current_user.organization_id, stage, current_user=current_user)
 
 
 @router.get("/opportunities/{opp_id}", response_model=schemas.OpportunityResponse, summary="Obter Oportunidade por ID")

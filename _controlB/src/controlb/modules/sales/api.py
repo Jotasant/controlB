@@ -294,19 +294,6 @@ def delete_customer(
 
 
 # ==============================================================================
-# CONVERSÃO DE PROPOSTAS
-# ==============================================================================
-
-@router.post("/quotes/{quote_id}/convert", response_model=schemas.SalesOrderResponse, summary="Converter Orçamento em Pedido de Venda")
-def convert_quote_to_order(
-    quote_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user = Depends(identity_service.require_permission("sales:manage"))
-):
-    return service.convert_quote_to_order(db, quote_id, current_user.organization_id, current_user)
-
-
-# ==============================================================================
 # GESTÃO COMERCIAL (Metas e Tabelas de Preços)
 # ==============================================================================
 
@@ -404,3 +391,16 @@ def get_sales_analytics(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.get_sales_analytics(db, current_user.organization_id)
+
+
+# ==============================================================================
+# VENDEDORES E FORÇA DE VENDAS
+# ==============================================================================
+
+@router.get("/sellers", response_model=list[schemas.SellerResponse], summary="Listar Vendedores Ativos da Organização")
+def list_sellers(
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Retorna lista de vendedores com equipe comercial associada."""
+    return service.list_sellers(db, current_user.organization_id)

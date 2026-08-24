@@ -45,8 +45,15 @@ def get_customer_by_document(db: Session, document: str, organization_id: uuid.U
     return db.scalars(stmt).first()
 
 
-def create_customer(db: Session, organization_id: uuid.UUID, data: CustomerCreate) -> Customer:
+def create_customer(
+    db: Session,
+    organization_id: uuid.UUID,
+    data: CustomerCreate,
+    contact_id: uuid.UUID | None = None,
+) -> Customer:
+    cid = contact_id if contact_id is not None else data.contact_id
     customer = Customer(
+        id=uuid.uuid4(),
         organization_id=organization_id,
         person_type=data.person_type,
         document=data.document,
@@ -62,7 +69,7 @@ def create_customer(db: Session, organization_id: uuid.UUID, data: CustomerCreat
         address_state=data.address_state,
         address_zip_code=data.address_zip_code,
         credit_limit=data.credit_limit,
-        contact_id=data.contact_id,
+        contact_id=cid,
         is_active=data.is_active,
         notes=data.notes
     )

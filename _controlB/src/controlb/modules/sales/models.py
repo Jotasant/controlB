@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
 from controlb.modules.documents.models import BusinessDocument
+import controlb.modules.crm.models  # noqa: F401
 
 if TYPE_CHECKING:
     from controlb.modules.crm.models import Opportunity
@@ -37,8 +38,8 @@ class Customer(Base):
     __tablename__ = "customer"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
-    contact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contact.id", ondelete="SET NULL"), nullable=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("contact.id", ondelete="SET NULL"), nullable=True)
 
     person_type: Mapped[str] = mapped_column(String(10), default="PJ", index=True)  # "PJ" (CNPJ) ou "PF" (CPF)
     document: Mapped[str] = mapped_column(String(30), nullable=False, index=True)   # CNPJ ou CPF

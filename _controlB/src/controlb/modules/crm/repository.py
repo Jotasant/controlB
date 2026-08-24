@@ -63,10 +63,17 @@ def get_lead_by_id(db: Session, lead_id: uuid.UUID, organization_id: uuid.UUID) 
     return db.scalars(stmt).first()
 
 
-def list_leads(db: Session, organization_id: uuid.UUID, status: str | None = None) -> list[Lead]:
+def list_leads(
+    db: Session,
+    organization_id: uuid.UUID,
+    status: str | None = None,
+    user_ids: set[uuid.UUID] | None = None
+) -> list[Lead]:
     stmt = select(Lead).where(Lead.organization_id == organization_id)
     if status:
         stmt = stmt.where(Lead.status == status)
+    if user_ids is not None:
+        stmt = stmt.where((Lead.assigned_to_id.in_(user_ids)) | (Lead.assigned_to_id.is_(None)))
     stmt = stmt.order_by(Lead.created_at.desc())
     return list(db.scalars(stmt).all())
 
@@ -98,10 +105,17 @@ def get_opportunity_by_id(db: Session, opp_id: uuid.UUID, organization_id: uuid.
     return db.scalars(stmt).first()
 
 
-def list_opportunities(db: Session, organization_id: uuid.UUID, stage: str | None = None) -> list[Opportunity]:
+def list_opportunities(
+    db: Session,
+    organization_id: uuid.UUID,
+    stage: str | None = None,
+    user_ids: set[uuid.UUID] | None = None
+) -> list[Opportunity]:
     stmt = select(Opportunity).where(Opportunity.organization_id == organization_id)
     if stage:
         stmt = stmt.where(Opportunity.stage == stage)
+    if user_ids is not None:
+        stmt = stmt.where((Opportunity.assigned_to_id.in_(user_ids)) | (Opportunity.assigned_to_id.is_(None)))
     stmt = stmt.order_by(Opportunity.created_at.desc())
     return list(db.scalars(stmt).all())
 
@@ -148,3 +162,8 @@ def list_interactions(
         stmt = stmt.where(CustomerInteraction.opportunity_id == opportunity_id)
     stmt = stmt.order_by(CustomerInteraction.interaction_date.desc())
     return list(db.scalars(stmt).all())
+
+def get_interaction_by_id(db: Session, interaction_id: uuid.UUID, organization_id: uuid.UUID) -> CustomerInteraction | None:
+    stmt = select(CustomerInteraction).where(CustomerInteraction.id == interaction_id, CustomerInteraction.organization_id == organization_id)
+    return db.scalars(stmt).first()
+    

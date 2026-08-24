@@ -1,6 +1,8 @@
-"""Testes isolados da fundação transversal de documentos relacionados."""
+"""Testes unitários e de integração para a infraestrutura transversal do módulo Documents."""
 
 import uuid
+from datetime import UTC, datetime
+from typing import Generator
 
 import pytest
 from fastapi import HTTPException
@@ -9,8 +11,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from controlb.db import Base
-from controlb.modules.documents import service
-from controlb.modules.documents.models import BusinessDocument, DocumentEvent, DocumentRelation
+from controlb.modules.documents import schemas, service
+from controlb.modules.documents.models import (
+    BusinessDocument,
+    DocumentEvent,
+    DocumentRelation,
+    DocumentSequence,
+)
 from controlb.modules.identity.models import (
     Contact,
     Organization,
@@ -22,7 +29,7 @@ from controlb.modules.identity.models import (
 
 
 @pytest.fixture
-def db() -> Session:
+def db() -> Generator[Session, None, None]:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -38,6 +45,7 @@ def db() -> Session:
             User.__table__,
             Contact.__table__,
             BusinessDocument.__table__,
+            DocumentSequence.__table__,
             DocumentRelation.__table__,
             DocumentEvent.__table__,
         ],
@@ -45,6 +53,236 @@ def db() -> Session:
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as session:
         yield session
+
+
+def test_document_sequence_generator(db: Session):
+    """Testa a geração atômica e independente de sequenciais de negócio por categoria e ano."""
+    org_id = uuid.uuid4()
+    current_year = datetime.now(UTC).year
+
+    # 1. CRM Lead
+    lead1 = service.repository.next_document_number(db, org_id, "crm.lead")
+    lead2 = service.repository.next_document_number(db, org_id, "crm.lead")
+    assert lead1 == f"LEAD-{current_year}-0001"
+    assert lead2 == f"LEAD-{current_year}-0002"
+
+    # 2. Sales Order (PV)
+    pv1 = service.repository.next_document_number(db, org_id, "sales.order")
+    assert pv1 == f"PV-{current_year}-0001"
+
+    # 3. Purchasing Request (SC) e Order (PC)
+    sc1 = service.repository.next_document_number(db, org_id, "purchase.request")
+    pc1 = service.repository.next_document_number(db, org_id, "purchase.order")
+    assert sc1 == f"SC-{current_year}-0001"
+    assert pc1 == f"PC-{current_year}-0001"
+
+
+def test_create_document_and_lifecycle_events(db: Session):
+    """Testa criação centralizada de documento, atualização e transições de status com auditoria."""
+    org_id = uuid.uuid4()
+
+    # 1. Cria documento transacional
+    doc = service.create_document(
+        db,
+        organization_id=org_id,
+        payload=schemas.DocumentCreate(
+            category="sales.order",
+            document_type="SALES_ORDER",
+            title="Pedido #001 - Hospital Alpha",
+            current_status="DRAFT",
+            priority="HIGH",
+            description="Pedido emergencial de medicamentos",
+            tags=["hospitalar", "urgente"],
+            origin_module="SALES",
+            payload={"total_amount": "15000.00", "items_count": 5},
+        ),
+    )
+    assert doc.id is not None
+    assert doc.document_number.startswith("PV-")
+    assert doc.current_status == "DRAFT"
+    assert doc.tags == ["hospitalar", "urgente"]
+
+    # 2. Valida evento inicial CREATED
+    events = service.repository.list_events_by_document(db, doc.id, org_id)
+    assert len(events) == 1
+    assert events[0].event_type == "CREATED"
+    assert events[0].new_status == "DRAFT"
+
+    # 3. Altera status formal com motivo
+    updated_doc = service.change_document_status(
+        db,
+        document_id=doc.id,
+        organization_id=org_id,
+        new_status="CONFIRMED",
+        reason="Crédito aprovado pela diretoria financeira",
+    )
+    assert updated_doc.current_status == "CONFIRMED"
+
+    # 4. Cancela documento com justificativa
+    cancelled_doc = service.change_document_status(
+        db,
+        document_id=doc.id,
+        organization_id=org_id,
+        new_status="CANCELLED",
+        reason="Cliente solicitou desistência por alteração de orçamento",
+    )
+    assert cancelled_doc.current_status == "CANCELLED"
+
+    # 5. Verifica timeline completa
+    timeline = service.repository.list_events_by_document(db, doc.id, org_id)
+    assert len(timeline) == 3
+    assert timeline[1].event_type == "STATUS_CHANGED"
+    assert timeline[1].new_status == "CONFIRMED"
+    assert timeline[2].event_type == "CANCELLED"
+    assert timeline[2].event_metadata.get("reason") == "Cliente solicitou desistência por alteração de orçamento"
+
+
+def test_document_tree_and_typed_relations(db: Session):
+    """
+    Testa o grafo de rastreabilidade (Tree) completo:
+    Lead -> Oportunidade -> Cotação -> Pedido de Venda
+    """
+    org_id = uuid.uuid4()
+
+    # 1. Cria Lead
+    lead = service.create_document(
+        db,
+        organization_id=org_id,
+        payload=schemas.DocumentCreate(
+            category="crm.lead",
+            document_type="LEAD",
+            title="Lead: Dr. Roberto Santos",
+            current_status="QUALIFIED",
+            origin_module="CRM",
+        ),
+    )
+
+    # 2. Cria Oportunidade
+    opp = service.create_document(
+        db,
+        organization_id=org_id,
+        payload=schemas.DocumentCreate(
+            category="crm.opportunity",
+            document_type="OPPORTUNITY",
+            title="Oportunidade: Fornecimento Anual Clínica",
+            current_status="PROPOSAL",
+            origin_module="CRM",
+        ),
+    )
+    service.relate_documents(
+        db,
+        organization_id=org_id,
+        parent_document=lead,
+        child_document=opp,
+        relation_type="originated_from",
+    )
+
+    # 3. Cria Cotação
+    quote = service.create_document(
+        db,
+        organization_id=org_id,
+        payload=schemas.DocumentCreate(
+            category="sales.quotation",
+            document_type="SALES_QUOTE",
+            title="Proposta Comercial #1029",
+            current_status="APPROVED",
+            origin_module="SALES",
+        ),
+    )
+    service.relate_documents(
+        db,
+        organization_id=org_id,
+        parent_document=opp,
+        child_document=quote,
+        relation_type="generated",
+    )
+
+    # 4. Cria Pedido de Venda
+    order = service.create_document(
+        db,
+        organization_id=org_id,
+        payload=schemas.DocumentCreate(
+            category="sales.order",
+            document_type="SALES_ORDER",
+            title="Pedido de Venda PV-001",
+            current_status="CONFIRMED",
+            origin_module="SALES",
+        ),
+    )
+    service.relate_documents(
+        db,
+        organization_id=org_id,
+        parent_document=quote,
+        child_document=order,
+        relation_type="generated",
+    )
+
+    # 5. Consulta árvore a partir da Oportunidade
+    opp_tree = service.get_document_tree(db, organization_id=org_id, document_id=opp.id)
+    assert len(opp_tree.origin) == 1
+    assert opp_tree.origin[0].id == lead.id
+    assert len(opp_tree.derived) == 1
+    assert opp_tree.derived[0].id == quote.id
+
+    # 6. Consulta árvore a partir do Pedido de Venda
+    order_tree = service.get_document_tree(db, organization_id=org_id, document_id=order.id)
+    assert len(order_tree.derived) == 0
+    assert len(order_tree.previous) == 1
+    assert order_tree.previous[0].id == quote.id
+
+
+def test_transversal_document_search(db: Session):
+    """Testa o motor de busca transversal com múltiplos filtros (categoria, módulo, status, termo)."""
+    org_id = uuid.uuid4()
+
+    # Cria documentos em diferentes categorias
+    service.create_document(
+        db,
+        org_id,
+        schemas.DocumentCreate(
+            category="crm.lead",
+            document_type="LEAD",
+            title="Lead TechCorp",
+            current_status="NEW",
+            origin_module="CRM",
+        ),
+    )
+    service.create_document(
+        db,
+        org_id,
+        schemas.DocumentCreate(
+            category="sales.order",
+            document_type="SALES_ORDER",
+            title="Pedido TechCorp #001",
+            current_status="CONFIRMED",
+            origin_module="SALES",
+        ),
+    )
+    service.create_document(
+        db,
+        org_id,
+        schemas.DocumentCreate(
+            category="purchase.order",
+            document_type="PURCHASE_ORDER",
+            title="Ordem de Compra Insumos",
+            current_status="ISSUED",
+            origin_module="PURCHASING",
+        ),
+    )
+
+    # 1. Filtro por módulo
+    crm_docs = service.list_documents(db, org_id, schemas.DocumentFilterParams(origin_module="CRM"))
+    assert len(crm_docs) == 1
+    assert crm_docs[0].title == "Lead TechCorp"
+
+    # 2. Filtro por categoria
+    sales_docs = service.list_documents(db, org_id, schemas.DocumentFilterParams(category="sales.order"))
+    assert len(sales_docs) == 1
+    assert sales_docs[0].title == "Pedido TechCorp #001"
+
+    # 3. Busca textual
+    search_docs = service.list_documents(db, org_id, schemas.DocumentFilterParams(search="TechCorp"))
+    assert len(search_docs) == 2
 
 
 def test_document_chain_is_idempotent_and_keeps_timeline(db: Session):

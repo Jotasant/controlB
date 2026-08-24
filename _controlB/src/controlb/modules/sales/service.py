@@ -31,6 +31,195 @@ QUOTE_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
+# ==============================================================================
+# 0. SERVIÇOS DE CLIENTES (Customer) COM VÍNCULO UNIFICADO A CONTACT (Identity)
+# ==============================================================================
+
+def list_customers(
+    db: Session,
+    organization_id: uuid.UUID,
+    search: str | None = None,
+    is_active: bool | None = None,
+) -> list[models.Customer]:
+    """Retorna os clientes da organização, com filtro opcional por termo ou status."""
+    return repository.list_customers(db, organization_id, search, is_active)
+
+
+def get_customer(
+    db: Session,
+    customer_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> models.Customer:
+    """Busca os detalhes de um cliente por ID dentro da organização."""
+    customer = repository.get_customer_by_id(db, customer_id, organization_id)
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cliente não encontrado.",
+        )
+    return customer
+
+
+def create_customer(
+    db: Session,
+    organization_id: uuid.UUID,
+    payload: schemas.CustomerCreate,
+) -> models.Customer:
+    """
+    Cadastra um cliente no módulo de Vendas e sincroniza o perfil unificado Contact em Identity.
+    """
+    doc_clean = payload.document.strip() if payload.document else ""
+    if not doc_clean:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O CPF/CNPJ do cliente é obrigatório.",
+        )
+    name_clean = payload.name.strip() if payload.name else ""
+    if not name_clean:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A Razão Social ou Nome do cliente é obrigatório.",
+        )
+
+    # 1. Verifica duplicidade na tabela customer
+    existing = repository.get_customer_by_document(db, doc_clean, organization_id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Já existe um cliente cadastrado com o documento '{doc_clean}' ({existing.name}).",
+        )
+
+    # 2. Sincroniza / Garante Contact unificado em Identity
+    from controlb.modules.identity import repository as identity_repo, schemas as identity_schemas
+    contact = None
+    if payload.contact_id:
+        contact = identity_repo.get_contact_by_id(db, payload.contact_id, organization_id)
+        if contact:
+            contact.is_customer = True
+            db.flush()
+
+    if not contact:
+        contact = identity_repo.get_contact_by_document(db, doc_clean, organization_id)
+        if contact:
+            contact.is_customer = True
+            if not contact.name:
+                contact.name = name_clean
+            db.flush()
+        else:
+            contact_create = identity_schemas.ContactCreate(
+                person_type=payload.person_type,
+                document=doc_clean,
+                name=name_clean,
+                trade_name=payload.trade_name.strip() if payload.trade_name else None,
+                state_registration=payload.state_registration.strip() if payload.state_registration else None,
+                full_name=name_clean,
+                email=payload.email.strip() if payload.email else None,
+                phone=payload.phone.strip() if payload.phone else None,
+                address_street=payload.address_street,
+                address_number=payload.address_number,
+                address_neighborhood=payload.address_neighborhood,
+                address_city=payload.address_city,
+                address_state=payload.address_state,
+                address_zip_code=payload.address_zip_code,
+                is_customer=True,
+                is_supplier=False,
+                is_carrier=False,
+                origin_module="SALES",
+                credit_limit=payload.credit_limit,
+                is_active=payload.is_active,
+                notes=payload.notes,
+            )
+            contact = identity_repo.create_contact(db, organization_id, contact_create)
+
+    payload.document = doc_clean
+    payload.name = name_clean
+    cid = contact.id if contact else None
+
+    created = repository.create_customer(db, organization_id, payload, contact_id=cid)
+    if cid and not created.contact_id:
+        created.contact_id = cid
+        db.commit()
+        db.refresh(created)
+    return created
+
+
+def update_customer(
+    db: Session,
+    customer_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    payload: schemas.CustomerUpdate,
+) -> models.Customer:
+    """Atualiza dados cadastrais de um cliente e mantém sincronismo com o Contact em Identity."""
+    customer = get_customer(db, customer_id, organization_id)
+
+    if payload.document is not None:
+        doc_clean = payload.document.strip()
+        if not doc_clean:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O CPF/CNPJ do cliente não pode ser vazio.",
+            )
+        existing = repository.get_customer_by_document(db, doc_clean, organization_id)
+        if existing and existing.id != customer.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Já existe outro cliente cadastrado com o documento '{doc_clean}' ({existing.name}).",
+            )
+        payload.document = doc_clean
+
+    if payload.name is not None:
+        name_clean = payload.name.strip()
+        if not name_clean:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A Razão Social ou Nome do cliente não pode ser vazio.",
+            )
+        payload.name = name_clean
+
+    # Sincroniza com contact em Identity se existir
+    if customer.contact_id:
+        from controlb.modules.identity import repository as identity_repo, schemas as identity_schemas
+        contact = identity_repo.get_contact_by_id(db, customer.contact_id, organization_id)
+        if contact:
+            contact_update = identity_schemas.ContactUpdate(
+                person_type=payload.person_type,
+                document=payload.document,
+                name=payload.name,
+                trade_name=payload.trade_name,
+                state_registration=payload.state_registration,
+                email=payload.email,
+                phone=payload.phone,
+                address_street=payload.address_street,
+                address_number=payload.address_number,
+                address_neighborhood=payload.address_neighborhood,
+                address_city=payload.address_city,
+                address_state=payload.address_state,
+                address_zip_code=payload.address_zip_code,
+                credit_limit=payload.credit_limit,
+                is_active=payload.is_active,
+                notes=payload.notes,
+            )
+            identity_repo.update_contact(db, contact, contact_update)
+
+    return repository.update_customer(db, customer, payload)
+
+
+def delete_customer(
+    db: Session,
+    customer_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> dict:
+    """Exclui um cliente garantindo que não haja cotações ou pedidos vinculados."""
+    customer = get_customer(db, customer_id, organization_id)
+    if customer.quotes or customer.orders:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível excluir este cliente pois existem cotações ou pedidos vinculados a ele.",
+        )
+    repository.delete_customer(db, customer)
+    return {"detail": "Cliente excluído com sucesso."}
+
+
 def _validate_current_user_tenant(current_user: User, organization_id: uuid.UUID) -> None:
     if current_user.organization_id != organization_id:
         raise HTTPException(
@@ -94,10 +283,13 @@ def _ensure_quote_document(
     document = documents_service.ensure_document(
         db,
         organization_id=organization_id,
+        category="sales.quotation",
         document_type="SALES_QUOTE",
         native_id=quote.id,
         document_number=quote.quote_number,
+        title=f"Cotação {quote.quote_number} - {quote.customer_name}",
         current_status=quote.status,
+        origin_module="SALES",
         created_by_id=quote.created_by_id,
         issued_at=quote.created_at,
     )
@@ -113,10 +305,13 @@ def _ensure_order_document(
     document = documents_service.ensure_document(
         db,
         organization_id=organization_id,
+        category="sales.order",
         document_type="SALES_ORDER",
         native_id=order.id,
         document_number=order.order_number,
+        title=f"Pedido de Venda {order.order_number} - {order.customer_name}",
         current_status=order.status,
+        origin_module="SALES",
         created_by_id=order.created_by_id,
         issued_at=order.created_at,
     )
@@ -868,39 +1063,106 @@ def update_sales_order_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
 
     previous_status = order.status
-    order_document = _ensure_order_document(db, order, organization_id)
+    previous_delivery_status = order.delivery_status
+    updated_fields: list[str] = []
+
+    if payload.customer_id is not None:
+        customer = repository.get_customer_by_id(db, payload.customer_id, organization_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cliente não encontrado na organização atual.",
+            )
+        if order.customer_id != customer.id:
+            order.customer_id = customer.id
+            updated_fields.append("customer_id")
+
+    if payload.customer_name is not None:
+        customer_name = payload.customer_name.strip()
+        if not customer_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O nome do cliente não pode ser vazio.",
+            )
+        if order.customer_name != customer_name:
+            order.customer_name = customer_name
+            updated_fields.append("customer_name")
+
+    if payload.customer_document is not None:
+        customer_document = payload.customer_document.strip() or None
+        if order.customer_document != customer_document:
+            order.customer_document = customer_document
+            updated_fields.append("customer_document")
+
+    if payload.payment_terms is not None:
+        payment_terms = payload.payment_terms.strip() or None
+        if order.payment_terms != payment_terms:
+            order.payment_terms = payment_terms
+            updated_fields.append("payment_terms")
 
     if payload.status is not None:
         norm_status = payload.status.strip().upper()
-        if norm_status in {"DRAFT", "CONFIRMED", "COMPLETED", "CANCELLED"}:
+        if norm_status == "CANCELLED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Use a operação formal de cancelamento do pedido.",
+            )
+        if norm_status not in {"DRAFT", "CONFIRMED", "COMPLETED"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Status comercial do pedido inválido.",
+            )
+        if order.status != norm_status:
             order.status = norm_status
+            updated_fields.append("status")
 
     if payload.delivery_status is not None:
         norm_deliv = payload.delivery_status.strip().upper()
-        if norm_deliv in {"PENDING", "RESERVED", "DISPATCHED", "DELIVERED", "CANCELLED"}:
+        if norm_deliv == "CANCELLED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Use a operação formal de cancelamento do pedido.",
+            )
+        if norm_deliv not in {"PENDING", "RESERVED", "DISPATCHED", "DELIVERED"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Status de entrega do pedido inválido.",
+            )
+        if order.delivery_status != norm_deliv:
             order.delivery_status = norm_deliv
+            updated_fields.append("delivery_status")
 
-    if payload.billing_status is not None:
-        norm_bill = payload.billing_status.strip().upper()
-        if norm_bill in {"PENDING", "INVOICED"}:
-            order.billing_status = norm_bill
-
-    if payload.notes is not None:
+    if payload.notes is not None and order.notes != payload.notes:
         order.notes = payload.notes
+        updated_fields.append("notes")
+
+    if not updated_fields:
+        db.flush()
+        return order
+
+    order_document = _ensure_order_document(db, order, organization_id)
+    status_changed = (
+        previous_status != order.status
+        or previous_delivery_status != order.delivery_status
+    )
 
     documents_service.record_event(
         db,
         organization_id=organization_id,
         document=order_document,
-        event_type="STATUS_CHANGED",
+        event_type="STATUS_CHANGED" if status_changed else "UPDATED",
         previous_status=previous_status,
-        new_status=order.status,
+        new_status=order.status if status_changed else None,
         created_by_id=current_user.id,
         event_metadata={
+            "updated_fields": updated_fields,
             "delivery_status": order.delivery_status,
             "billing_status": order.billing_status,
         },
-        idempotency_key=f"sales-order:{order.id}:status:{order.status}:{order.delivery_status}:{order.billing_status}:{uuid.uuid4().hex[:6]}",
+        idempotency_key=(
+            f"sales-order:{order.id}:update:{order.status}:"
+            f"{order.delivery_status}:{uuid.uuid4().hex[:6]}"
+        ),
     )
     db.flush()
     return order
@@ -1185,63 +1447,6 @@ def list_pos_cash_movements(
     return repository.list_cash_movements(db, organization_id, session_id)
 
 
-# ==============================================================================
-# 6. CADASTRO CENTRALIZADO DE CLIENTES (Customer)
-# ==============================================================================
-
-def list_customers(
-    db: Session,
-    organization_id: uuid.UUID,
-    search: str | None = None,
-    is_active: bool | None = None
-) -> list[models.Customer]:
-    return repository.list_customers(db, organization_id, search, is_active)
-
-
-def get_customer(db: Session, customer_id: uuid.UUID, organization_id: uuid.UUID) -> models.Customer:
-    customer = repository.get_customer_by_id(db, customer_id, organization_id)
-    if not customer:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente não encontrado.")
-    return customer
-
-
-def create_customer(
-    db: Session,
-    organization_id: uuid.UUID,
-    payload: schemas.CustomerCreate
-) -> models.Customer:
-    doc = payload.document.strip()
-    existing = repository.get_customer_by_document(db, doc, organization_id)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Já existe um cliente cadastrado com o documento '{doc}'."
-        )
-    return repository.create_customer(db, organization_id, payload)
-
-
-def update_customer(
-    db: Session,
-    customer_id: uuid.UUID,
-    organization_id: uuid.UUID,
-    payload: schemas.CustomerUpdate
-) -> models.Customer:
-    customer = get_customer(db, customer_id, organization_id)
-    if payload.document and payload.document.strip() != customer.document:
-        doc = payload.document.strip()
-        existing = repository.get_customer_by_document(db, doc, organization_id)
-        if existing and existing.id != customer_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Já existe outro cliente cadastrado com o documento '{doc}'."
-            )
-    return repository.update_customer(db, customer, payload)
-
-
-def delete_customer(db: Session, customer_id: uuid.UUID, organization_id: uuid.UUID):
-    customer = get_customer(db, customer_id, organization_id)
-    repository.delete_customer(db, customer)
-    return {"message": "Cliente excluído com sucesso."}
 
 
 
@@ -1483,3 +1688,42 @@ def get_sales_analytics(db: Session, organization_id: uuid.UUID) -> schemas.Sale
         top_selling_products=top_products,
         seller_performance=seller_perf
     )
+
+
+# ==============================================================================
+# 9. VENDEDORES E FORÇA DE VENDAS
+# ==============================================================================
+
+def list_sellers(db: Session, organization_id: uuid.UUID) -> list[schemas.SellerResponse]:
+    """
+    Retorna todos os colaboradores que atuam como Vendedores na organização.
+    Inclui a equipe comercial (SALES) vinculada.
+    """
+    from controlb.modules.identity.models import User, Team
+
+    # Busca usuários que são vendedores ou pertencem a equipe comercial
+    users = db.query(User).filter(
+        User.organization_id == organization_id,
+        User.is_active == True,
+        (User.is_seller == True) | (User.teams.any(Team.module_category == "SALES"))
+    ).all()
+
+    # Fallback caso a base ainda não tenha marcado nenhum vendedor
+    if not users:
+        users = db.query(User).filter(
+            User.organization_id == organization_id,
+            User.is_active == True
+        ).all()
+
+    sellers: list[schemas.SellerResponse] = []
+    for u in users:
+        sales_team = next((t for t in u.teams if t.module_category == "SALES"), None)
+        sellers.append(schemas.SellerResponse(
+            id=u.id,
+            full_name=u.full_name,
+            email=u.email,
+            is_seller=u.is_seller,
+            sales_team_id=sales_team.id if sales_team else None,
+            sales_team_name=sales_team.name if sales_team else None
+        ))
+    return sellers

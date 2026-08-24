@@ -1,10 +1,12 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, FileText, Link2, LoaderCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ExternalLink, FileText, Link2, LoaderCircle } from 'lucide-react';
 import { BusinessDocumentChain, BusinessDocumentNode } from '@/types';
 import './DocumentTimeline.scss';
 
 interface DocumentTimelineProps {
   chain: BusinessDocumentChain;
+  /** Callback para navegação ao formulário do documento vinculado */
+  onNavigate?: (documentType: string, nativeId: string) => void;
 }
 
 const labels: Record<string, string> = {
@@ -50,7 +52,7 @@ const byDate = (left: BusinessDocumentNode, right: BusinessDocumentNode): number
   new Date(left.issued_at || left.created_at).getTime() -
   new Date(right.issued_at || right.created_at).getTime();
 
-export const DocumentTimeline: React.FC<DocumentTimelineProps> = ({ chain }) => {
+export const DocumentTimeline: React.FC<DocumentTimelineProps> = ({ chain, onNavigate }) => {
   const documents = [...(chain.documents || [])].sort(byDate);
 
   if (documents.length === 0) {
@@ -72,7 +74,7 @@ export const DocumentTimeline: React.FC<DocumentTimelineProps> = ({ chain }) => 
       </div>
       <ol className="ui-document-timeline__list">
         {documents.map(document => (
-          <DocumentTimelineItem key={document.id} document={document} chain={chain} />
+          <DocumentTimelineItem key={document.id} document={document} chain={chain} onNavigate={onNavigate} />
         ))}
       </ol>
     </section>
@@ -82,9 +84,10 @@ export const DocumentTimeline: React.FC<DocumentTimelineProps> = ({ chain }) => 
 interface DocumentTimelineItemProps {
   document: BusinessDocumentNode;
   chain: BusinessDocumentChain;
+  onNavigate?: (documentType: string, nativeId: string) => void;
 }
 
-const DocumentTimelineItem: React.FC<DocumentTimelineItemProps> = ({ document, chain }) => {
+const DocumentTimelineItem: React.FC<DocumentTimelineItemProps> = ({ document, chain, onNavigate }) => {
   const documentTone = tone(document.current_status);
   const isRoot = document.id === chain.root_document_id;
   const relations = (chain.relations || []).filter(item => item.child_document_id === document.id);
@@ -92,13 +95,28 @@ const DocumentTimelineItem: React.FC<DocumentTimelineItemProps> = ({ document, c
     .filter(item => item.document_id === document.id)
     .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime());
 
+  const isNavigable = !!onNavigate && !isRoot;
+
+  const handleNavigate = () => {
+    if (isNavigable) {
+      onNavigate(document.document_type, document.native_id);
+    }
+  };
+
   return (
     <li className={`ui-document-timeline__item is-${documentTone}${isRoot ? ' is-root' : ''}`}>
       <span className="ui-document-timeline__marker" aria-hidden="true">
         {documentTone === 'success' ? <CheckCircle2 size={17} /> :
          documentTone === 'danger' ? <AlertTriangle size={17} /> : <FileText size={17} />}
       </span>
-      <article className="ui-document-timeline__card">
+      <article
+        className={`ui-document-timeline__card${isNavigable ? ' is-navigable' : ''}`}
+        onClick={isNavigable ? handleNavigate : undefined}
+        role={isNavigable ? 'button' : undefined}
+        tabIndex={isNavigable ? 0 : undefined}
+        onKeyDown={isNavigable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleNavigate(); } } : undefined}
+        title={isNavigable ? `Abrir ${labels[document.document_type] || humanize(document.document_type)} #${document.document_number}` : undefined}
+      >
         {relations.length > 0 && (
           <span className="ui-document-timeline__relation">
             <Link2 size={12} /> {relations.map(item => humanize(item.relation_type)).join(' · ')}
@@ -109,6 +127,7 @@ const DocumentTimelineItem: React.FC<DocumentTimelineItemProps> = ({ document, c
             <span>{labels[document.document_type] || humanize(document.document_type)}</span>
             <strong>#{document.document_number}</strong>
             {isRoot && <small>Documento consultado</small>}
+            {isNavigable && <ExternalLink size={13} className="ui-document-timeline__nav-icon" />}
           </div>
           <span className={`ui-status ${documentTone}`}>{humanize(document.current_status)}</span>
         </header>

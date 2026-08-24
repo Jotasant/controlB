@@ -43,24 +43,7 @@ def db() -> Session:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(
-        engine,
-        tables=[
-            Organization.__table__,
-            BusinessDocument.__table__,
-            DocumentRelation.__table__,
-            DocumentEvent.__table__,
-            Product.__table__,
-            SalesOrder.__table__,
-            SalesOrderItem.__table__,
-            POSSession.__table__,
-            POSSale.__table__,
-            POSSaleItem.__table__,
-            StockMovement.__table__,
-            StockReservation.__table__,
-            StockReservationItem.__table__,
-        ],
-    )
+    Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as session:
         yield session

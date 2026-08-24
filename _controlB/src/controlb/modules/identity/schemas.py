@@ -112,6 +112,7 @@ class UserBase(BaseModel):
     email: EmailStr                     # O Pydantic valida automaticamente o formato do e-mail
     full_name: str                      # Nome completo do usuário
     is_active: bool = True              # Se o usuário pode realizar login
+    is_seller: bool = False             # Se o usuário atua como Vendedor no sistema
 
 
 class UserCreate(UserBase):
@@ -134,6 +135,7 @@ class UserUpdate(BaseModel):
     organization_id: uuid.UUID | None = None
     role_id: uuid.UUID | None = None
     is_active: bool | None = None
+    is_seller: bool | None = None
     password: str | None = None         # Opcional para redefinição de senha
 
 
@@ -287,4 +289,58 @@ class ContactResponse(ContactBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# 7. ESQUEMAS DE EQUIPE / GRUPO DE TRABALHO MULTIMODULAR (Team)
+# ==============================================================================
+
+class TeamMemberInfo(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    email: EmailStr
+    is_seller: bool = False
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeamBase(BaseModel):
+    name: str
+    code: str | None = None
+    module_category: str = "SALES"  # SALES, PURCHASING, INVENTORY, FINANCE, SUPPORT, CRM
+    description: str | None = None
+    leader_id: uuid.UUID | None = None
+    is_active: bool = True
+
+
+class TeamCreate(TeamBase):
+    organization_id: uuid.UUID
+    member_ids: list[uuid.UUID] = []
+
+
+class TeamUpdate(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    module_category: str | None = None
+    description: str | None = None
+    leader_id: uuid.UUID | None = None
+    is_active: bool | None = None
+    member_ids: list[uuid.UUID] | None = None
+
+
+class TeamResponse(TeamBase):
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    leader_name: str | None = None
+    members: list[TeamMemberInfo] = []
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeamMemberAddRequest(BaseModel):
+    user_ids: list[uuid.UUID]
+
 

@@ -711,6 +711,23 @@ def test_sales_quote_and_order_read_routes_require_view_permission(mock_user: Us
         assert "sales:view" in exc_info.value.detail
 
 
+def test_sales_routes_do_not_register_duplicate_operations():
+    """Cada combinação de método e caminho deve apontar para uma única operação."""
+    operations: list[tuple[str, str]] = []
+    for route in sales_api.router.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            if method not in {"HEAD", "OPTIONS"}:
+                operations.append((method, route.path))
+
+    duplicates = sorted(
+        {operation for operation in operations if operations.count(operation) > 1}
+    )
+
+    assert duplicates == []
+
+
 def test_pos_cash_movements_sangria_and_suprimento(db: Session, mock_org: Organization, mock_user: User):
     # 1. Abre Turno
     session = sales_service.open_pos_session(
@@ -1072,6 +1089,89 @@ def test_order_status_update_and_request_billing_lifecycle(
     assert any(d.document_type == "INVOICE" for d in chain.documents)
 
 
+def test_order_update_persists_editable_commercial_fields(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente Original",
+            customer_document="11111111000111",
+            payment_terms="30 DDL",
+            notes="Observação original",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("2"),
+                    unit_price=Decimal("25.00"),
+                )
+            ],
+        ),
+    )
+
+    sales_service.update_sales_order_status(
+        db,
+        order.id,
+        mock_org.id,
+        sales_schemas.SalesOrderUpdate(
+            customer_name="Cliente Atualizado",
+            customer_document="22222222000122",
+            payment_terms="45 DDL",
+            notes="Observação atualizada",
+        ),
+        mock_user,
+    )
+    db.expire_all()
+
+    persisted = sales_service.get_sales_order(db, order.id, mock_org.id)
+    assert persisted.customer_name == "Cliente Atualizado"
+    assert persisted.customer_document == "22222222000122"
+    assert persisted.payment_terms == "45 DDL"
+    assert persisted.notes == "Observação atualizada"
+
+
+def test_order_generic_update_rejects_formal_cancellation(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente Cancelamento Formal",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("10.00"),
+                )
+            ],
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        sales_service.update_sales_order_status(
+            db,
+            order.id,
+            mock_org.id,
+            sales_schemas.SalesOrderUpdate(status="CANCELLED"),
+            mock_user,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "operação formal" in exc_info.value.detail
+    db.refresh(order)
+    assert order.status == "CONFIRMED"
+
+
 def test_opportunity_quote_synchronous_chain_and_filtering(
     db: Session,
     mock_org: Organization,
@@ -1360,4 +1460,3 @@ def test_identity_contact_partner_odoo_pattern_and_role_filtering(db, mock_org, 
             )
         )
     assert exc.value.status_code == 409
-

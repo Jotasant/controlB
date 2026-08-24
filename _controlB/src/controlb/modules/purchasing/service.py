@@ -342,13 +342,40 @@ def create_purchase_request(
     request_number = generate_request_number(db, organization_id=request_data.organization_id)
 
     # 3. Persiste no banco
-    return repository.create_purchase_request(
+    created_pr = repository.create_purchase_request(
         db=db,
         requester_id=current_user.id,
         request_number=request_number,
         total_estimated=total_estimated,
         request_data=request_data
     )
+
+    # Persistência e auditoria transversal no DocumentService
+    from controlb.modules.documents import service as documents_service
+    pr_doc = documents_service.ensure_document(
+        db,
+        organization_id=request_data.organization_id,
+        category="purchase.request",
+        document_type="PURCHASE_REQUEST",
+        native_id=created_pr.id,
+        document_number=created_pr.request_number,
+        title=f"Solicitação de Compra {created_pr.request_number}",
+        current_status=created_pr.status,
+        origin_module="PURCHASING",
+        created_by_id=current_user.id,
+        issued_at=created_pr.created_at,
+    )
+    documents_service.record_event(
+        db,
+        organization_id=request_data.organization_id,
+        document=pr_doc,
+        event_type="CREATED",
+        new_status=created_pr.status,
+        created_by_id=current_user.id,
+        idempotency_key=f"purchasing:pr:{created_pr.id}:created",
+    )
+
+    return created_pr
 
 
 def list_purchase_requests(
@@ -527,7 +554,32 @@ def process_approval_action(
 
     # Atualiza status da solicitação
     new_status = "approved" if action_data.action == "approved" else "rejected"
-    return repository.update_purchase_request_status(db, db_request=db_request, new_status=new_status)
+    updated_pr = repository.update_purchase_request_status(db, db_request=db_request, new_status=new_status)
+
+    # Registra evento transversal no DocumentService
+    from controlb.modules.documents import service as documents_service
+    pr_doc = documents_service.ensure_document(
+        db,
+        organization_id=current_user.organization_id,
+        category="purchase.request",
+        document_type="PURCHASE_REQUEST",
+        native_id=db_request.id,
+        document_number=db_request.request_number,
+        current_status=new_status,
+        origin_module="PURCHASING",
+    )
+    documents_service.record_event(
+        db,
+        organization_id=current_user.organization_id,
+        document=pr_doc,
+        event_type="APPROVED" if action_data.action == "approved" else "REJECTED",
+        previous_status="pending_approval",
+        new_status=new_status,
+        event_metadata={"comments": action_data.comments} if action_data.comments else None,
+        created_by_id=current_user.id,
+    )
+
+    return updated_pr
 
 
 # ==============================================================================
@@ -587,6 +639,31 @@ def create_purchase_order(
         order_data=order_data
     )
 
+    # Persistência transversal no DocumentService
+    from controlb.modules.documents import service as documents_service
+    po_doc = documents_service.ensure_document(
+        db,
+        organization_id=order_data.organization_id,
+        category="purchase.order",
+        document_type="PURCHASE_ORDER",
+        native_id=db_order.id,
+        document_number=db_order.order_number,
+        title=f"Ordem de Compra {db_order.order_number}",
+        current_status=db_order.status,
+        origin_module="PURCHASING",
+        created_by_id=current_user.id,
+        issued_at=db_order.created_at,
+    )
+    documents_service.record_event(
+        db,
+        organization_id=order_data.organization_id,
+        document=po_doc,
+        event_type="CREATED",
+        new_status=db_order.status,
+        created_by_id=current_user.id,
+        idempotency_key=f"purchasing:po:{db_order.id}:created",
+    )
+
     if order_data.purchase_request_id:
         db_request = repository.get_purchase_request_by_id(
             db, 
@@ -595,6 +672,23 @@ def create_purchase_order(
         )
         if db_request:
             repository.update_purchase_request_status(db, db_request=db_request, new_status="ordered")
+            pr_doc = documents_service.ensure_document(
+                db,
+                organization_id=order_data.organization_id,
+                category="purchase.request",
+                document_type="PURCHASE_REQUEST",
+                native_id=db_request.id,
+                document_number=db_request.request_number,
+                current_status="ordered",
+                origin_module="PURCHASING",
+            )
+            documents_service.relate_documents(
+                db,
+                organization_id=order_data.organization_id,
+                parent_document=pr_doc,
+                child_document=po_doc,
+                relation_type="generated",
+            )
 
     return db_order
 
@@ -675,6 +769,39 @@ def generate_po_from_request(
 
     # 3. Atualiza o status da solicitação para 'ordered'
     repository.update_purchase_request_status(db, db_request=db_request, new_status="ordered")
+
+    # 4. Grafo de rastreabilidade transversal no DocumentService
+    from controlb.modules.documents import service as documents_service
+    po_doc = documents_service.ensure_document(
+        db,
+        organization_id=current_user.organization_id,
+        category="purchase.order",
+        document_type="PURCHASE_ORDER",
+        native_id=db_order.id,
+        document_number=db_order.order_number,
+        title=f"Ordem de Compra {db_order.order_number}",
+        current_status=db_order.status,
+        origin_module="PURCHASING",
+        created_by_id=current_user.id,
+        issued_at=db_order.created_at,
+    )
+    pr_doc = documents_service.ensure_document(
+        db,
+        organization_id=current_user.organization_id,
+        category="purchase.request",
+        document_type="PURCHASE_REQUEST",
+        native_id=db_request.id,
+        document_number=db_request.request_number,
+        current_status="ordered",
+        origin_module="PURCHASING",
+    )
+    documents_service.relate_documents(
+        db,
+        organization_id=current_user.organization_id,
+        parent_document=pr_doc,
+        child_document=po_doc,
+        relation_type="generated",
+    )
 
     return db_order
 

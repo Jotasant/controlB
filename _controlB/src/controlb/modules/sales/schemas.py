@@ -184,10 +184,10 @@ class SalesOrderUpdate(BaseModel):
     customer_document: str | None = None
     payment_terms: str | None = None
     delivery_status: str | None = None
-    billing_status: str | None = None
     status: str | None = None
-    cancellation_reason: str | None = None
     notes: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SalesOrderResponse(SalesOrderBase):
@@ -451,4 +451,18 @@ class SalesAnalyticsResponse(BaseModel):
     top_selling_products: list[TopProductMetric] = []
     seller_performance: list[SellerPerformanceMetric] = []
 
+
+# ==============================================================================
+# 8. VENDEDORES E FORÇA DE VENDAS
+# ==============================================================================
+
+class SellerResponse(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    email: str
+    is_seller: bool = True
+    sales_team_id: uuid.UUID | None = None
+    sales_team_name: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
 

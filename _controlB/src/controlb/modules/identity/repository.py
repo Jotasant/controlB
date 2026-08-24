@@ -9,11 +9,12 @@ Não contém regras de negócio (as regras ficam na camada 'service').
 import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from controlb.modules.identity.models import User, Organization, Role, Permission
+from controlb.modules.identity.models import User, Organization, Role, Permission, Team
 from controlb.modules.identity.schemas import (
     UserCreate, UserUpdate,
     OrganizationCreate, OrganizationUpdate,
-    RoleCreate, RoleUpdate
+    RoleCreate, RoleUpdate,
+    TeamCreate, TeamUpdate
 )
 
 
@@ -58,31 +59,34 @@ def create_permission_if_not_exists(db: Session, code: str, name: str, module: s
 # ==============================================================================
 
 def get_user_by_email(db: Session, email: str) -> User | None:
-    """Busca um usuário no banco através do endereço de e-mail (usado no login)."""
+    """Busca um usuário pelo seu e-mail único."""
     stmt = select(User).where(User.email == email)
     return db.execute(stmt).scalar_one_or_none()
 
 
-def get_all_users(db: Session) -> list[User]:
-    """Retorna a lista completa de todos os usuários cadastrados no banco."""
+def get_all_users(db: Session, organization_id: uuid.UUID | None = None) -> list[User]:
+    """Retorna a lista de usuários, com filtro opcional por organização."""
     stmt = select(User)
+    if organization_id:
+        stmt = stmt.where(User.organization_id == organization_id)
     return db.execute(stmt).scalars().all()
 
 
 def get_user_by_id(db: Session, id: uuid.UUID) -> User | None:
-    """Busca um usuário no banco pelo seu ID primário (UUID)."""
+    """Busca um usuário pelo seu identificador UUID."""
     stmt = select(User).where(User.id == id)
     return db.execute(stmt).scalar_one_or_none()
 
 
 def create_user(db: Session, user_data: UserCreate, hashed_password: str) -> User:
-    """Instancia, adiciona e persiste um novo usuário no banco de dados com commit."""
+    """Cria e persiste um novo usuário no banco de dados com a senha hasheada."""
     db_user = User(
         organization_id=user_data.organization_id,
         role_id=user_data.role_id,
         email=user_data.email,
         full_name=user_data.full_name,
         hashed_password=hashed_password,
+        is_seller=user_data.is_seller if hasattr(user_data, 'is_seller') else False,
     )
     db.add(db_user)
     db.commit()
@@ -102,6 +106,8 @@ def update_user(db: Session, db_user: User, user_data: UserUpdate, hashed_passwo
         db_user.role_id = user_data.role_id
     if user_data.is_active is not None:
         db_user.is_active = user_data.is_active
+    if getattr(user_data, 'is_seller', None) is not None:
+        db_user.is_seller = user_data.is_seller
     if hashed_password:
         db_user.hashed_password = hashed_password
 
@@ -327,11 +333,13 @@ def get_contact_by_document(db: Session, document: str, organization_id: uuid.UU
 
 def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate) -> Contact:
     """Cria e persiste um novo contato/parceiro unificado."""
+    new_id = uuid.uuid4()
     contact = Contact(
+        id=new_id,
         organization_id=organization_id,
         person_type=data.person_type or "PJ",
         document=data.document.strip() if data.document else None,
-        name=data.name.strip(),
+        name=data.name.strip() if data.name else (data.full_name or "").strip(),
         trade_name=data.trade_name.strip() if data.trade_name else None,
         state_registration=data.state_registration.strip() if data.state_registration else None,
         full_name=data.full_name.strip() if data.full_name else None,
@@ -415,3 +423,112 @@ def delete_contact(db: Session, contact: Contact) -> None:
     """Remove um contato do banco."""
     db.delete(contact)
     db.commit()
+
+
+# ==============================================================================
+# 7. CONSULTAS E OPERAÇÕES DE EQUIPE (Team)
+# ==============================================================================
+
+def list_teams(
+    db: Session,
+    organization_id: uuid.UUID,
+    module_category: str | None = None,
+    is_active: bool | None = None
+) -> list[Team]:
+    """Retorna as equipes de uma organização, com filtro opcional por módulo."""
+    stmt = select(Team).where(Team.organization_id == organization_id)
+    if module_category:
+        stmt = stmt.where(Team.module_category == module_category.upper())
+    if is_active is not None:
+        stmt = stmt.where(Team.is_active == is_active)
+    stmt = stmt.order_by(Team.name)
+    return db.execute(stmt).scalars().all()
+
+
+def get_team_by_id(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID) -> Team | None:
+    """Busca uma equipe pelo ID e organização."""
+    stmt = select(Team).where(Team.id == team_id, Team.organization_id == organization_id)
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def create_team(db: Session, organization_id: uuid.UUID, data: TeamCreate) -> Team:
+    """Cria e persiste uma nova equipe com seus membros associados."""
+    team = Team(
+        id=uuid.uuid4(),
+        organization_id=organization_id,
+        name=data.name.strip(),
+        code=data.code.strip() if data.code else None,
+        module_category=(data.module_category or "SALES").upper(),
+        description=data.description.strip() if data.description else None,
+        leader_id=data.leader_id,
+        is_active=data.is_active
+    )
+    if data.member_ids:
+        users_stmt = select(User).where(User.id.in_(data.member_ids), User.organization_id == organization_id)
+        team.members = list(db.execute(users_stmt).scalars().all())
+    
+    db.add(team)
+    db.commit()
+    db.refresh(team)
+    return team
+
+
+def update_team(db: Session, team: Team, data: TeamUpdate) -> Team:
+    """Atualiza dados e membros de uma equipe."""
+    if data.name is not None:
+        team.name = data.name.strip()
+    if data.code is not None:
+        team.code = data.code.strip() if data.code else None
+    if data.module_category is not None:
+        team.module_category = data.module_category.upper()
+    if data.description is not None:
+        team.description = data.description.strip() if data.description else None
+    if data.leader_id is not None:
+        team.leader_id = data.leader_id
+    if data.is_active is not None:
+        team.is_active = data.is_active
+    if data.member_ids is not None:
+        users_stmt = select(User).where(User.id.in_(data.member_ids), User.organization_id == team.organization_id)
+        team.members = list(db.execute(users_stmt).scalars().all())
+
+    db.commit()
+    db.refresh(team)
+    return team
+
+
+def delete_team(db: Session, team: Team) -> None:
+    """Remove uma equipe do banco."""
+    db.delete(team)
+    db.commit()
+
+
+def add_team_members(db: Session, team: Team, user_ids: list[uuid.UUID]) -> Team:
+    """Adiciona múltiplos membros a uma equipe existente."""
+    if user_ids:
+        users_stmt = select(User).where(User.id.in_(user_ids), User.organization_id == team.organization_id)
+        new_users = db.execute(users_stmt).scalars().all()
+        current_ids = {u.id for u in team.members}
+        for u in new_users:
+            if u.id not in current_ids:
+                team.members.append(u)
+        db.commit()
+        db.refresh(team)
+    return team
+
+
+def remove_team_member(db: Session, team: Team, user_id: uuid.UUID) -> Team:
+    """Remove um membro específico de uma equipe."""
+    team.members = [u for u in team.members if u.id != user_id]
+    db.commit()
+    db.refresh(team)
+    return team
+
+
+def get_teams_by_user(db: Session, user_id: uuid.UUID, organization_id: uuid.UUID) -> list[Team]:
+    """Retorna todas as equipes às quais um usuário pertence."""
+    stmt = select(Team).join(Team.members).where(
+        User.id == user_id,
+        Team.organization_id == organization_id,
+        Team.is_active == True
+    )
+    return db.execute(stmt).scalars().all()
