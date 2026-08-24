@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Numeric, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Numeric, String, Table, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -229,13 +229,23 @@ class Team(Base):
     estoque (INVENTORY), etc., com controle de liderança/gestão e escopo de visibilidade.
     """
     __tablename__ = "team"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "module_category", "name",
+            name="uq_team_organization_category_name",
+        ),
+        UniqueConstraint(
+            "organization_id", "module_category", "code",
+            name="uq_team_organization_category_code",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
 
     name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     code: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    module_category: Mapped[str] = mapped_column(String(50), default="SALES", nullable=False, index=True) # SALES, PURCHASING, INVENTORY, FINANCE, SUPPORT, CRM
+    module_category: Mapped[str] = mapped_column(String(50), default="SALES", nullable=False, index=True) # SALES Ã© compartilhado por CRM e Vendas
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     leader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
 

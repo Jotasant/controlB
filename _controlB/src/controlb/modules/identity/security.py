@@ -89,6 +89,19 @@ MODULE_PERMISSIONS: List[Dict[str, Any]] = [
 
     # Organizações & Filiais
     {
+        "code": "teams:view",
+        "name": "Visualizar Equipes",
+        "module": "Equipes",
+        "description": "Consultar equipes e seus integrantes"
+    },
+    {
+        "code": "teams:manage",
+        "name": "Gerenciar Equipes",
+        "module": "Equipes",
+        "description": "Criar, alterar e excluir equipes e seus vínculos"
+    },
+
+    {
         "code": "organizations:view",
         "name": "Visualizar Organizações",
         "module": "Organizações",
@@ -280,6 +293,21 @@ def require_permission(permission_code: str) -> Callable:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Acesso negado: Você não possui a permissão '{permission_code}'."
+            )
+        return current_user
+
+    return permission_checker
+
+
+def require_any_permission(*permission_codes: str) -> Callable:
+    """Autoriza quando o usuário possui ao menos uma das permissões informadas."""
+    def permission_checker(current_user: User = Depends(get_current_user)) -> User:
+        user_perms = set(get_user_permissions(current_user))
+        if "*:*" not in user_perms and not user_perms.intersection(permission_codes):
+            expected = "', '".join(permission_codes)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Acesso negado: é necessária uma das permissões '{expected}'."
             )
         return current_user
 

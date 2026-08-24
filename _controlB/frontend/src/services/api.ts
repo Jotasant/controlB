@@ -258,6 +258,7 @@ export const identityService = {
   async createUser(data: { full_name: string; email: string; password: string; organization_id?: string; role_id?: string; is_seller?: boolean }): Promise<User> {
     const response = await api.post<User>('/identity/users', data);
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate('identity:teams:candidates');
     cacheManager.invalidate('sales:sellers');
     return response.data;
   },
@@ -265,6 +266,7 @@ export const identityService = {
   async updateUser(userId: string, data: { full_name?: string; email?: string; password?: string; organization_id?: string; role_id?: string; is_active?: boolean; is_seller?: boolean }): Promise<User> {
     const response = await api.put<User>(`/identity/users/${userId}`, data);
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate('identity:teams:candidates');
     cacheManager.invalidate('identity:me');
     cacheManager.invalidate('sales:sellers');
     return response.data;
@@ -273,6 +275,7 @@ export const identityService = {
   async deleteUser(userId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/identity/users/${userId}`);
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate('identity:teams:candidates');
     return response.data;
   },
 
@@ -281,6 +284,7 @@ export const identityService = {
       data: { user_ids: userIds }
     });
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate('identity:teams:candidates');
     return response.data;
   },
 
@@ -440,13 +444,25 @@ export const identityService = {
     );
   },
 
-  async createTeam(data: { name: string; code?: string; module_category?: string; description?: string; leader_id?: string; member_ids?: string[] }): Promise<import('@/types').Team> {
+  async getTeamCandidates(forceRefresh = false): Promise<import('@/types').TeamMemberInfo[]> {
+    return cacheManager.fetchWithCache(
+      'identity:teams:candidates',
+      async () => {
+        const response = await api.get<import('@/types').TeamMemberInfo[]>('/identity/teams/candidates');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async createTeam(data: { name: string; code?: string; module_category?: string; description?: string; leader_id?: string; member_ids?: string[]; is_active?: boolean }): Promise<import('@/types').Team> {
     const response = await api.post<import('@/types').Team>('/identity/teams', data);
     cacheManager.invalidate('identity:teams');
     return response.data;
   },
 
-  async updateTeam(teamId: string, data: { name?: string; code?: string; module_category?: string; description?: string; leader_id?: string; is_active?: boolean; member_ids?: string[] }): Promise<import('@/types').Team> {
+  async updateTeam(teamId: string, data: { name?: string; code?: string | null; module_category?: string; description?: string | null; leader_id?: string | null; is_active?: boolean; member_ids?: string[] }): Promise<import('@/types').Team> {
     const response = await api.put<import('@/types').Team>(`/identity/teams/${teamId}`, data);
     cacheManager.invalidate('identity:teams');
     return response.data;
@@ -1466,8 +1482,29 @@ export const crmService = {
     summary: string;
     details?: string;
     interaction_date?: string;
+    status?: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
+    responsible_id?: string;
   }): Promise<import('@/types').CustomerInteraction> {
     const response = await api.post<import('@/types').CustomerInteraction>('/crm/interactions', data);
+    cacheManager.invalidate('crm:interactions');
+    return response.data;
+  },
+
+  async updateInteraction(
+    interactionId: string,
+    data: {
+      interaction_type?: 'CALL' | 'MEETING' | 'EMAIL' | 'WHATSAPP' | 'NOTE';
+      summary?: string;
+      details?: string | null;
+      interaction_date?: string;
+      status?: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' | null;
+      responsible_id?: string | null;
+    }
+  ): Promise<import('@/types').CustomerInteraction> {
+    const response = await api.patch<import('@/types').CustomerInteraction>(
+      `/crm/interactions/${interactionId}`,
+      data
+    );
     cacheManager.invalidate('crm:interactions');
     return response.data;
   },
@@ -1502,6 +1539,123 @@ export const crmService = {
 // ==============================================================================
 
 export const salesService = {
+  async getCustomerCredit(
+    customerId: string,
+    proposedOrderAmount = 0,
+    excludeOrderId?: string
+  ): Promise<import('@/types').CustomerCreditAnalysis> {
+    const response = await api.get<import('@/types').CustomerCreditAnalysis>(
+      `/sales/customers/${customerId}/credit`,
+      {
+        params: {
+          proposed_order_amount: proposedOrderAmount,
+          ...(excludeOrderId ? { exclude_order_id: excludeOrderId } : {})
+        }
+      }
+    );
+    return response.data;
+  },
+
+  async getCreditApprovals(
+    status?: string,
+    forceRefresh = false
+  ): Promise<import('@/types').CreditApprovalRequest[]> {
+    const key = `sales:credit-approvals:${status || 'all'}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get<import('@/types').CreditApprovalRequest[]>(
+          '/sales/credit-approvals',
+          { params: status ? { status } : {} }
+        );
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async requestCreditApproval(
+    orderId: string,
+    reason: string
+  ): Promise<import('@/types').CreditApprovalRequest> {
+    const response = await api.post<import('@/types').CreditApprovalRequest>(
+      `/sales/orders/${orderId}/credit-approval`,
+      { reason }
+    );
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('sales:credit-approvals');
+    return response.data;
+  },
+
+  async decideCreditApproval(
+    approvalId: string,
+    approved: boolean,
+    reason: string
+  ): Promise<import('@/types').CreditApprovalRequest> {
+    const response = await api.post<import('@/types').CreditApprovalRequest>(
+      `/sales/credit-approvals/${approvalId}/decision`,
+      { approved, reason }
+    );
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('sales:credit-approvals');
+    return response.data;
+  },
+
+  async getCommercialApprovals(
+    status?: string,
+    forceRefresh = false
+  ): Promise<import('@/types').CommercialApprovalRequest[]> {
+    const key = `sales:commercial-approvals:${status || 'all'}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get<import('@/types').CommercialApprovalRequest[]>(
+          '/sales/commercial-approvals',
+          { params: status ? { status } : {} }
+        );
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async decideCommercialApproval(
+    approvalId: string,
+    approved: boolean,
+    reason: string
+  ): Promise<import('@/types').CommercialApprovalRequest> {
+    const response = await api.post<import('@/types').CommercialApprovalRequest>(
+      `/sales/commercial-approvals/${approvalId}/decision`,
+      { approved, reason }
+    );
+    cacheManager.invalidate('sales:quotes');
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('sales:commercial-approvals');
+    return response.data;
+  },
+
+  async getCommercialSettings(forceRefresh = false): Promise<import('@/types').CommercialSettings> {
+    return cacheManager.fetchWithCache(
+      'sales:settings',
+      async () => {
+        const response = await api.get<import('@/types').CommercialSettings>('/sales/settings');
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async updateCommercialSettings(
+    data: Partial<import('@/types').CommercialSettings>
+  ): Promise<import('@/types').CommercialSettings> {
+    const response = await api.put<import('@/types').CommercialSettings>('/sales/settings', data);
+    cacheManager.invalidate('sales:settings');
+    return response.data;
+  },
+
   async getQuotes(opportunityIdOrForce?: string | boolean, forceRefresh = false): Promise<import('@/types').SalesQuote[]> {
     const oppId = typeof opportunityIdOrForce === 'string' ? opportunityIdOrForce : undefined;
     const force = typeof opportunityIdOrForce === 'boolean' ? opportunityIdOrForce : forceRefresh;

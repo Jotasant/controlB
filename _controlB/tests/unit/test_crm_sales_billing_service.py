@@ -3,17 +3,19 @@ tests/unit/test_crm_sales_billing_service.py - Testes unitários dos módulos CR
 """
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from controlb.db import SessionLocal
 from controlb.modules.documents import service as documents_service
-from controlb.modules.identity.models import Organization, User
+from controlb.modules.documents.models import BusinessDocument, DocumentEvent
+from controlb.modules.identity.models import Organization, Permission, Role, User
 from controlb.modules.inventory.models import ProductCategory, Product
 from controlb.modules.crm import service as crm_service, schemas as crm_schemas
 from controlb.modules.sales import (
@@ -124,6 +126,197 @@ def test_crm_lead_and_opportunity_pipeline_flow(db: Session, mock_org: Organizat
         stage="WON"
     )
     assert updated_opp.stage == "WON"
+
+
+def test_crm_interaction_lifecycle_edit_and_audit(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+):
+    opportunity = crm_service.create_opportunity(
+        db,
+        mock_org.id,
+        crm_schemas.OpportunityCreate(
+            title="Renovação do contrato hospitalar",
+            customer_name="Hospital Vida",
+            estimated_amount=Decimal("8000.00"),
+        ),
+    )
+    note = crm_service.register_interaction(
+        db,
+        mock_org.id,
+        mock_user,
+        crm_schemas.CustomerInteractionCreate(
+            opportunity_id=opportunity.id,
+            interaction_type="NOTE",
+            summary="Cliente pediu revisão do escopo",
+        ),
+    )
+    activity = crm_service.register_interaction(
+        db,
+        mock_org.id,
+        mock_user,
+        crm_schemas.CustomerInteractionCreate(
+            opportunity_id=opportunity.id,
+            interaction_type="CALL",
+            summary="Retornar para a diretoria",
+            interaction_date=datetime.now(UTC) + timedelta(days=1),
+            responsible_id=mock_user.id,
+        ),
+    )
+
+    assert note.status is None
+    assert note.responsible_id is None
+    assert activity.status == "SCHEDULED"
+    assert activity.responsible_id == mock_user.id
+
+    updated_note = crm_service.update_interaction(
+        db,
+        note.id,
+        mock_org.id,
+        mock_user,
+        crm_schemas.CustomerInteractionUpdate(
+            summary="Cliente aprovou o escopo revisado",
+            details="Aprovação recebida por e-mail.",
+        ),
+    )
+    updated_activity = crm_service.update_interaction(
+        db,
+        activity.id,
+        mock_org.id,
+        mock_user,
+        crm_schemas.CustomerInteractionUpdate(status="COMPLETED"),
+    )
+
+    assert updated_note.summary == "Cliente aprovou o escopo revisado"
+    assert updated_note.details == "Aprovação recebida por e-mail."
+    assert updated_note.updated_by_id == mock_user.id
+    assert updated_activity.status == "COMPLETED"
+    assert updated_activity.updated_by_id == mock_user.id
+
+    opportunity_document = db.scalars(
+        select(BusinessDocument).where(
+            BusinessDocument.organization_id == mock_org.id,
+            BusinessDocument.document_type == "OPPORTUNITY",
+            BusinessDocument.native_id == opportunity.id,
+        )
+    ).first()
+    audit_events = list(
+        db.scalars(
+            select(DocumentEvent).where(
+                DocumentEvent.document_id == opportunity_document.id,
+                DocumentEvent.event_type == "INTERACTION_UPDATED",
+            )
+        ).all()
+    )
+
+    assert len(audit_events) == 2
+    note_audit = next(
+        event
+        for event in audit_events
+        if event.event_metadata["interaction_id"] == str(note.id)
+    )
+    assert note_audit.created_by_id == mock_user.id
+    assert note_audit.event_metadata["previous_values"]["summary"] == (
+        "Cliente pediu revisão do escopo"
+    )
+
+
+def test_crm_interaction_edit_respects_author_manager_and_tenant(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+):
+    interaction = crm_service.register_interaction(
+        db,
+        mock_org.id,
+        mock_user,
+        crm_schemas.CustomerInteractionCreate(
+            interaction_type="MEETING",
+            summary="Reunião de alinhamento",
+        ),
+    )
+    other_user = User(
+        organization_id=mock_org.id,
+        email=f"outro_{uuid.uuid4().hex[:6]}@empresa.com",
+        full_name="Outro Usuário",
+        hashed_password="hash123",
+    )
+    db.add(other_user)
+    db.commit()
+    db.refresh(other_user)
+
+    with pytest.raises(HTTPException) as forbidden:
+        crm_service.update_interaction(
+            db,
+            interaction.id,
+            mock_org.id,
+            other_user,
+            crm_schemas.CustomerInteractionUpdate(summary="Edição indevida"),
+        )
+    assert forbidden.value.status_code == 403
+
+    crm_manage = db.scalars(
+        select(Permission).where(Permission.code == "crm:manage")
+    ).first()
+    if crm_manage is None:
+        crm_manage = Permission(
+            code="crm:manage",
+            name="Gerenciar CRM & Oportunidades",
+            module="CRM",
+            description="Gerenciar interações do CRM",
+        )
+        db.add(crm_manage)
+        db.flush()
+    manager_role = Role(
+        organization_id=mock_org.id,
+        name=f"Gestor CRM {uuid.uuid4().hex[:6]}",
+        is_active=True,
+    )
+    manager_role.permissions.append(crm_manage)
+    manager = User(
+        organization_id=mock_org.id,
+        role=manager_role,
+        email=f"gestor_{uuid.uuid4().hex[:6]}@empresa.com",
+        full_name="Gestor CRM",
+        hashed_password="hash123",
+    )
+    db.add(manager)
+    db.commit()
+    db.refresh(manager)
+
+    managed_update = crm_service.update_interaction(
+        db,
+        interaction.id,
+        mock_org.id,
+        manager,
+        crm_schemas.CustomerInteractionUpdate(summary="Edição autorizada pelo gestor"),
+    )
+    assert managed_update.updated_by_id == manager.id
+
+    other_org = Organization(name=f"Outra Organização {uuid.uuid4().hex[:6]}")
+    db.add(other_org)
+    db.commit()
+    db.refresh(other_org)
+    outsider = User(
+        organization_id=other_org.id,
+        email=f"externo_{uuid.uuid4().hex[:6]}@empresa.com",
+        full_name="Usuário Externo",
+        hashed_password="hash123",
+    )
+    db.add(outsider)
+    db.commit()
+    db.refresh(outsider)
+
+    with pytest.raises(HTTPException) as not_found:
+        crm_service.update_interaction(
+            db,
+            interaction.id,
+            other_org.id,
+            outsider,
+            crm_schemas.CustomerInteractionUpdate(summary="Tentativa externa"),
+        )
+    assert not_found.value.status_code == 404
 
 
 def test_crm_stages_dynamic_management(db: Session, mock_org: Organization):
@@ -709,6 +902,31 @@ def test_sales_quote_and_order_read_routes_require_view_permission(mock_user: Us
             current_user_dependency.call(current_user=mock_user)
         assert exc_info.value.status_code == 403
         assert "sales:view" in exc_info.value.detail
+
+
+def test_commercial_approval_routes_require_specific_permissions(mock_user: User):
+    expected_permissions = {
+        ("GET", "/sales/commercial-approvals"): "sales:approvals:view",
+        (
+            "POST",
+            "/sales/commercial-approvals/{approval_id}/decision",
+        ): "sales:approvals:approve",
+    }
+    api_routes = [route for route in sales_api.router.routes if isinstance(route, APIRoute)]
+
+    for (method, path), permission in expected_permissions.items():
+        route = next(
+            item for item in api_routes if item.path == path and method in item.methods
+        )
+        current_user_dependency = next(
+            dependency
+            for dependency in route.dependant.dependencies
+            if dependency.name == "current_user"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            current_user_dependency.call(current_user=mock_user)
+        assert exc_info.value.status_code == 403
+        assert permission in exc_info.value.detail
 
 
 def test_sales_routes_do_not_register_duplicate_operations():
@@ -1362,6 +1580,332 @@ def test_sales_quote_cancellation_with_reason_and_audit(
             current_user=mock_user
         )
     assert exc.value.status_code == 409
+
+
+def test_commercial_settings_drive_quote_defaults_and_discount_limit(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    defaults = sales_service.get_commercial_settings(db, mock_org.id)
+    assert defaults.default_payment_terms == "30 DDL"
+    assert defaults.quote_validity_days == 15
+    assert defaults.maximum_discount_percent == Decimal("100.00")
+
+    configured = sales_service.update_commercial_settings(
+        db,
+        mock_org.id,
+        sales_schemas.CommercialSettingsUpdate(
+            default_payment_terms="28 DDL",
+            quote_validity_days=20,
+            maximum_discount_percent=Decimal("5.00"),
+            default_commission_percent=Decimal("3.50"),
+        ),
+    )
+    assert configured.organization_id == mock_org.id
+
+    quote = sales_service.create_sales_quote(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesQuoteCreate(
+            customer_name="Cliente com Política",
+            items=[
+                sales_schemas.SalesQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("2"),
+                    unit_price=Decimal("100.00"),
+                    discount_amount=Decimal("10.00"),
+                )
+            ],
+        ),
+    )
+    assert quote.payment_terms == "28 DDL"
+    assert quote.valid_until == date.today() + timedelta(days=20)
+
+    with pytest.raises(HTTPException) as discount_error:
+        sales_service.create_sales_quote(
+            db,
+            mock_org.id,
+            mock_user,
+            sales_schemas.SalesQuoteCreate(
+                customer_name="Cliente acima do limite",
+                items=[
+                    sales_schemas.SalesQuoteItemCreate(
+                        product_id=mock_product.id,
+                        quantity=Decimal("1"),
+                        unit_price=Decimal("100.00"),
+                        discount_amount=Decimal("5.01"),
+                    )
+                ],
+            ),
+        )
+    assert discount_error.value.status_code == 409
+
+    mock_user.is_seller = True
+    db.flush()
+    goal = sales_service.create_sales_goal(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesGoalCreate(
+            user_id=mock_user.id,
+            month=8,
+            year=2026,
+            target_amount=Decimal("10000.00"),
+        ),
+    )
+    assert goal.commission_percent == Decimal("3.50")
+
+
+def test_commercial_approvals_block_quote_until_all_rules_are_decided(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    mock_product.cost_price = Decimal("80.00")
+    sales_service.update_commercial_settings(
+        db,
+        mock_org.id,
+        sales_schemas.CommercialSettingsUpdate(
+            maximum_discount_percent=Decimal("20.00"),
+            automatic_discount_limit_percent=Decimal("5.00"),
+            minimum_margin_percent=Decimal("20.00"),
+            maximum_payment_term_days_without_approval=30,
+        ),
+    )
+
+    quote = sales_service.create_sales_quote(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesQuoteCreate(
+            customer_name="Cliente com Exceção Comercial",
+            payment_terms="30/60 DDL",
+            items=[
+                sales_schemas.SalesQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("100.00"),
+                    discount_amount=Decimal("10.00"),
+                )
+            ],
+        ),
+    )
+
+    approvals = sales_service.list_commercial_approval_requests(
+        db, mock_org.id, "PENDING"
+    )
+    assert quote.commercial_approval_status == "PENDING"
+    assert {item.approval_type for item in approvals} == {
+        "DISCOUNT", "MARGIN", "PAYMENT_TERM"
+    }
+    assert sales_schemas.CommercialApprovalResponse.model_validate(
+        approvals[0]
+    ).quote.quote_number == quote.quote_number
+
+    with pytest.raises(HTTPException) as approval_block:
+        sales_service.update_sales_quote_status(
+            db, quote.id, mock_org.id, "APPROVED", mock_user
+        )
+    assert approval_block.value.status_code == 409
+
+    for approval in approvals:
+        sales_service.decide_commercial_approval(
+            db,
+            approval.id,
+            mock_org.id,
+            mock_user,
+            sales_schemas.CreditApprovalDecision(
+                approved=True,
+                reason="Exceção validada pela gestão comercial.",
+            ),
+        )
+
+    assert quote.commercial_approval_status == "APPROVED"
+    sales_service.update_sales_quote_status(
+        db, quote.id, mock_org.id, "APPROVED", mock_user
+    )
+    order = sales_service.convert_quote_to_order(
+        db, quote.id, mock_org.id, mock_user
+    )
+    assert order.commercial_approval_status == "APPROVED"
+
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="SALES_QUOTE",
+        native_id=quote.id,
+    )
+    event_types = [event.event_type for event in chain.events]
+    assert event_types.count("COMMERCIAL_APPROVAL_REQUESTED") == 3
+    assert event_types.count("COMMERCIAL_APPROVED") == 3
+
+
+def test_direct_order_commercial_approval_blocks_inventory_and_billing(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    from controlb.modules.inventory import service as inventory_service
+
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente com Desconto Extraordinário",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("100.00"),
+                    discount_amount=Decimal("10.00"),
+                )
+            ],
+        ),
+    )
+    assert order.commercial_approval_status == "PENDING"
+
+    with pytest.raises(HTTPException) as stock_block:
+        inventory_service.reserve_sales_order(
+            db, mock_org.id, mock_user.id, order.id
+        )
+    assert stock_block.value.status_code == 409
+    assert "aprovação comercial" in stock_block.value.detail
+
+    with pytest.raises(HTTPException) as billing_block:
+        sales_service.request_order_billing(
+            db, order.id, mock_org.id, mock_user
+        )
+    assert billing_block.value.status_code == 409
+
+    approval = sales_service.list_commercial_approval_requests(
+        db, mock_org.id, "PENDING", "DISCOUNT"
+    )[0]
+    sales_service.decide_commercial_approval(
+        db,
+        approval.id,
+        mock_org.id,
+        mock_user,
+        sales_schemas.CreditApprovalDecision(
+            approved=True,
+            reason="Desconto aprovado para esta negociação.",
+        ),
+    )
+    reservation = inventory_service.reserve_sales_order(
+        db, mock_org.id, mock_user.id, order.id
+    )
+    assert reservation.status == "RESERVED"
+
+
+def test_credit_exposure_approval_and_operational_blocking(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    customer = sales_service.create_customer(
+        db,
+        mock_org.id,
+        sales_schemas.CustomerCreate(
+            name="Cliente com Limite Controlado",
+            person_type="PJ",
+            document=f"77{uuid.uuid4().int % 10**12:012d}",
+            credit_limit=Decimal("500.00"),
+        ),
+    )
+
+    def create_order(amount: Decimal):
+        return sales_service.create_sales_order(
+            db,
+            mock_org.id,
+            mock_user,
+            sales_schemas.SalesOrderCreate(
+                customer_id=customer.id,
+                customer_name=customer.name,
+                customer_document=customer.document,
+                payment_terms="30 DDL",
+                items=[
+                    sales_schemas.SalesOrderItemCreate(
+                        product_id=mock_product.id,
+                        quantity=Decimal("1"),
+                        unit_price=amount,
+                    )
+                ],
+            ),
+        )
+
+    first_order = create_order(Decimal("300.00"))
+    assert first_order.credit_status == "APPROVED"
+    assert first_order.credit_excess_amount == Decimal("0.00")
+
+    second_order = create_order(Decimal("300.00"))
+    assert second_order.credit_status == "PENDING"
+    assert second_order.credit_limit_snapshot == Decimal("500.00")
+    assert second_order.credit_exposure_snapshot == Decimal("300.00")
+    assert second_order.credit_excess_amount == Decimal("100.00")
+    assert second_order.credit_approval is not None
+    assert second_order.credit_approval.status == "PENDING"
+
+    analysis = sales_service.get_customer_credit_analysis(
+        db,
+        mock_org.id,
+        customer.id,
+        exclude_order_id=second_order.id,
+    )
+    assert analysis.utilized_amount == Decimal("300.00")
+    assert analysis.available_amount == Decimal("200.00")
+
+    with pytest.raises(HTTPException) as billing_block:
+        sales_service.request_order_billing(
+            db,
+            second_order.id,
+            mock_org.id,
+            mock_user,
+        )
+    assert billing_block.value.status_code == 409
+    assert "liberação de crédito" in billing_block.value.detail
+
+    approval = sales_repository.get_credit_approval_by_order_id(
+        db,
+        second_order.id,
+        mock_org.id,
+    )
+    decided = sales_service.decide_credit_approval(
+        db,
+        approval.id,
+        mock_org.id,
+        mock_user,
+        sales_schemas.CreditApprovalDecision(
+            approved=True,
+            reason="Histórico de pagamento e garantias validados.",
+        ),
+    )
+    assert decided.status == "APPROVED"
+    assert decided.order.credit_status == "APPROVED"
+    assert sales_schemas.CreditApprovalResponse.model_validate(decided).order.order_number
+
+    billed = sales_service.request_order_billing(
+        db,
+        second_order.id,
+        mock_org.id,
+        mock_user,
+    )
+    assert billed.billing_status == "INVOICED"
+
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="SALES_ORDER",
+        native_id=second_order.id,
+    )
+    event_types = {event.event_type for event in chain.events}
+    assert "CREDIT_APPROVAL_REQUESTED" in event_types
+    assert "CREDIT_APPROVED" in event_types
 
 
 def test_identity_contact_partner_odoo_pattern_and_role_filtering(db, mock_org, mock_user):

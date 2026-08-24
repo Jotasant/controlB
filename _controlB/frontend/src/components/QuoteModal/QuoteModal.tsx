@@ -74,6 +74,18 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || quote) return;
+    salesService.getCommercialSettings().then((settings) => {
+      setPaymentTerms(settings.default_payment_terms);
+      const configuredDate = new Date();
+      configuredDate.setDate(configuredDate.getDate() + settings.quote_validity_days);
+      setValidUntil(configuredDate.toISOString().split('T')[0]);
+    }).catch(() => {
+      // O backend ainda aplica os mesmos defaults se a leitura antecipada falhar.
+    });
+  }, [isOpen, quote]);
+
   // Inicializar formulário ao abrir
   useEffect(() => {
     if (!isOpen) return;

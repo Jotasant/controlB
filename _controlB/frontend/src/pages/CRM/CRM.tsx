@@ -38,6 +38,8 @@ import { CustomerPicker } from '@/components/CustomerPicker';
 import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
 import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
 import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline';
+import { CommercialTeamsSettings } from '@/components/CommercialTeamsSettings/CommercialTeamsSettings';
+import { CommercialPoliciesSettings } from '@/components/CommercialPoliciesSettings/CommercialPoliciesSettings';
 import { useToast } from '@/components/Toast/ToastContext';
 import './CRM.scss';
 
@@ -155,9 +157,21 @@ export const CRM: React.FC = () => {
     summary: '',
     details: '',
     date: new Date().toISOString().split('T')[0],
-    time: '14:00'
+    time: '14:00',
+    responsible_id: ''
   });
   const [isSavingGlobalActivity, setIsSavingGlobalActivity] = useState<boolean>(false);
+  const [editingInteraction, setEditingInteraction] = useState<CustomerInteraction | null>(null);
+  const [isSavingInteractionEdit, setIsSavingInteractionEdit] = useState<boolean>(false);
+  const [interactionEditForm, setInteractionEditForm] = useState({
+    type: 'CALL' as CustomerInteraction['interaction_type'],
+    summary: '',
+    details: '',
+    date: new Date().toISOString().split('T')[0],
+    time: '14:00',
+    status: 'SCHEDULED' as 'SCHEDULED' | 'COMPLETED' | 'CANCELLED',
+    responsible_id: ''
+  });
 
   // Drag and Drop State
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
@@ -796,7 +810,11 @@ export const CRM: React.FC = () => {
         interaction_type: globalActivityForm.type,
         summary: globalActivityForm.summary.trim(),
         details: globalActivityForm.details.trim() || undefined,
-        interaction_date: scheduledDateTime
+        interaction_date: scheduledDateTime,
+        status: globalActivityForm.type === 'NOTE' ? undefined : 'SCHEDULED',
+        responsible_id: globalActivityForm.type === 'NOTE'
+          ? undefined
+          : globalActivityForm.responsible_id || undefined
       };
 
       if (globalActivityForm.linked_type === 'OPPORTUNITY' && globalActivityForm.linked_id) {
@@ -815,7 +833,8 @@ export const CRM: React.FC = () => {
         summary: '',
         details: '',
         date: new Date().toISOString().split('T')[0],
-        time: '14:00'
+        time: '14:00',
+        responsible_id: ''
       });
       toast.success("Atividade agendada com sucesso!", "Atividade Criada");
       void loadCRMData();
@@ -823,6 +842,56 @@ export const CRM: React.FC = () => {
       toast.error(formatApiError(err, "Erro ao agendar atividade comercial."));
     } finally {
       setIsSavingGlobalActivity(false);
+    }
+  };
+
+  const handleOpenInteractionEditor = (interaction: CustomerInteraction) => {
+    const interactionDate = new Date(interaction.interaction_date || interaction.created_at);
+    const safeDate = Number.isNaN(interactionDate.getTime()) ? new Date() : interactionDate;
+    const isoDate = safeDate.toISOString();
+
+    setEditingInteraction(interaction);
+    setInteractionEditForm({
+      type: interaction.interaction_type,
+      summary: interaction.summary,
+      details: interaction.details || '',
+      date: isoDate.split('T')[0],
+      time: isoDate.slice(11, 16),
+      status: interaction.status || 'SCHEDULED',
+      responsible_id: interaction.responsible_id || ''
+    });
+  };
+
+  const handleSaveInteractionEdit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingInteraction || !interactionEditForm.summary.trim()) {
+      toast.warning('Informe o resumo da nota ou atividade.', 'Resumo obrigatório');
+      return;
+    }
+
+    setIsSavingInteractionEdit(true);
+    try {
+      const isNote = interactionEditForm.type === 'NOTE';
+      const updated = await crmService.updateInteraction(editingInteraction.id, {
+        interaction_type: interactionEditForm.type,
+        summary: interactionEditForm.summary.trim(),
+        details: interactionEditForm.details.trim() || null,
+        interaction_date: `${interactionEditForm.date}T${interactionEditForm.time}:00Z`,
+        status: isNote ? null : interactionEditForm.status,
+        responsible_id: isNote ? null : interactionEditForm.responsible_id || null
+      });
+
+      setAllInteractions(prev => prev.map(item => item.id === updated.id ? updated : item));
+      setOppInteractions(prev => prev.map(item => item.id === updated.id ? updated : item));
+      setEditingInteraction(null);
+      toast.success(
+        isNote ? 'Nota atualizada com sucesso!' : 'Atividade atualizada com sucesso!',
+        'Atualização salva'
+      );
+    } catch (err: unknown) {
+      toast.error(formatApiError(err, 'Falha ao atualizar a nota ou atividade.'));
+    } finally {
+      setIsSavingInteractionEdit(false);
     }
   };
 
@@ -1107,7 +1176,11 @@ export const CRM: React.FC = () => {
                 opportunity_id: selectedOppForQuote.id,
                 interaction_type: act.interaction_type,
                 summary: act.summary,
-                interaction_date: act.interaction_date
+                interaction_date: act.interaction_date,
+                status: act.interaction_type === 'NOTE' ? undefined : 'COMPLETED',
+                responsible_id: act.interaction_type === 'NOTE'
+                  ? undefined
+                  : proposalForm.assigned_to_id || undefined
               });
             } catch (err) {
               console.error("Erro ao salvar atividade pendente:", err);
@@ -1154,7 +1227,11 @@ export const CRM: React.FC = () => {
                 opportunity_id: created.id,
                 interaction_type: act.interaction_type,
                 summary: act.summary,
-                interaction_date: act.interaction_date
+                interaction_date: act.interaction_date,
+                status: act.interaction_type === 'NOTE' ? undefined : 'COMPLETED',
+                responsible_id: act.interaction_type === 'NOTE'
+                  ? undefined
+                  : proposalForm.assigned_to_id || undefined
               });
             } catch (err) {
               console.error("Erro ao salvar atividade pendente na nova oportunidade:", err);
@@ -1281,7 +1358,11 @@ export const CRM: React.FC = () => {
         opportunity_id: selectedOppForQuote.id,
         interaction_type: sidebarActivityForm.type,
         summary: sidebarActivityForm.summary.trim(),
-        interaction_date: scheduledDate
+        interaction_date: scheduledDate,
+        status: sidebarActivityForm.type === 'NOTE' ? undefined : 'COMPLETED',
+        responsible_id: sidebarActivityForm.type === 'NOTE'
+          ? undefined
+          : selectedOppForQuote.assigned_to_id || undefined
       });
       setAllInteractions(prev => [interaction, ...prev]);
       if (selectedOpp?.id === selectedOppForQuote.id) {
@@ -1411,7 +1492,8 @@ export const CRM: React.FC = () => {
       summary: `🚨 Follow-up Emergencial: ${opp.title}`,
       details: `Contato prioritário devido à estagnação de negociação no CRM. Retomar contato comercial com ${opp.customer_name}.`,
       date: new Date().toISOString().split('T')[0],
-      time: '10:00'
+      time: '10:00',
+      responsible_id: opp.assigned_to_id || ''
     });
     setIsGlobalActivityModalOpen(true);
   };
@@ -1604,13 +1686,16 @@ export const CRM: React.FC = () => {
 
       const actDateStr = (act.interaction_date || act.created_at || '').split('T')[0];
       if (activityTabFilter === 'TODAY') {
-        return actDateStr === todayStr;
+        return act.status === 'SCHEDULED' && actDateStr === todayStr;
       }
       if (activityTabFilter === 'OVERDUE') {
-        return actDateStr < todayStr;
+        return act.status === 'SCHEDULED' && actDateStr < todayStr;
       }
       if (activityTabFilter === 'UPCOMING') {
-        return actDateStr > todayStr;
+        return act.status === 'SCHEDULED' && actDateStr > todayStr;
+      }
+      if (activityTabFilter === 'COMPLETED') {
+        return act.status === 'COMPLETED';
       }
       return true;
     });
@@ -1713,7 +1798,7 @@ export const CRM: React.FC = () => {
                 onClick={() => setActiveTab('stages')}
               >
                 <Settings size={16} />
-                <span>Etapas do Funil (Kanban)</span>
+                <span>Funil &amp; Equipes</span>
                 <span className="nav-badge-subtle">{stages.length}</span>
               </button>
             </div>
@@ -1732,7 +1817,7 @@ export const CRM: React.FC = () => {
                 {activeTab === 'pipeline' && (oppViewMode === 'kanban' ? 'Funil de Vendas (Kanban)' : 'Lista de Oportunidades')}
                 {activeTab === 'leads' && 'Base de Leads & Prospecção'}
                 {activeTab === 'activities' && 'Central de Atividades & Follow-ups'}
-                {activeTab === 'stages' && 'Configuração das Etapas do Funil de Vendas'}
+                {activeTab === 'stages' && 'Configurações do CRM'}
                 {activeTab === 'reports' && 'Inteligência Comercial & Relatórios'}
               </h1>
               <p className="subtitle">
@@ -1740,7 +1825,7 @@ export const CRM: React.FC = () => {
                 {activeTab === 'pipeline' && (oppViewMode === 'kanban' ? 'Arraste os cards entre as colunas para atualizar a fase de cada negociação' : 'Listagem tabular com personalização de colunas, valores e follow-ups')}
                 {activeTab === 'leads' && 'Qualifique potenciais clientes e converta contatos em negociações ativas'}
                 {activeTab === 'activities' && 'Organize ligações, reuniões, conversas de WhatsApp e lembretes com prazos'}
-                {activeTab === 'stages' && 'Personalize a sequência, nomes e cores das colunas do quadro Kanban'}
+                {activeTab === 'stages' && 'Configure o funil e a equipe comercial compartilhada com Vendas'}
                 {activeTab === 'reports' && 'Métricas de conversão, motivos de perda, tempo médio de fechamento e ticket médio'}
               </p>
             </div>
@@ -2566,6 +2651,13 @@ export const CRM: React.FC = () => {
                   >
                     🟢 Próximas
                   </button>
+                  <button
+                    type="button"
+                    className={`act-tab-btn ${activityTabFilter === 'COMPLETED' ? 'active' : ''}`}
+                    onClick={() => setActivityTabFilter('COMPLETED')}
+                  >
+                    Concluídas
+                  </button>
                 </div>
 
                 <div className="activity-search-box">
@@ -2587,15 +2679,20 @@ export const CRM: React.FC = () => {
                       <th>Detalhes & Observações</th>
                       <th>Data Programada / Registro</th>
                       <th style={{ textAlign: 'center' }}>Status</th>
+                      <th style={{ textAlign: 'center' }}>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredActivities.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="empty-row">Nenhuma atividade encontrada com os filtros selecionados.</td>
+                        <td colSpan={6} className="empty-row">Nenhuma atividade encontrada com os filtros selecionados.</td>
                       </tr>
                     ) : (
-                      filteredActivities.map(act => (
+                      filteredActivities.map(act => {
+                        const lifecycleStatus = act.interaction_type === 'NOTE'
+                          ? 'NOTE'
+                          : act.status || 'SCHEDULED';
+                        return (
                         <tr key={act.id}>
                           <td>
                             <div className="cell-activity-type">
@@ -2616,12 +2713,31 @@ export const CRM: React.FC = () => {
                             </div>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
-                              <Check size={12} /> Concluída
+                            <span className={`interaction-status-badge status-${lifecycleStatus.toLowerCase()}`}>
+                              {lifecycleStatus === 'COMPLETED' && <Check size={12} />}
+                              {lifecycleStatus === 'SCHEDULED' && <Clock size={12} />}
+                              {lifecycleStatus === 'CANCELLED' && <X size={12} />}
+                              {lifecycleStatus === 'NOTE' && <FileText size={12} />}
+                              {lifecycleStatus === 'COMPLETED' && 'Concluída'}
+                              {lifecycleStatus === 'SCHEDULED' && 'Agendada'}
+                              {lifecycleStatus === 'CANCELLED' && 'Cancelada'}
+                              {lifecycleStatus === 'NOTE' && 'Nota'}
                             </span>
                           </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              className="interaction-edit-button"
+                              onClick={() => handleOpenInteractionEditor(act)}
+                              title="Editar nota ou atividade"
+                            >
+                              <Edit3 size={13} />
+                              <span>Editar</span>
+                            </button>
+                          </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -2794,6 +2910,10 @@ export const CRM: React.FC = () => {
                     </table>
                   </div>
                 </div>
+              </div>
+              <div className="crm-commercial-settings-stack">
+                <CommercialPoliciesSettings />
+                <CommercialTeamsSettings />
               </div>
             </div>
           )}
@@ -3154,6 +3274,25 @@ export const CRM: React.FC = () => {
               </div>
             </div>
 
+            {globalActivityForm.type !== 'NOTE' && (
+              <div className="form-group">
+                <label>Responsável pela atividade</label>
+                <select
+                  className="ui-input"
+                  value={globalActivityForm.responsible_id}
+                  onChange={(e) => setGlobalActivityForm({
+                    ...globalActivityForm,
+                    responsible_id: e.target.value
+                  })}
+                >
+                  <option value="">Sem responsável definido</option>
+                  {sellersList.map(seller => (
+                    <option key={seller.id} value={seller.id}>{seller.full_name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="form-group">
               <label>Detalhes e Pauta</label>
               <textarea
@@ -3184,6 +3323,147 @@ export const CRM: React.FC = () => {
           </form>
         </Modal>
       )}
+
+      {/* MODAL DE EDIÇÃO DE NOTA / ATIVIDADE */}
+      <Modal
+        isOpen={Boolean(editingInteraction)}
+        onClose={() => setEditingInteraction(null)}
+        title={interactionEditForm.type === 'NOTE' ? 'Editar nota' : 'Editar atividade'}
+        subtitle="A alteração será registrada na trilha de auditoria da oportunidade"
+        size="md"
+      >
+        <form onSubmit={handleSaveInteractionEdit} className="wizard-form">
+          <div className="form-group">
+            <label>Tipo de registro *</label>
+            <select
+              className="ui-input"
+              value={interactionEditForm.type}
+              onChange={(e) => setInteractionEditForm({
+                ...interactionEditForm,
+                type: e.target.value as CustomerInteraction['interaction_type']
+              })}
+            >
+              <option value="NOTE">Nota</option>
+              <option value="CALL">Ligação</option>
+              <option value="WHATSAPP">WhatsApp</option>
+              <option value="MEETING">Reunião</option>
+              <option value="EMAIL">E-mail</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Resumo *</label>
+            <input
+              type="text"
+              required
+              maxLength={255}
+              className="ui-input"
+              value={interactionEditForm.summary}
+              onChange={(e) => setInteractionEditForm({
+                ...interactionEditForm,
+                summary: e.target.value
+              })}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Detalhes</label>
+            <textarea
+              rows={4}
+              className="ui-input"
+              value={interactionEditForm.details}
+              onChange={(e) => setInteractionEditForm({
+                ...interactionEditForm,
+                details: e.target.value
+              })}
+            />
+          </div>
+
+          <div className="form-row cols-2">
+            <div className="form-group flex-1">
+              <label>
+                {interactionEditForm.type === 'NOTE' ? 'Data do registro' : 'Data programada'}
+              </label>
+              <input
+                type="date"
+                required
+                className="ui-input"
+                value={interactionEditForm.date}
+                onChange={(e) => setInteractionEditForm({
+                  ...interactionEditForm,
+                  date: e.target.value
+                })}
+              />
+            </div>
+            <div className="form-group flex-1">
+              <label>Horário</label>
+              <input
+                type="time"
+                required
+                className="ui-input"
+                value={interactionEditForm.time}
+                onChange={(e) => setInteractionEditForm({
+                  ...interactionEditForm,
+                  time: e.target.value
+                })}
+              />
+            </div>
+          </div>
+
+          {interactionEditForm.type !== 'NOTE' && (
+            <div className="form-row cols-2">
+              <div className="form-group flex-1">
+                <label>Status</label>
+                <select
+                  className="ui-input"
+                  value={interactionEditForm.status}
+                  onChange={(e) => setInteractionEditForm({
+                    ...interactionEditForm,
+                    status: e.target.value as 'SCHEDULED' | 'COMPLETED' | 'CANCELLED'
+                  })}
+                >
+                  <option value="SCHEDULED">Agendada</option>
+                  <option value="COMPLETED">Concluída</option>
+                  <option value="CANCELLED">Cancelada</option>
+                </select>
+              </div>
+              <div className="form-group flex-1">
+                <label>Responsável</label>
+                <select
+                  className="ui-input"
+                  value={interactionEditForm.responsible_id}
+                  onChange={(e) => setInteractionEditForm({
+                    ...interactionEditForm,
+                    responsible_id: e.target.value
+                  })}
+                >
+                  <option value="">Sem responsável definido</option>
+                  {sellersList.map(seller => (
+                    <option key={seller.id} value={seller.id}>{seller.full_name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          <div className="modal-footer ui-form__actions">
+            <button
+              type="button"
+              className="btn-secondary ui-button ui-button--secondary"
+              onClick={() => setEditingInteraction(null)}
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="btn-primary ui-button ui-button--primary"
+              disabled={isSavingInteractionEdit}
+            >
+              {isSavingInteractionEdit ? 'Salvando...' : 'Salvar alterações'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* =================================================================== */}
       {/* MODAL DE EDITAR LEAD (FASE 2)                                       */}
@@ -4903,7 +5183,27 @@ export const CRM: React.FC = () => {
                             <div className="timeline-card">
                               <div className="card-top">
                                 <span className="card-title">{act.summary}</span>
-                                <span className="card-time">{fmtDate(act.interaction_date || act.created_at)}</span>
+                                <div className="card-meta-actions">
+                                  <span className={`interaction-status-badge status-${(act.interaction_type === 'NOTE' ? 'NOTE' : act.status || 'SCHEDULED').toLowerCase()}`}>
+                                    {act.interaction_type === 'NOTE'
+                                      ? 'Nota'
+                                      : act.status === 'COMPLETED'
+                                        ? 'Concluída'
+                                        : act.status === 'CANCELLED'
+                                          ? 'Cancelada'
+                                          : 'Agendada'}
+                                  </span>
+                                  <span className="card-time">{fmtDate(act.interaction_date || act.created_at)}</span>
+                                  <button
+                                    type="button"
+                                    className="timeline-edit-button"
+                                    onClick={() => handleOpenInteractionEditor(act)}
+                                    title="Editar registro"
+                                    aria-label={`Editar ${act.interaction_type === 'NOTE' ? 'nota' : 'atividade'}`}
+                                  >
+                                    <Edit3 size={12} />
+                                  </button>
+                                </div>
                               </div>
                               {act.details && <p className="card-details">{act.details}</p>}
                             </div>

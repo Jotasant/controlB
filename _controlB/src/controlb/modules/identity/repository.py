@@ -7,7 +7,7 @@ Não contém regras de negócio (as regras ficam na camada 'service').
 """
 
 import uuid
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from controlb.modules.identity.models import User, Organization, Role, Permission, Team
 from controlb.modules.identity.schemas import (
@@ -451,6 +451,36 @@ def get_team_by_id(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID) 
     return db.execute(stmt).scalar_one_or_none()
 
 
+def get_team_by_name(
+    db: Session,
+    organization_id: uuid.UUID,
+    module_category: str,
+    name: str,
+) -> Team | None:
+    """Busca nome sem diferenciar maiÃºsculas, sempre dentro do tenant e categoria."""
+    stmt = select(Team).where(
+        Team.organization_id == organization_id,
+        Team.module_category == module_category,
+        func.lower(Team.name) == name.lower(),
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def get_team_by_code(
+    db: Session,
+    organization_id: uuid.UUID,
+    module_category: str,
+    code: str,
+) -> Team | None:
+    """Busca cÃ³digo sem diferenciar maiÃºsculas, sempre dentro do tenant e categoria."""
+    stmt = select(Team).where(
+        Team.organization_id == organization_id,
+        Team.module_category == module_category,
+        func.lower(Team.code) == code.lower(),
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
 def create_team(db: Session, organization_id: uuid.UUID, data: TeamCreate) -> Team:
     """Cria e persiste uma nova equipe com seus membros associados."""
     team = Team(
@@ -477,13 +507,13 @@ def update_team(db: Session, team: Team, data: TeamUpdate) -> Team:
     """Atualiza dados e membros de uma equipe."""
     if data.name is not None:
         team.name = data.name.strip()
-    if data.code is not None:
+    if "code" in data.model_fields_set:
         team.code = data.code.strip() if data.code else None
     if data.module_category is not None:
         team.module_category = data.module_category.upper()
-    if data.description is not None:
+    if "description" in data.model_fields_set:
         team.description = data.description.strip() if data.description else None
-    if data.leader_id is not None:
+    if "leader_id" in data.model_fields_set:
         team.leader_id = data.leader_id
     if data.is_active is not None:
         team.is_active = data.is_active

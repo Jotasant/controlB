@@ -3,13 +3,17 @@ modules/sales/repository.py - Camada de Persistência do Módulo de Vendas & PDV
 """
 
 import uuid
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from decimal import Decimal
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 
 from controlb.modules.sales.models import (
     Customer, SalesQuote, SalesQuoteItem, SalesOrder, SalesOrderItem,
+    CreditApprovalRequest, CommercialApprovalRequest,
     POSSession, POSSale, POSSaleItem, POSCashMovement,
-    SalesGoal, PriceTable, PriceTableItem, SalesReturn, SalesReturnItem
+    SalesGoal, PriceTable, PriceTableItem, CommercialSettings,
+    SalesReturn, SalesReturnItem
 )
 from controlb.modules.sales.schemas import CustomerCreate, CustomerUpdate
 
@@ -37,6 +41,22 @@ def list_customers(db: Session, organization_id: uuid.UUID, search: str | None =
 
 def get_customer_by_id(db: Session, customer_id: uuid.UUID, organization_id: uuid.UUID) -> Customer | None:
     stmt = select(Customer).where(Customer.id == customer_id, Customer.organization_id == organization_id)
+    return db.scalars(stmt).first()
+
+
+def get_customer_by_id_for_update(
+    db: Session,
+    customer_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> Customer | None:
+    stmt = (
+        select(Customer)
+        .where(
+            Customer.id == customer_id,
+            Customer.organization_id == organization_id,
+        )
+        .with_for_update()
+    )
     return db.scalars(stmt).first()
 
 
@@ -179,6 +199,189 @@ def create_order(db: Session, order: SalesOrder) -> SalesOrder:
     return order
 
 
+def get_unbilled_order_exposure(
+    db: Session,
+    organization_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    *,
+    exclude_order_id: uuid.UUID | None = None,
+) -> Decimal:
+    """Soma pedidos ainda não transformados em contas a receber."""
+    stmt = select(func.coalesce(func.sum(SalesOrder.net_amount), 0)).where(
+        SalesOrder.organization_id == organization_id,
+        SalesOrder.customer_id == customer_id,
+        SalesOrder.status != "CANCELLED",
+        SalesOrder.credit_status != "REJECTED",
+        SalesOrder.billing_status != "INVOICED",
+    )
+    if exclude_order_id:
+        stmt = stmt.where(SalesOrder.id != exclude_order_id)
+    return Decimal(db.scalar(stmt) or 0)
+
+
+def get_open_receivable_exposure(
+    db: Session,
+    organization_id: uuid.UUID,
+    customer_document: str,
+) -> Decimal:
+    """Soma o saldo financeiro aberto sem duplicar pedidos já faturados."""
+    from controlb.modules.finance.models import Receivable
+
+    stmt = select(func.coalesce(func.sum(Receivable.outstanding_amount), 0)).where(
+        Receivable.organization_id == organization_id,
+        Receivable.customer_document == customer_document,
+        Receivable.status.notin_(("RECEIVED", "CANCELLED")),
+    )
+    return Decimal(db.scalar(stmt) or 0)
+
+
+def save_credit_approval_request(
+    db: Session,
+    approval: CreditApprovalRequest,
+) -> CreditApprovalRequest:
+    db.add(approval)
+    db.flush()
+    db.refresh(approval)
+    return approval
+
+
+def get_credit_approval_by_id_for_update(
+    db: Session,
+    approval_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> CreditApprovalRequest | None:
+    stmt = (
+        select(CreditApprovalRequest)
+        .where(
+            CreditApprovalRequest.id == approval_id,
+            CreditApprovalRequest.organization_id == organization_id,
+        )
+        .options(selectinload(CreditApprovalRequest.order))
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
+def get_credit_approval_by_order_id(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> CreditApprovalRequest | None:
+    stmt = select(CreditApprovalRequest).where(
+        CreditApprovalRequest.sales_order_id == order_id,
+        CreditApprovalRequest.organization_id == organization_id,
+    )
+    return db.scalars(stmt).first()
+
+
+def list_credit_approval_requests(
+    db: Session,
+    organization_id: uuid.UUID,
+    approval_status: str | None = None,
+) -> list[CreditApprovalRequest]:
+    stmt = (
+        select(CreditApprovalRequest)
+        .where(CreditApprovalRequest.organization_id == organization_id)
+        .options(selectinload(CreditApprovalRequest.order))
+    )
+    if approval_status:
+        stmt = stmt.where(CreditApprovalRequest.status == approval_status)
+    stmt = stmt.order_by(CreditApprovalRequest.created_at.desc())
+    return list(db.scalars(stmt).all())
+
+
+def save_commercial_approval_request(
+    db: Session,
+    approval: CommercialApprovalRequest,
+) -> CommercialApprovalRequest:
+    db.add(approval)
+    db.flush()
+    db.refresh(approval)
+    return approval
+
+
+def get_commercial_approval_by_id_for_update(
+    db: Session,
+    approval_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> CommercialApprovalRequest | None:
+    stmt = (
+        select(CommercialApprovalRequest)
+        .where(
+            CommercialApprovalRequest.id == approval_id,
+            CommercialApprovalRequest.organization_id == organization_id,
+        )
+        .options(
+            selectinload(CommercialApprovalRequest.quote),
+            selectinload(CommercialApprovalRequest.order),
+        )
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
+def get_commercial_approval_by_document_type(
+    db: Session,
+    organization_id: uuid.UUID,
+    approval_type: str,
+    *,
+    quote_id: uuid.UUID | None = None,
+    order_id: uuid.UUID | None = None,
+) -> CommercialApprovalRequest | None:
+    stmt = select(CommercialApprovalRequest).where(
+        CommercialApprovalRequest.organization_id == organization_id,
+        CommercialApprovalRequest.approval_type == approval_type,
+    )
+    if quote_id:
+        stmt = stmt.where(CommercialApprovalRequest.sales_quote_id == quote_id)
+    elif order_id:
+        stmt = stmt.where(CommercialApprovalRequest.sales_order_id == order_id)
+    else:
+        return None
+    return db.scalars(stmt).first()
+
+
+def list_commercial_approval_requests(
+    db: Session,
+    organization_id: uuid.UUID,
+    approval_status: str | None = None,
+    approval_type: str | None = None,
+) -> list[CommercialApprovalRequest]:
+    stmt = (
+        select(CommercialApprovalRequest)
+        .where(CommercialApprovalRequest.organization_id == organization_id)
+        .options(
+            selectinload(CommercialApprovalRequest.quote),
+            selectinload(CommercialApprovalRequest.order),
+        )
+    )
+    if approval_status:
+        stmt = stmt.where(CommercialApprovalRequest.status == approval_status)
+    if approval_type:
+        stmt = stmt.where(CommercialApprovalRequest.approval_type == approval_type)
+    stmt = stmt.order_by(CommercialApprovalRequest.created_at.desc())
+    return list(db.scalars(stmt).all())
+
+
+def list_commercial_approvals_for_document(
+    db: Session,
+    organization_id: uuid.UUID,
+    *,
+    quote_id: uuid.UUID | None = None,
+    order_id: uuid.UUID | None = None,
+) -> list[CommercialApprovalRequest]:
+    stmt = select(CommercialApprovalRequest).where(
+        CommercialApprovalRequest.organization_id == organization_id
+    )
+    if quote_id:
+        stmt = stmt.where(CommercialApprovalRequest.sales_quote_id == quote_id)
+    elif order_id:
+        stmt = stmt.where(CommercialApprovalRequest.sales_order_id == order_id)
+    else:
+        return []
+    return list(db.scalars(stmt).all())
+
+
 # ==============================================================================
 # 4. PDV / FRENTE DE CAIXA & SANGRIA / SUPRIMENTO
 # ==============================================================================
@@ -266,6 +469,26 @@ def create_price_table(db: Session, table: PriceTable) -> PriceTable:
     db.commit()
     db.refresh(table)
     return table
+
+
+def get_commercial_settings(
+    db: Session,
+    organization_id: uuid.UUID,
+) -> CommercialSettings | None:
+    stmt = select(CommercialSettings).where(
+        CommercialSettings.organization_id == organization_id
+    )
+    return db.scalars(stmt).first()
+
+
+def save_commercial_settings(
+    db: Session,
+    settings: CommercialSettings,
+) -> CommercialSettings:
+    db.add(settings)
+    db.flush()
+    db.refresh(settings)
+    return settings
 
 
 # ==============================================================================

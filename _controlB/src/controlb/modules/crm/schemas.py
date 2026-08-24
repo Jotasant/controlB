@@ -3,8 +3,10 @@ modules/crm/schemas.py - Schemas Pydantic do Módulo CRM
 """
 
 import uuid
-from datetime import datetime, date
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -131,19 +133,40 @@ class OpportunityResponse(OpportunityBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+InteractionType = Literal["CALL", "MEETING", "EMAIL", "WHATSAPP", "NOTE"]
+ActivityStatus = Literal["SCHEDULED", "COMPLETED", "CANCELLED"]
+
+
 class CustomerInteractionCreate(BaseModel):
     lead_id: uuid.UUID | None = None
     opportunity_id: uuid.UUID | None = None
-    interaction_type: str = "CALL"  # CALL, MEETING, EMAIL, WHATSAPP, NOTE
-    summary: str = Field(..., max_length=255)
+    interaction_type: InteractionType = "CALL"
+    summary: str = Field(..., min_length=1, max_length=255)
     details: str | None = None
-    interaction_date: datetime = Field(default_factory=datetime.utcnow)
+    interaction_date: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    status: ActivityStatus | None = None
+    responsible_id: uuid.UUID | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CustomerInteractionUpdate(BaseModel):
+    interaction_type: InteractionType | None = None
+    summary: str | None = Field(None, min_length=1, max_length=255)
+    details: str | None = None
+    interaction_date: datetime | None = None
+    status: ActivityStatus | None = None
+    responsible_id: uuid.UUID | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CustomerInteractionResponse(CustomerInteractionCreate):
     id: uuid.UUID
     organization_id: uuid.UUID
     created_by_id: uuid.UUID | None = None
+    updated_by_id: uuid.UUID | None = None
     created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

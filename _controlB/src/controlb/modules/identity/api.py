@@ -106,7 +106,7 @@ def get_users(
     current_user = Depends(service.require_permission("users:view"))
 ):
     """Retorna a lista de todos os usuários cadastrados (Exige permissão: users:view)."""
-    return repository.get_all_users(db)
+    return repository.get_all_users(db, current_user.organization_id)
 
 
 @router.put("/users/{user_id}", response_model=schemas.UserResponse)
@@ -324,7 +324,7 @@ def list_teams(
     module_category: str | None = Query(None, description="Filtrar por módulo (SALES, PURCHASING, INVENTORY, etc.)"),
     is_active: bool | None = Query(None, description="Filtrar por status ativo"),
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:view", "teams:manage", "users:view", "users:edit", "crm:view", "crm:manage", "sales:view", "sales:manage"))
 ):
     """Lista as equipes da organização atual."""
     teams = service.list_teams(db, current_user.organization_id, module_category=module_category, is_active=is_active)
@@ -342,10 +342,9 @@ def list_teams(
 def create_team(
     payload: schemas.TeamCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:manage", "users:edit", "crm:manage", "sales:manage"))
 ):
     """Cria uma nova equipe multimodular."""
-    payload.organization_id = current_user.organization_id
     team = service.create_team(db, current_user.organization_id, payload)
     item = schemas.TeamResponse.model_validate(team)
     if team.leader:
@@ -353,11 +352,20 @@ def create_team(
     return item
 
 
+@router.get("/teams/candidates", response_model=list[schemas.TeamMemberInfo], summary="Listar candidatos para equipes")
+def list_team_candidates(
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_any_permission("teams:view", "teams:manage", "users:view", "users:edit", "crm:view", "crm:manage", "sales:view", "sales:manage"))
+):
+    """Lista colaboradores ativos do tenant sem expor o cadastro global de usuarios."""
+    return service.list_team_candidates(db, current_user.organization_id)
+
+
 @router.get("/teams/{team_id}", response_model=schemas.TeamResponse, summary="Obter Equipe por ID")
 def get_team(
     team_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:view", "teams:manage", "users:view", "users:edit", "crm:view", "crm:manage", "sales:view", "sales:manage"))
 ):
     """Busca detalhes de uma equipe."""
     team = service.get_team(db, team_id, current_user.organization_id)
@@ -372,7 +380,7 @@ def update_team(
     team_id: uuid.UUID,
     payload: schemas.TeamUpdate,
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:manage", "users:edit", "crm:manage", "sales:manage"))
 ):
     """Atualiza dados e membros de uma equipe."""
     team = service.update_team(db, team_id, current_user.organization_id, payload)
@@ -386,7 +394,7 @@ def update_team(
 def delete_team(
     team_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:manage", "users:edit", "crm:manage", "sales:manage"))
 ):
     """Remove uma equipe da organização."""
     return service.delete_team(db, team_id, current_user.organization_id)
@@ -397,7 +405,7 @@ def add_team_members(
     team_id: uuid.UUID,
     payload: schemas.TeamMemberAddRequest,
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:manage", "users:edit", "crm:manage", "sales:manage"))
 ):
     """Adiciona múltiplos usuários à equipe."""
     team = service.add_team_members(db, team_id, current_user.organization_id, payload.user_ids)
@@ -412,7 +420,7 @@ def remove_team_member(
     team_id: uuid.UUID,
     user_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user = Depends(service.get_current_user)
+    current_user = Depends(service.require_any_permission("teams:manage", "users:edit", "crm:manage", "sales:manage"))
 ):
     """Remove um usuário da equipe."""
     team = service.remove_team_member(db, team_id, current_user.organization_id, user_id)
@@ -420,6 +428,4 @@ def remove_team_member(
     if team.leader:
         item.leader_name = team.leader.full_name
     return item
-
-
 

@@ -37,15 +37,15 @@ export const usePermissions = () => {
 
   // Função utilitária para checar uma ou mais permissões
   const hasPermission = (code: string): boolean => {
-    return permissions.includes(code);
+    return permissions.includes('*:*') || permissions.includes(code);
   };
 
   const hasAnyPermission = (codes: string[]): boolean => {
-    return codes.some(code => permissions.includes(code));
+    return permissions.includes('*:*') || codes.some(code => permissions.includes(code));
   };
 
   const hasAllPermissions = (codes: string[]): boolean => {
-    return codes.every(code => permissions.includes(code));
+    return permissions.includes('*:*') || codes.every(code => permissions.includes(code));
   };
 
   return {

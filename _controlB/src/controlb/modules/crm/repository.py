@@ -166,4 +166,10 @@ def list_interactions(
 def get_interaction_by_id(db: Session, interaction_id: uuid.UUID, organization_id: uuid.UUID) -> CustomerInteraction | None:
     stmt = select(CustomerInteraction).where(CustomerInteraction.id == interaction_id, CustomerInteraction.organization_id == organization_id)
     return db.scalars(stmt).first()
+
+
+def update_interaction(db: Session, interaction: CustomerInteraction) -> CustomerInteraction:
+    db.add(interaction)
+    db.flush()
+    return interaction
     

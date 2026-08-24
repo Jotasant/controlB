@@ -1164,6 +1164,13 @@
       .stages-page-view {
         width: 100%;
 
+        .crm-commercial-settings-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 1.5rem;
+          margin-top: 1.5rem;
+        }
+
         .stages-grid-layout {
           display: grid;
           grid-template-columns: 380px 1fr;
@@ -5392,6 +5399,14 @@
                     font-size: 0.675rem;
                     color: var(--text-muted);
                   }
+
+                  .card-meta-actions {
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                    gap: 0.35rem;
+                    flex-wrap: wrap;
+                  }
                 }
 
                 .card-details {
@@ -5483,6 +5498,70 @@
       }
     }
   }
+}
+
+.interaction-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.675rem;
+  font-weight: 700;
+  white-space: nowrap;
+
+  &.status-scheduled {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.13);
+  }
+
+  &.status-completed {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.13);
+  }
+
+  &.status-cancelled {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.13);
+  }
+
+  &.status-note {
+    color: var(--text-secondary);
+    background: var(--bg-surface-elevated);
+  }
+}
+
+.interaction-edit-button,
+.timeline-edit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    color: var(--accent-brand);
+    border-color: var(--accent-brand);
+    background: var(--accent-brand-subtle);
+  }
+}
+
+.interaction-edit-button {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.timeline-edit-button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
 }
 
 // =============================================================================

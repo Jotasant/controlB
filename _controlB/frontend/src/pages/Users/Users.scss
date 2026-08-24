@@ -273,7 +273,7 @@
   }
 }
 
-.modal-backdrop {
+.users-modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.65);
@@ -285,7 +285,7 @@
   padding: 1rem;
 }
 
-.modal-dialog {
+.users-modal-dialog {
   background: var(--bg-surface-elevated, #1e293b);
   border: 1px solid var(--border-subtle, #334155);
   border-radius: 12px;

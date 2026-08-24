@@ -218,8 +218,8 @@ export const Users: React.FC = () => {
 
         {/* Modal de Criação de Usuário */}
         {isModalOpen && (
-          <div className="modal-backdrop">
-            <div className="modal-dialog">
+          <div className="users-modal-backdrop">
+            <div className="users-modal-dialog">
               <div className="modal-header">
                 <h3>Novo Usuário do Sistema</h3>
                 <button type="button" className="btn-close" onClick={() => setIsModalOpen(false)}>

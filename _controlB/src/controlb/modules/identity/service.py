@@ -32,6 +32,7 @@ from controlb.modules.identity.security import (
     get_user_permissions,
     get_current_user,
     require_permission,
+    require_any_permission,
     oauth2_scheme,
     password_hash,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "get_user_permissions",
     "get_current_user",
     "require_permission",
+    "require_any_permission",
     "oauth2_scheme",
     "create_new_user",
     "update_user",
@@ -372,6 +374,56 @@ def get_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID):
     return team
 
 
+def list_team_candidates(db: Session, organization_id: uuid.UUID) -> list[User]:
+    """Lista somente colaboradores ativos do tenant que podem integrar equipes."""
+    return sorted(
+        (user for user in repository.get_all_users(db, organization_id) if user.is_active),
+        key=lambda user: user.full_name.casefold(),
+    )
+
+
+def _validate_team_uniqueness(
+    db: Session,
+    organization_id: uuid.UUID,
+    module_category: str,
+    name: str,
+    code: str | None,
+    team_id: uuid.UUID | None = None,
+) -> None:
+    existing_name = repository.get_team_by_name(db, organization_id, module_category, name)
+    if existing_name and existing_name.id != team_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Já existe uma equipe com este nome nesta categoria.",
+        )
+    if code:
+        existing_code = repository.get_team_by_code(db, organization_id, module_category, code)
+        if existing_code and existing_code.id != team_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Já existe uma equipe com este código nesta categoria.",
+            )
+
+
+def _validate_team_users(
+    db: Session,
+    organization_id: uuid.UUID,
+    user_ids: set[uuid.UUID],
+) -> None:
+    if not user_ids:
+        return
+    valid_ids = {
+        user.id
+        for user in repository.get_all_users(db, organization_id)
+        if user.is_active and user.id in user_ids
+    }
+    if user_ids - valid_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Um ou mais integrantes não existem, estão inativos ou pertencem a outra organização.",
+        )
+
+
 def create_team(db: Session, organization_id: uuid.UUID, data: TeamCreate):
     """Cria uma nova equipe multimodular vinculando membros."""
     name = data.name.strip()
@@ -380,14 +432,54 @@ def create_team(db: Session, organization_id: uuid.UUID, data: TeamCreate):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="O nome da equipe é obrigatório."
         )
-    data.name = name
-    return repository.create_team(db, organization_id, data)
+    category = data.module_category.upper()
+    code = data.code.strip().upper() if data.code and data.code.strip() else None
+    member_ids = set(data.member_ids)
+    if data.leader_id:
+        member_ids.add(data.leader_id)
+    _validate_team_uniqueness(db, organization_id, category, name, code)
+    _validate_team_users(db, organization_id, member_ids)
+    normalized = data.model_copy(update={
+        "name": name,
+        "code": code,
+        "module_category": category,
+        "member_ids": list(member_ids),
+    })
+    return repository.create_team(db, organization_id, normalized)
 
 
 def update_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, data: TeamUpdate):
     """Atualiza dados e membros de uma equipe existente."""
     team = get_team(db, team_id, organization_id)
-    return repository.update_team(db, team, data)
+    name = data.name.strip() if data.name is not None else team.name
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O nome da equipe é obrigatório.",
+        )
+    category = data.module_category.upper() if data.module_category else team.module_category
+    if "code" in data.model_fields_set:
+        code = data.code.strip().upper() if data.code and data.code.strip() else None
+    else:
+        code = team.code
+    leader_id = data.leader_id if "leader_id" in data.model_fields_set else team.leader_id
+    member_ids = (
+        set(data.member_ids)
+        if data.member_ids is not None
+        else {member.id for member in team.members}
+    )
+    if leader_id:
+        member_ids.add(leader_id)
+    _validate_team_uniqueness(db, organization_id, category, name, code, team.id)
+    _validate_team_users(db, organization_id, member_ids)
+    normalized = data.model_copy(update={
+        "name": name,
+        "code": code,
+        "module_category": category,
+        "leader_id": leader_id,
+        "member_ids": list(member_ids),
+    })
+    return repository.update_team(db, team, normalized)
 
 
 def delete_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID):
@@ -400,12 +492,18 @@ def delete_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID):
 def add_team_members(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, user_ids: list[uuid.UUID]):
     """Adiciona colaboradores à equipe."""
     team = get_team(db, team_id, organization_id)
+    _validate_team_users(db, organization_id, set(user_ids))
     return repository.add_team_members(db, team, user_ids)
 
 
 def remove_team_member(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, user_id: uuid.UUID):
     """Remove um colaborador da equipe."""
     team = get_team(db, team_id, organization_id)
+    if team.leader_id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Defina outro líder antes de remover o líder atual da equipe.",
+        )
     return repository.remove_team_member(db, team, user_id)
 
 

@@ -579,6 +579,16 @@ def reserve_sales_order(
             status_code=status.HTTP_409_CONFLICT,
             detail="Somente pedidos CONFIRMED podem reservar estoque.",
         )
+    if order.credit_status in {"PENDING", "REJECTED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido aguarda liberação de crédito antes da reserva de estoque.",
+        )
+    if order.commercial_approval_status in {"PENDING", "REJECTED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido aguarda aprovação comercial antes da reserva de estoque.",
+        )
     if order.delivery_status not in {"PENDING", "RESERVED"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

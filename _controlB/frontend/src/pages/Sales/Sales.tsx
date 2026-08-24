@@ -16,7 +16,7 @@ import {
   Trash2, Users, Plus, Target, DollarSign,
   TrendingUp, Undo2, ChevronRight, Award, BarChart3,
   Package, CheckCircle2, Layers, Filter, ArrowUpRight, GitBranch,
-  Truck, Check
+  Truck, Check, Settings, ShieldAlert, XCircle
 } from 'lucide-react';
 import {
   Bar, BarChart, CartesianGrid, ResponsiveContainer,
@@ -28,7 +28,7 @@ import {
 import {
   SalesOrder, SalesQuote, Product,
   Customer, SalesGoal, PriceTable, SalesReturn, SalesAnalytics,
-  BusinessDocumentChain
+  BusinessDocumentChain, SellerResponse, CreditApprovalRequest, CommercialApprovalRequest
 } from '@/types';
 import { formatCurrency, formatQuantity } from '@/utils/formatters';
 import { Modal } from '@/components/Modal/Modal';
@@ -38,17 +38,21 @@ import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline
 import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
 import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
 import { OrderModal } from '@/components/OrderModal/OrderModal';
+import { CommercialTeamsSettings } from '@/components/CommercialTeamsSettings/CommercialTeamsSettings';
+import { CommercialPoliciesSettings } from '@/components/CommercialPoliciesSettings/CommercialPoliciesSettings';
 import { useToast } from '@/components/Toast/ToastContext';
 import './Sales.scss';
 
 type ActiveSalesTab =
   | 'quotes'
   | 'orders'
+  | 'approvals'
   | 'deliveries'
   | 'customers'
   | 'commercial'
   | 'post_sales'
-  | 'analytics';
+  | 'analytics'
+  | 'settings';
 
 export const Sales: React.FC = () => {
   const toast = useToast();
@@ -64,6 +68,9 @@ export const Sales: React.FC = () => {
   const [priceTables, setPriceTables] = useState<PriceTable[]>([]);
   const [salesReturns, setSalesReturns] = useState<SalesReturn[]>([]);
   const [analytics, setAnalytics] = useState<SalesAnalytics | null>(null);
+  const [sellers, setSellers] = useState<SellerResponse[]>([]);
+  const [creditApprovals, setCreditApprovals] = useState<CreditApprovalRequest[]>([]);
+  const [commercialApprovals, setCommercialApprovals] = useState<CommercialApprovalRequest[]>([]);
 
   // --- FILTROS E BUSCAS GLOBAIS POR ABA ---
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -85,6 +92,18 @@ export const Sales: React.FC = () => {
     nativeId: string;
   } | null>(null);
   const [reservingOrderId, setReservingOrderId] = useState<string | null>(null);
+  const [creditDecision, setCreditDecision] = useState<{
+    approval: CreditApprovalRequest;
+    approved: boolean;
+  } | null>(null);
+  const [creditDecisionReason, setCreditDecisionReason] = useState('');
+  const [creditDecisionSaving, setCreditDecisionSaving] = useState(false);
+  const [commercialDecision, setCommercialDecision] = useState<{
+    approval: CommercialApprovalRequest;
+    approved: boolean;
+  } | null>(null);
+  const [commercialDecisionReason, setCommercialDecisionReason] = useState('');
+  const [commercialDecisionSaving, setCommercialDecisionSaving] = useState(false);
 
   // --- CONFIRM MODAL GENÉRICO ---
   const [confirmModal, setConfirmModal] = useState<{
@@ -153,6 +172,7 @@ export const Sales: React.FC = () => {
   // ESTADOS: 4. GESTÃO COMERCIAL (METAS & TABELAS DE PREÇOS)
   // =========================================================================
   const [isGoalModalOpen, setIsGoalModalOpen] = useState<boolean>(false);
+  const [goalSellerId, setGoalSellerId] = useState<string>('');
   const [goalSellerName, setGoalSellerName] = useState<string>('');
   const [goalMonth, setGoalMonth] = useState<number>(new Date().getMonth() + 1);
   const [goalTargetAmount, setGoalTargetAmount] = useState<string>('50000.00');
@@ -247,7 +267,7 @@ export const Sales: React.FC = () => {
     try {
       const [
         quotesRes, ordersRes, productsRes, customersRes,
-        goalsRes, priceTablesRes, returnsRes, analyticsRes
+        goalsRes, priceTablesRes, returnsRes, analyticsRes, sellersRes
       ] = await Promise.all([
         salesService.getQuotes(force),
         salesService.getOrders(force),
@@ -256,7 +276,8 @@ export const Sales: React.FC = () => {
         salesService.getSalesGoals(yearFilter, force),
         salesService.getPriceTables(force),
         salesService.getSalesReturns(force),
-        salesService.getSalesAnalytics(force)
+        salesService.getSalesAnalytics(force),
+        salesService.getSellers(force)
       ]);
 
       setQuotes(quotesRes || []);
@@ -267,6 +288,7 @@ export const Sales: React.FC = () => {
       setPriceTables(priceTablesRes || []);
       setSalesReturns(returnsRes || []);
       setAnalytics(analyticsRes || null);
+      setSellers(sellersRes || []);
     } catch (err: any) {
       console.error("Erro ao carregar dados de vendas:", err);
     } finally {
@@ -277,6 +299,21 @@ export const Sales: React.FC = () => {
   useEffect(() => {
     loadAllData();
   }, [yearFilter]);
+
+  useEffect(() => {
+    if (activeTab !== 'approvals') return;
+    Promise.all([
+      salesService.getCreditApprovals(undefined, true),
+      salesService.getCommercialApprovals(undefined, true),
+    ])
+      .then(([creditRows, commercialRows]) => {
+        setCreditApprovals(creditRows);
+        setCommercialApprovals(commercialRows);
+      })
+      .catch((err: unknown) => {
+        toast.error(formatApiError(err, 'Não foi possível carregar as aprovações.'));
+      });
+  }, [activeTab, toast]);
 
   // =========================================================================
   // HANDLERS: COTAÇÕES & PROPOSTAS COMERCIAIS
@@ -381,6 +418,66 @@ export const Sales: React.FC = () => {
       toast.error(formatApiError(err, "Erro ao solicitar faturamento do pedido."));
     } finally {
       setBillingOrderId(null);
+    }
+  };
+
+  const handleCreditDecision = async () => {
+    if (!creditDecision || creditDecisionReason.trim().length < 3) {
+      toast.error('Informe uma justificativa com pelo menos 3 caracteres.');
+      return;
+    }
+    setCreditDecisionSaving(true);
+    try {
+      await salesService.decideCreditApproval(
+        creditDecision.approval.id,
+        creditDecision.approved,
+        creditDecisionReason.trim()
+      );
+      triggerSuccess(
+        `Crédito do pedido #${creditDecision.approval.order.order_number} ${creditDecision.approved ? 'aprovado' : 'rejeitado'}.`
+      );
+      setCreditDecision(null);
+      setCreditDecisionReason('');
+      const [approvalRows, orderRows] = await Promise.all([
+        salesService.getCreditApprovals(undefined, true),
+        salesService.getOrders(true)
+      ]);
+      setCreditApprovals(approvalRows);
+      setOrders(orderRows);
+    } catch (err: unknown) {
+      toast.error(formatApiError(err, 'Não foi possível registrar a decisão de crédito.'));
+    } finally {
+      setCreditDecisionSaving(false);
+    }
+  };
+
+  const handleCommercialDecision = async () => {
+    if (!commercialDecision || commercialDecisionReason.trim().length < 3) {
+      toast.error('Informe uma justificativa com pelo menos 3 caracteres.');
+      return;
+    }
+    setCommercialDecisionSaving(true);
+    try {
+      await salesService.decideCommercialApproval(
+        commercialDecision.approval.id,
+        commercialDecision.approved,
+        commercialDecisionReason.trim()
+      );
+      triggerSuccess('Decisão comercial registrada com sucesso.');
+      setCommercialDecision(null);
+      setCommercialDecisionReason('');
+      const [approvalRows, quoteRows, orderRows] = await Promise.all([
+        salesService.getCommercialApprovals(undefined, true),
+        salesService.getQuotes(true),
+        salesService.getOrders(true),
+      ]);
+      setCommercialApprovals(approvalRows);
+      setQuotes(quoteRows);
+      setOrders(orderRows);
+    } catch (err: unknown) {
+      toast.error(formatApiError(err, 'Não foi possível registrar a decisão comercial.'));
+    } finally {
+      setCommercialDecisionSaving(false);
     }
   };
 
@@ -503,10 +600,24 @@ export const Sales: React.FC = () => {
   // =========================================================================
   // HANDLERS: GESTÃO COMERCIAL (METAS & TABELAS)
   // =========================================================================
+  const handleOpenGoalModal = async () => {
+    setModalError(null);
+    const firstSeller = sellers[0];
+    setGoalSellerId(firstSeller?.id || '');
+    setGoalSellerName(firstSeller?.full_name || '');
+    try {
+      const settings = await salesService.getCommercialSettings();
+      setGoalCommission(String(settings.default_commission_percent));
+    } catch {
+      setGoalCommission('2');
+    }
+    setIsGoalModalOpen(true);
+  };
+
   const handleSaveGoal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!goalSellerName.trim()) {
-      setModalError("O nome do vendedor é obrigatório.");
+    if (!goalSellerId) {
+      setModalError("Selecione um vendedor vinculado ao Identity.");
       return;
     }
 
@@ -514,6 +625,7 @@ export const Sales: React.FC = () => {
     setModalError(null);
     try {
       await salesService.createSalesGoal({
+        user_id: goalSellerId,
         seller_name: goalSellerName.trim(),
         month: Number(goalMonth),
         year: Number(yearFilter),
@@ -703,6 +815,30 @@ export const Sales: React.FC = () => {
     });
   }, [orders, searchTerm, statusFilter]);
 
+  const filteredCreditApprovals = useMemo(() => {
+    return creditApprovals.filter(item => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term
+        || item.order.order_number.toLowerCase().includes(term)
+        || item.order.customer_name.toLowerCase().includes(term);
+      const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [creditApprovals, searchTerm, statusFilter]);
+
+  const filteredCommercialApprovals = useMemo(() => {
+    return commercialApprovals.filter(item => {
+      const target = item.quote || item.order;
+      const number = item.quote?.quote_number || item.order?.order_number || '';
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term
+        || number.toLowerCase().includes(term)
+        || Boolean(target?.customer_name.toLowerCase().includes(term));
+      const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [commercialApprovals, searchTerm, statusFilter]);
+
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => {
       const term = searchTerm.toLowerCase().trim();
@@ -771,6 +907,22 @@ export const Sales: React.FC = () => {
               <span className="nav-badge">{orders.length}</span>
             </button>
 
+            <Can anyOf={["sales:credit:view", "sales:approvals:view"]}>
+              <button
+                className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
+                onClick={() => { setActiveTab('approvals'); setSearchTerm(''); setStatusFilter('ALL'); }}
+              >
+                <div className="nav-item-content">
+                  <ShieldAlert size={16} />
+                  <span>Aprovações</span>
+                </div>
+                <span className="nav-badge">
+                  {creditApprovals.filter(item => item.status === 'PENDING').length
+                    + commercialApprovals.filter(item => item.status === 'PENDING').length}
+                </span>
+              </button>
+            </Can>
+
             <button
               className={`nav-item ${activeTab === 'deliveries' ? 'active' : ''}`}
               onClick={() => { setActiveTab('deliveries'); setSearchTerm(''); setStatusFilter('ALL'); }}
@@ -828,6 +980,18 @@ export const Sales: React.FC = () => {
                 <span>Indicadores & BI</span>
               </div>
             </button>
+
+            <span className="menu-group-label">Configurações</span>
+
+            <button
+              className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('settings'); setSearchTerm(''); }}
+            >
+              <div className="nav-item-content">
+                <Settings size={16} />
+                <span>Equipes Comerciais</span>
+              </div>
+            </button>
           </nav>
         </aside>
 
@@ -851,21 +1015,25 @@ export const Sales: React.FC = () => {
                 <span className="current">
                   {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
                   {activeTab === 'orders' && 'Pedidos de Venda'}
+                  {activeTab === 'approvals' && 'Aprovações Comerciais e de Crédito'}
                   {activeTab === 'deliveries' && 'Entregas & Logística de Expedição'}
                   {activeTab === 'customers' && 'Base Centralizada de Clientes'}
                   {activeTab === 'commercial' && 'Gestão Comercial, Metas & Preços'}
                   {activeTab === 'post_sales' && 'Pós-Venda & Reestocagem no Kardex'}
                   {activeTab === 'analytics' && 'Inteligência Comercial & BI'}
+                  {activeTab === 'settings' && 'Configurações Comerciais'}
                 </span>
               </div>
               <h1 className="ui-page-header__title">
                 {activeTab === 'quotes' && 'Cotações & Propostas Comerciais'}
                 {activeTab === 'orders' && 'Pedidos de Venda Executáveis'}
+                {activeTab === 'approvals' && 'Fila Unificada de Aprovações'}
                 {activeTab === 'deliveries' && 'Painel de Entregas & Expedição'}
                 {activeTab === 'customers' && 'Clientes (Pessoa Jurídica / Física)'}
                 {activeTab === 'commercial' && 'Gestão de Metas & Tabelas de Preços'}
                 {activeTab === 'post_sales' && 'Pós-Venda & Trocas / Devoluções'}
                 {activeTab === 'analytics' && 'Painel Analítico de Vendas & BI'}
+                {activeTab === 'settings' && 'Equipes Comerciais'}
               </h1>
             </div>
 
@@ -897,7 +1065,7 @@ export const Sales: React.FC = () => {
                   <button className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsPriceTableModalOpen(true)}>
                     <Layers size={16} /> Nova Tabela de Preços
                   </button>
-                  <button className="btn-primary ui-button ui-button--primary" onClick={() => setIsGoalModalOpen(true)}>
+                  <button className="btn-primary ui-button ui-button--primary" onClick={() => void handleOpenGoalModal()}>
                     <Plus size={16} /> Nova Meta
                   </button>
                 </>
@@ -991,6 +1159,11 @@ export const Sales: React.FC = () => {
                                q.status === 'CANCELLED' ? 'Cancelado' :
                                q.status === 'DRAFT' ? 'Rascunho' : q.status}
                             </span>
+                            {['PENDING', 'REJECTED'].includes(q.commercial_approval_status) && (
+                              <span className={`status-pill ui-status ${q.commercial_approval_status === 'PENDING' ? 'warning' : 'danger'}`}>
+                                {q.commercial_approval_status === 'PENDING' ? 'Alçada pendente' : 'Alçada rejeitada'}
+                              </span>
+                            )}
                           </td>
                           <td>
                             <div className="table-actions ui-table-actions" onClick={(e) => e.stopPropagation()}>
@@ -1009,6 +1182,7 @@ export const Sales: React.FC = () => {
                                     className="table-action-btn ui-table-action primary"
                                     onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(q, 'APPROVED'); }}
                                     title="Aprovar cotação"
+                                    disabled={['PENDING', 'REJECTED'].includes(q.commercial_approval_status)}
                                   >
                                     ✅ Aprovar
                                   </button>
@@ -1029,6 +1203,7 @@ export const Sales: React.FC = () => {
                                     className="table-action-btn ui-table-action primary"
                                     onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(q, 'APPROVED'); }}
                                     title="Aceitar e aprovar proposta"
+                                    disabled={['PENDING', 'REJECTED'].includes(q.commercial_approval_status)}
                                   >
                                     ✅ Aceitar
                                   </button>
@@ -1057,6 +1232,7 @@ export const Sales: React.FC = () => {
                                     className="table-action-btn ui-table-action primary"
                                     onClick={(e) => { e.stopPropagation(); handleConvertToOrder(q); }}
                                     title="Converter em Pedido de Venda oficial"
+                                    disabled={['PENDING', 'REJECTED'].includes(q.commercial_approval_status)}
                                   >
                                     <ArrowUpRight size={14} /> <strong>Converter em Pedido</strong>
                                   </button>
@@ -1133,6 +1309,7 @@ export const Sales: React.FC = () => {
                       <th>Condição</th>
                       <th>Estoque / Execução</th>
                       <th>Faturamento</th>
+                      <th>Crédito</th>
                       <th>Total Líquido</th>
                       <th>Status Geral</th>
                       <th>Ações Operacionais</th>
@@ -1141,7 +1318,7 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredOrders.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="empty-state ui-empty-state">
+                        <td colSpan={10} className="empty-state ui-empty-state">
                           Nenhum pedido de venda encontrado.
                         </td>
                       </tr>
@@ -1180,6 +1357,26 @@ export const Sales: React.FC = () => {
                               {o.billing_status === 'INVOICED' ? 'Faturado' : 'Aguardando'}
                             </span>
                           </td>
+                          <td>
+                            <span className={`status-pill ui-status ${
+                              o.credit_status === 'APPROVED' ? 'success' :
+                              o.credit_status === 'PENDING' ? 'warning' :
+                              o.credit_status === 'REJECTED' ? 'danger' : 'info'
+                            }`}>
+                              {o.credit_status === 'APPROVED' ? 'Liberado' :
+                               o.credit_status === 'PENDING' ? 'Em análise' :
+                               o.credit_status === 'REJECTED' ? 'Rejeitado' : 'Não aplicável'}
+                            </span>
+                            <span className={`status-pill ui-status ${
+                              o.commercial_approval_status === 'APPROVED' ? 'success' :
+                              o.commercial_approval_status === 'PENDING' ? 'warning' :
+                              o.commercial_approval_status === 'REJECTED' ? 'danger' : 'info'
+                            }`}>
+                              Comercial: {o.commercial_approval_status === 'APPROVED' ? 'Liberado' :
+                               o.commercial_approval_status === 'PENDING' ? 'Em análise' :
+                               o.commercial_approval_status === 'REJECTED' ? 'Rejeitado' : 'N/A'}
+                            </span>
+                          </td>
                           <td><strong>{fmtCurrency(o.net_amount)}</strong></td>
                           <td>
                             <span className={`status-pill ui-status ${
@@ -1196,7 +1393,9 @@ export const Sales: React.FC = () => {
                             <div className="table-actions ui-table-actions" onClick={(e) => e.stopPropagation()}>
                               {/* Ação 1: Reserva de Estoque */}
                               <Can permission="inventory:move">
-                                {o.status === 'CONFIRMED' && o.delivery_status === 'PENDING' && (
+                                {o.status === 'CONFIRMED' && o.delivery_status === 'PENDING'
+                                  && !['PENDING', 'REJECTED'].includes(o.credit_status)
+                                  && !['PENDING', 'REJECTED'].includes(o.commercial_approval_status) && (
                                   <button
                                     type="button"
                                     className="table-action-btn ui-table-action primary"
@@ -1211,7 +1410,9 @@ export const Sales: React.FC = () => {
                               </Can>
 
                               {/* Ação 2: Faturamento Direto */}
-                              {o.billing_status === 'PENDING' && o.status !== 'CANCELLED' && (
+                              {o.billing_status === 'PENDING' && o.status !== 'CANCELLED'
+                                && !['PENDING', 'REJECTED'].includes(o.credit_status)
+                                && !['PENDING', 'REJECTED'].includes(o.commercial_approval_status) && (
                                 <button
                                   type="button"
                                   className="table-action-btn ui-table-action primary"
@@ -1272,6 +1473,173 @@ export const Sales: React.FC = () => {
                           </td>
                         </tr>
                       ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'approvals' && (
+            <div className="tab-pane credit-approvals-pane">
+              <h3 className="approval-section-title">Aprovações de crédito</h3>
+              <div className="toolbar ui-toolbar">
+                <div className="search-box ui-search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    placeholder="Buscar por pedido ou cliente..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <div className="filter-group ui-filter-group">
+                  <Filter size={14} />
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    <option value="ALL">Todas as decisões</option>
+                    <option value="PENDING">Pendentes</option>
+                    <option value="APPROVED">Aprovadas</option>
+                    <option value="REJECTED">Rejeitadas</option>
+                    <option value="CANCELLED">Canceladas</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
+                  <thead>
+                    <tr>
+                      <th>Pedido</th>
+                      <th>Cliente</th>
+                      <th>Limite</th>
+                      <th>Já utilizado</th>
+                      <th>Novo pedido</th>
+                      <th>Excesso</th>
+                      <th>Status</th>
+                      <th>Decisão</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCreditApprovals.map(item => (
+                      <tr key={item.id}>
+                        <td><strong>#{item.order.order_number}</strong></td>
+                        <td>{item.order.customer_name}</td>
+                        <td>{fmtCurrency(item.credit_limit)}</td>
+                        <td>{fmtCurrency(item.exposure_before_order)}</td>
+                        <td><strong>{fmtCurrency(item.order_amount)}</strong></td>
+                        <td className="credit-excess-value">{fmtCurrency(item.excess_amount)}</td>
+                        <td>
+                          <span className={`status-pill ui-status ${
+                            item.status === 'APPROVED' ? 'success' :
+                            item.status === 'REJECTED' || item.status === 'CANCELLED' ? 'danger' : 'warning'
+                          }`}>
+                            {item.status === 'APPROVED' ? 'Aprovado' :
+                             item.status === 'REJECTED' ? 'Rejeitado' :
+                             item.status === 'CANCELLED' ? 'Cancelado' : 'Pendente'}
+                          </span>
+                        </td>
+                        <td>
+                          {item.status === 'PENDING' ? (
+                            <Can permission="sales:credit:approve" fallback={<span className="text-muted">Sem alçada</span>}>
+                              <div className="table-actions ui-table-actions">
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action success"
+                                  onClick={() => {
+                                    setCreditDecision({ approval: item, approved: true });
+                                    setCreditDecisionReason('');
+                                  }}
+                                >
+                                  <Check size={14} /> Aprovar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action danger"
+                                  onClick={() => {
+                                    setCreditDecision({ approval: item, approved: false });
+                                    setCreditDecisionReason('');
+                                  }}
+                                >
+                                  <XCircle size={14} /> Rejeitar
+                                </button>
+                              </div>
+                            </Can>
+                          ) : (
+                            <span className="text-muted">{item.decision_reason || 'Decisão registrada'}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredCreditApprovals.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="empty-state ui-empty-state">
+                          Nenhuma solicitação de crédito encontrada.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 className="approval-section-title">Exceções comerciais</h3>
+              <div className="table-container ui-table-wrap">
+                <table className="data-table ui-table ui-table--wide">
+                  <thead>
+                    <tr>
+                      <th>Documento</th>
+                      <th>Cliente</th>
+                      <th>Regra</th>
+                      <th>Valor</th>
+                      <th>Limite</th>
+                      <th>Status</th>
+                      <th>Decisão</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCommercialApprovals.map(item => {
+                      const number = item.quote?.quote_number || item.order?.order_number || '—';
+                      const customer = item.quote?.customer_name || item.order?.customer_name || '—';
+                      const typeLabel = item.approval_type === 'DISCOUNT'
+                        ? 'Desconto' : item.approval_type === 'MARGIN' ? 'Margem' : 'Prazo';
+                      const suffix = item.approval_type === 'PAYMENT_TERM' ? ' dias' : '%';
+                      return (
+                        <tr key={item.id}>
+                          <td><strong>#{number}</strong><br /><small>{item.quote ? 'Orçamento' : 'Pedido'}</small></td>
+                          <td>{customer}</td>
+                          <td>{typeLabel}</td>
+                          <td><strong>{safeNumber(item.metric_value).toFixed(2)}{suffix}</strong></td>
+                          <td>{safeNumber(item.threshold_value).toFixed(2)}{suffix}</td>
+                          <td>
+                            <span className={`status-pill ui-status ${
+                              item.status === 'APPROVED' ? 'success' :
+                              item.status === 'REJECTED' || item.status === 'CANCELLED' ? 'danger' : 'warning'
+                            }`}>
+                              {item.status === 'APPROVED' ? 'Aprovado' :
+                               item.status === 'REJECTED' ? 'Rejeitado' :
+                               item.status === 'CANCELLED' ? 'Cancelado' : 'Pendente'}
+                            </span>
+                          </td>
+                          <td>
+                            {item.status === 'PENDING' ? (
+                              <Can permission="sales:approvals:approve" fallback={<span className="text-muted">Sem alçada</span>}>
+                                <div className="table-actions ui-table-actions">
+                                  <button type="button" className="table-action-btn ui-table-action success" onClick={() => {
+                                    setCommercialDecision({ approval: item, approved: true });
+                                    setCommercialDecisionReason('');
+                                  }}><Check size={14} /> Aprovar</button>
+                                  <button type="button" className="table-action-btn ui-table-action danger" onClick={() => {
+                                    setCommercialDecision({ approval: item, approved: false });
+                                    setCommercialDecisionReason('');
+                                  }}><XCircle size={14} /> Rejeitar</button>
+                                </div>
+                              </Can>
+                            ) : <span className="text-muted">{item.decision_reason || 'Decisão registrada'}</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredCommercialApprovals.length === 0 && (
+                      <tr><td colSpan={7} className="empty-state ui-empty-state">Nenhuma exceção comercial encontrada.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1920,6 +2288,13 @@ export const Sales: React.FC = () => {
               </div>
             </div>
           )}
+
+          {activeTab === 'settings' && (
+            <div className="tab-pane sales-settings-pane">
+              <CommercialPoliciesSettings />
+              <CommercialTeamsSettings />
+            </div>
+          )}
         </main>
       </div>
 
@@ -1956,6 +2331,103 @@ export const Sales: React.FC = () => {
       />
 
       {/* Modal 3: Cadastro / Edição de Cliente Unificado */}
+      <Modal
+        isOpen={creditDecision !== null}
+        onClose={() => {
+          if (creditDecisionSaving) return;
+          setCreditDecision(null);
+          setCreditDecisionReason('');
+        }}
+        title={creditDecision?.approved ? 'Aprovar Crédito do Pedido' : 'Rejeitar Crédito do Pedido'}
+        subtitle={creditDecision ? `Pedido #${creditDecision.approval.order.order_number} · Excesso de ${fmtCurrency(creditDecision.approval.excess_amount)}` : undefined}
+        size="sm"
+      >
+        <div className="wizard-form ui-form credit-decision-modal">
+          <div className="credit-decision-summary">
+            <span>Cliente <strong>{creditDecision?.approval.order.customer_name}</strong></span>
+            <span>Limite <strong>{fmtCurrency(creditDecision?.approval.credit_limit)}</strong></span>
+            <span>Exposição projetada <strong>{fmtCurrency(
+              safeNumber(creditDecision?.approval.exposure_before_order)
+              + safeNumber(creditDecision?.approval.order_amount)
+            )}</strong></span>
+          </div>
+          <div className="form-group">
+            <label>Justificativa da decisão *</label>
+            <textarea
+              rows={4}
+              maxLength={1000}
+              value={creditDecisionReason}
+              onChange={(event) => setCreditDecisionReason(event.target.value)}
+              placeholder="Registre os critérios usados nesta decisão..."
+              autoFocus
+            />
+          </div>
+          <div className="modal-footer">
+            <button
+              type="button"
+              className="btn-secondary ui-button ui-button--secondary"
+              onClick={() => setCreditDecision(null)}
+              disabled={creditDecisionSaving}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className={`btn-primary ui-button ${creditDecision?.approved ? 'ui-button--primary' : 'ui-button--danger'}`}
+              onClick={() => void handleCreditDecision()}
+              disabled={creditDecisionSaving || creditDecisionReason.trim().length < 3}
+            >
+              {creditDecisionSaving ? 'Registrando...' : creditDecision?.approved ? 'Confirmar aprovação' : 'Confirmar rejeição'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={commercialDecision !== null}
+        onClose={() => {
+          if (commercialDecisionSaving) return;
+          setCommercialDecision(null);
+          setCommercialDecisionReason('');
+        }}
+        title={commercialDecision?.approved ? 'Aprovar Exceção Comercial' : 'Rejeitar Exceção Comercial'}
+        subtitle={commercialDecision ? commercialDecision.approval.request_reason : undefined}
+        size="sm"
+      >
+        <div className="wizard-form ui-form credit-decision-modal">
+          <div className="credit-decision-summary">
+            <span>Regra <strong>{commercialDecision?.approval.approval_type}</strong></span>
+            <span>Valor <strong>{safeNumber(commercialDecision?.approval.metric_value).toFixed(2)}</strong></span>
+            <span>Limite <strong>{safeNumber(commercialDecision?.approval.threshold_value).toFixed(2)}</strong></span>
+          </div>
+          <div className="form-group">
+            <label>Justificativa da decisão *</label>
+            <textarea
+              rows={4}
+              maxLength={1000}
+              value={commercialDecisionReason}
+              onChange={(event) => setCommercialDecisionReason(event.target.value)}
+              placeholder="Registre os critérios usados nesta decisão..."
+              autoFocus
+            />
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary ui-button ui-button--secondary"
+              onClick={() => setCommercialDecision(null)} disabled={commercialDecisionSaving}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className={`btn-primary ui-button ${commercialDecision?.approved ? 'ui-button--primary' : 'ui-button--danger'}`}
+              onClick={() => void handleCommercialDecision()}
+              disabled={commercialDecisionSaving || commercialDecisionReason.trim().length < 3}
+            >
+              {commercialDecisionSaving ? 'Registrando...' : commercialDecision?.approved ? 'Confirmar aprovação' : 'Confirmar rejeição'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       <CustomerModal
         isOpen={isCustomerModalOpen}
         onClose={() => {
@@ -1980,14 +2452,24 @@ export const Sales: React.FC = () => {
         <form onSubmit={handleSaveGoal} className="wizard-form ui-form">
           {modalError && <div className="form-error-callout ui-form__error" role="alert">{modalError}</div>}
           <div className="form-group">
-            <label>Nome do Vendedor *</label>
-            <input
-              type="text"
+            <label>Vendedor *</label>
+            <select
               required
-              placeholder="Ex: Amanda Silva"
-              value={goalSellerName}
-              onChange={(e) => setGoalSellerName(e.target.value)}
-            />
+              value={goalSellerId}
+              onChange={(e) => {
+                const seller = sellers.find((item) => item.id === e.target.value);
+                setGoalSellerId(e.target.value);
+                setGoalSellerName(seller?.full_name || '');
+              }}
+            >
+              <option value="">Selecione um vendedor</option>
+              {sellers.map((seller) => (
+                <option key={seller.id} value={seller.id}>{seller.full_name}</option>
+              ))}
+            </select>
+            {sellers.length === 0 && (
+              <span className="input-hint">Marque um usuário ativo como vendedor no módulo Identity.</span>
+            )}
           </div>
           <div className="form-group">
             <label>Mês de Referência *</label>

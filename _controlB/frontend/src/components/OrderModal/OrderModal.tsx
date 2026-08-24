@@ -9,7 +9,7 @@ import { CustomerPicker } from '@/components/CustomerPicker/CustomerPicker';
 import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
 import { useToast } from '@/components/Toast/ToastContext';
 import { salesService, inventoryService, formatApiError } from '@/services/api';
-import type { SalesOrder, Product, Customer } from '@/types';
+import type { SalesOrder, Product, Customer, CustomerCreditAnalysis } from '@/types';
 import { formatCurrency } from '@/utils/formatters';
 import './OrderModal.scss';
 
@@ -58,6 +58,8 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   const [customerEmail, setCustomerEmail] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [sellerName, setSellerName] = useState<string>('Vendedor Padrão');
+  const [creditAnalysis, setCreditAnalysis] = useState<CustomerCreditAnalysis | null>(null);
+  const [creditLoading, setCreditLoading] = useState(false);
 
   // Etapa 2: Itens & Estoque
   const [items, setItems] = useState<FormOrderItem[]>([]);
@@ -85,6 +87,15 @@ export const OrderModal: React.FC<OrderModalProps> = ({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || order) return;
+    salesService.getCommercialSettings().then((settings) => {
+      setPaymentTerms(settings.default_payment_terms);
+    }).catch(() => {
+      // O backend aplica a condição padrão mesmo sem esta antecipação visual.
+    });
+  }, [isOpen, order]);
+
   // Inicializar dados do modal
   useEffect(() => {
     if (!isOpen) return;
@@ -94,6 +105,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
 
     if (order) {
       setSelectedCustomerId(order.customer_id || null);
+      setSelectedCustomer(null);
       setCustomerName(order.customer_name || '');
       setCustomerDocument(order.customer_document || '');
       setPaymentTerms(order.payment_terms || '30 DDL');
@@ -143,6 +155,29 @@ export const OrderModal: React.FC<OrderModalProps> = ({
       setDeliveryDate(defaultDelivery.toISOString().split('T')[0]);
     }
   }, [isOpen, order]);
+
+  useEffect(() => {
+    if (!isOpen || !selectedCustomerId) {
+      setCreditAnalysis(null);
+      setCreditLoading(false);
+      return;
+    }
+
+    let active = true;
+    setCreditLoading(true);
+    salesService.getCustomerCredit(selectedCustomerId, 0, order?.id)
+      .then((analysis) => {
+        if (active) setCreditAnalysis(analysis);
+      })
+      .catch(() => {
+        if (active) setCreditAnalysis(null);
+      })
+      .finally(() => {
+        if (active) setCreditLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [isOpen, selectedCustomerId, order?.id]);
 
   // Handlers de seleção de cliente
   const handleCustomerSelect = (cust: Customer | null) => {
@@ -364,7 +399,13 @@ export const OrderModal: React.FC<OrderModalProps> = ({
         if (onSuccess) onSuccess(updated);
       } else {
         const created = await salesService.createOrder(payload);
-        toast.success(`Pedido #${created.order_number} emitido com sucesso!`);
+        if (created.credit_status === 'PENDING') {
+          toast.warning(
+            `Pedido #${created.order_number} emitido e enviado para liberação de crédito.`
+          );
+        } else {
+          toast.success(`Pedido #${created.order_number} emitido com sucesso!`);
+        }
         if (onSuccess) onSuccess(created);
       }
       onClose();
@@ -377,8 +418,12 @@ export const OrderModal: React.FC<OrderModalProps> = ({
     }
   };
 
-  const creditLimit = Number(selectedCustomer?.credit_limit) || 0;
-  const isCreditExceeded = creditLimit > 0 && totals.net > creditLimit;
+  const creditLimit = Number(creditAnalysis?.credit_limit ?? selectedCustomer?.credit_limit) || 0;
+  const utilizedCredit = Number(creditAnalysis?.utilized_amount) || 0;
+  const availableCredit = Math.max(creditLimit - utilizedCredit, 0);
+  const projectedExposure = utilizedCredit + totals.net;
+  const creditExcess = creditLimit > 0 ? Math.max(projectedExposure - creditLimit, 0) : 0;
+  const isCreditExceeded = creditExcess > 0;
 
   return (
     <>
@@ -423,7 +468,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="order-wizard__body">
+          <form onSubmit={handleSubmit} className="order-wizard__body wizard-form ui-form">
             {/* ETAPA 1: CLIENTE & CRÉDITO */}
             {currentStep === 1 && (
               <div className="order-step-pane">
@@ -516,16 +561,26 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                     <strong>Análise de Limite de Crédito</strong>
                     <div className="credit-pills">
                       <span>Limite Concedido: <strong>{formatCurrency(creditLimit)}</strong></span>
+                      <span>Utilizado: <strong>{formatCurrency(utilizedCredit)}</strong></span>
+                      <span>Disponível: <strong>{formatCurrency(availableCredit)}</strong></span>
                       <span>Valor deste Pedido: <strong>{formatCurrency(totals.net)}</strong></span>
-                      {creditLimit > 0 && (
-                        <span>Saldo Restante: <strong className={isCreditExceeded ? 'text-danger' : 'text-success'}>
-                          {formatCurrency(creditLimit - totals.net)}
+                      {creditLimit > 0 && !creditLoading && (
+                        <span>Saldo Projetado: <strong className={isCreditExceeded ? 'text-danger' : 'text-success'}>
+                          {formatCurrency(availableCredit - totals.net)}
                         </strong></span>
                       )}
                     </div>
+                    {creditLoading && (
+                      <p className="credit-alert-text">Atualizando exposição de crédito...</p>
+                    )}
+                    {!creditLoading && selectedCustomerId && creditLimit <= 0 && (
+                      <p className="credit-alert-text">
+                        Nenhum limite foi configurado para este cliente; a política de crédito não será aplicada.
+                      </p>
+                    )}
                     {isCreditExceeded && (
                       <p className="credit-alert-text">
-                        ⚠ <strong>Atenção:</strong> O valor do pedido excede o limite cadastrado para este cliente. Pode exigir liberação de crédito ou pagamento antecipado.
+                        ⚠ <strong>Liberação necessária:</strong> a exposição projetada será de {formatCurrency(projectedExposure)}, excedendo o limite em {formatCurrency(creditExcess)}. O pedido será criado com execução bloqueada até a decisão.
                       </p>
                     )}
                   </div>
@@ -818,7 +873,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                     {isSaving ? 'Emitindo Pedido...' : (
                       <>
                         <Check size={16} />
-                        <span>{isEditing ? 'Salvar Pedido' : 'Emitir Pedido de Venda'}</span>
+                        <span>{isEditing ? 'Salvar Pedido' : isCreditExceeded ? 'Emitir e Solicitar Liberação' : 'Emitir Pedido de Venda'}</span>
                       </>
                     )}
                   </button>

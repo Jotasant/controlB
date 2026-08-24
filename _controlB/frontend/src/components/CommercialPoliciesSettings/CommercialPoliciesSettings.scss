@@ -1,0 +1,202 @@
+.commercial-policies-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.commercial-policies-header,
+.commercial-policies-title-wrap,
+.commercial-policies-footer {
+  display: flex;
+  align-items: center;
+}
+
+.commercial-policies-header {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.commercial-policies-title-wrap {
+  gap: 0.75rem;
+
+  h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.05rem;
+  }
+
+  p {
+    margin: 0.18rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+}
+
+.commercial-policies-icon,
+.commercial-policy-card-icon {
+  display: grid;
+  place-items: center;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border-radius: 10px;
+}
+
+.commercial-policies-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.commercial-policies-refresh {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-elevated);
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+
+  &:hover { color: var(--text-primary); background: var(--bg-surface-hover); }
+  &:disabled { cursor: wait; opacity: 0.6; }
+}
+
+.commercial-policies-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 120px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.commercial-policies-settings fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  &:disabled { opacity: 0.82; }
+}
+
+.commercial-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.commercial-policy-card {
+  display: grid;
+  grid-template-columns: auto 1fr minmax(110px, 0.5fr);
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+
+.commercial-policy-card-icon {
+  width: 34px;
+  height: 34px;
+
+  &.warning {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.12);
+  }
+}
+
+.commercial-policy-card-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+
+  strong {
+    color: var(--text-primary);
+    font-size: 0.78rem;
+  }
+
+  small {
+    margin-top: 0.15rem;
+    color: var(--text-muted);
+    font-size: 0.67rem;
+    line-height: 1.35;
+  }
+}
+
+.commercial-policy-card input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 0.5rem 0.65rem;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  outline: none;
+
+  &:focus {
+    border-color: #10b981;
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.12);
+  }
+}
+
+.commercial-policy-number-input {
+  position: relative;
+
+  input { padding-right: 2.5rem; }
+
+  span {
+    position: absolute;
+    top: 50%;
+    right: 0.7rem;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+}
+
+.commercial-policies-footer {
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-subtle);
+
+  > span { color: var(--text-muted); font-size: 0.72rem; }
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 36px;
+    padding: 0 0.9rem;
+    color: white;
+    background: #059669;
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 0.76rem;
+    font-weight: 700;
+
+    &:hover { background: #047857; }
+    &:disabled { cursor: not-allowed; opacity: 0.55; }
+  }
+}
+
+@media (max-width: 960px) {
+  .commercial-policy-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .commercial-policy-card { grid-template-columns: auto 1fr; }
+  .commercial-policy-card > input,
+  .commercial-policy-number-input { grid-column: 1 / -1; }
+  .commercial-policies-footer { align-items: flex-start; flex-direction: column; }
+}

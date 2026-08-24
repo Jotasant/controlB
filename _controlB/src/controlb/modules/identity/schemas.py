@@ -9,7 +9,9 @@ Garante tipagem estrita, prevenção de vazamento de senhas e serialização seg
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel, ConfigDict, EmailStr
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # ==============================================================================
@@ -306,34 +308,37 @@ class TeamMemberInfo(BaseModel):
 
 
 class TeamBase(BaseModel):
-    name: str
-    code: str | None = None
-    module_category: str = "SALES"  # SALES, PURCHASING, INVENTORY, FINANCE, SUPPORT, CRM
-    description: str | None = None
+    name: str = Field(min_length=1, max_length=100)
+    code: str | None = Field(default=None, max_length=50)
+    module_category: Literal["SALES", "PURCHASING", "INVENTORY", "FINANCE", "SUPPORT"] = "SALES"
+    description: str | None = Field(default=None, max_length=255)
     leader_id: uuid.UUID | None = None
     is_active: bool = True
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class TeamCreate(TeamBase):
-    organization_id: uuid.UUID
-    member_ids: list[uuid.UUID] = []
+    member_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class TeamUpdate(BaseModel):
-    name: str | None = None
-    code: str | None = None
-    module_category: str | None = None
-    description: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    code: str | None = Field(default=None, max_length=50)
+    module_category: Literal["SALES", "PURCHASING", "INVENTORY", "FINANCE", "SUPPORT"] | None = None
+    description: str | None = Field(default=None, max_length=255)
     leader_id: uuid.UUID | None = None
     is_active: bool | None = None
     member_ids: list[uuid.UUID] | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class TeamResponse(TeamBase):
     id: uuid.UUID
     organization_id: uuid.UUID
     leader_name: str | None = None
-    members: list[TeamMemberInfo] = []
+    members: list[TeamMemberInfo] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -342,5 +347,4 @@ class TeamResponse(TeamBase):
 
 class TeamMemberAddRequest(BaseModel):
     user_ids: list[uuid.UUID]
-
 

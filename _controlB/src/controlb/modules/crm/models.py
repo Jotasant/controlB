@@ -162,6 +162,15 @@ class CustomerInteraction(Base):
     Tabela 'customer_interaction' - Registro de histórico de interações (Reuniões, Ligações, E-mails, WhatsApp).
     """
     __tablename__ = "customer_interaction"
+    __table_args__ = (
+        CheckConstraint(
+            "(interaction_type = 'NOTE' AND status IS NULL) OR "
+            "(interaction_type <> 'NOTE' AND status IN "
+            "('SCHEDULED', 'COMPLETED', 'CANCELLED'))",
+            name="ck_customer_interaction_lifecycle",
+        ),
+        Index("ix_customer_interaction_org_status", "organization_id", "status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -178,13 +187,26 @@ class CustomerInteraction(Base):
     summary: Mapped[str] = mapped_column(String(255), nullable=False)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     interaction_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    responsible_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
     
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
     # Relacionamentos
     lead: Mapped["Lead | None"] = relationship(back_populates="interactions", lazy="select")
     opportunity: Mapped["Opportunity | None"] = relationship(back_populates="interactions", lazy="select")
     created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_id], lazy="select")
+    updated_by: Mapped["User | None"] = relationship(foreign_keys=[updated_by_id], lazy="select")
+    responsible: Mapped["User | None"] = relationship(foreign_keys=[responsible_id], lazy="select")

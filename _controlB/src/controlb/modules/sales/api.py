@@ -3,6 +3,7 @@ modules/sales/api.py - Roteador de Endpoints REST do Módulo de Vendas & PDV (Sa
 """
 
 import uuid
+from decimal import Decimal
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -51,7 +52,9 @@ def update_sales_quote(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.update_sales_quote(db, quote_id, current_user.organization_id, payload)
+    return service.update_sales_quote(
+        db, quote_id, current_user.organization_id, payload, current_user
+    )
 
 
 @router.patch("/quotes/{quote_id}/status", response_model=schemas.SalesQuoteResponse, summary="Atualizar Status do Orçamento")
@@ -151,6 +154,85 @@ def request_order_billing(
     current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
     return service.request_order_billing(db, order_id, current_user.organization_id, current_user)
+
+
+@router.post(
+    "/orders/{order_id}/credit-approval",
+    response_model=schemas.CreditApprovalResponse,
+    summary="Solicitar Liberação de Crédito",
+)
+def request_credit_approval(
+    order_id: uuid.UUID,
+    payload: schemas.CreditApprovalRequestCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:manage")),
+):
+    return service.request_credit_approval(
+        db, order_id, current_user.organization_id, current_user, payload.reason
+    )
+
+
+@router.get(
+    "/credit-approvals",
+    response_model=list[schemas.CreditApprovalResponse],
+    summary="Listar Solicitações de Crédito",
+)
+def list_credit_approval_requests(
+    approval_status: str | None = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:credit:view")),
+):
+    return service.list_credit_approval_requests(
+        db, current_user.organization_id, approval_status
+    )
+
+
+@router.post(
+    "/credit-approvals/{approval_id}/decision",
+    response_model=schemas.CreditApprovalResponse,
+    summary="Aprovar ou Rejeitar Crédito",
+)
+def decide_credit_approval(
+    approval_id: uuid.UUID,
+    payload: schemas.CreditApprovalDecision,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:credit:approve")),
+):
+    return service.decide_credit_approval(
+        db, approval_id, current_user.organization_id, current_user, payload
+    )
+
+
+@router.get(
+    "/commercial-approvals",
+    response_model=list[schemas.CommercialApprovalResponse],
+    summary="Listar Solicitações de Aprovação Comercial",
+)
+def list_commercial_approval_requests(
+    approval_status: str | None = Query(None, alias="status"),
+    approval_type: str | None = Query(None, alias="type"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:approvals:view")),
+):
+    return service.list_commercial_approval_requests(
+        db, current_user.organization_id, approval_status, approval_type
+    )
+
+
+@router.post(
+    "/commercial-approvals/{approval_id}/decision",
+    response_model=schemas.CommercialApprovalResponse,
+    summary="Aprovar ou Rejeitar Exceção Comercial",
+)
+def decide_commercial_approval(
+    approval_id: uuid.UUID,
+    payload: schemas.CreditApprovalDecision,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:approvals:approve")),
+):
+    return service.decide_commercial_approval(
+        db, approval_id, current_user.organization_id, current_user, payload
+    )
 
 
 @router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Cancelar Pedido de Venda")
@@ -265,6 +347,27 @@ def get_customer(
     return service.get_customer(db, customer_id, current_user.organization_id)
 
 
+@router.get(
+    "/customers/{customer_id}/credit",
+    response_model=schemas.CustomerCreditAnalysisResponse,
+    summary="Analisar Limite de Crédito do Cliente",
+)
+def get_customer_credit_analysis(
+    customer_id: uuid.UUID,
+    proposed_order_amount: Decimal = Query(default=Decimal("0.00"), ge=0),
+    exclude_order_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_permission("sales:view")),
+):
+    return service.get_customer_credit_analysis(
+        db,
+        current_user.organization_id,
+        customer_id,
+        proposed_order_amount,
+        exclude_order_id,
+    )
+
+
 @router.post("/customers", response_model=schemas.CustomerResponse, status_code=status.HTTP_201_CREATED, summary="Cadastrar Cliente")
 def create_customer(
     payload: schemas.CustomerCreate,
@@ -296,6 +399,45 @@ def delete_customer(
 # ==============================================================================
 # GESTÃO COMERCIAL (Metas e Tabelas de Preços)
 # ==============================================================================
+
+@router.get(
+    "/settings",
+    response_model=schemas.CommercialSettingsResponse,
+    summary="Consultar Configurações Comerciais",
+)
+def get_commercial_settings(
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_any_permission(
+        "sales:settings:view",
+        "sales:settings:manage",
+        "sales:view",
+        "sales:manage",
+        "crm:view",
+        "crm:manage",
+    )),
+):
+    return service.get_commercial_settings(db, current_user.organization_id)
+
+
+@router.put(
+    "/settings",
+    response_model=schemas.CommercialSettingsResponse,
+    summary="Atualizar Configurações Comerciais",
+)
+def update_commercial_settings(
+    payload: schemas.CommercialSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.require_any_permission(
+        "sales:settings:manage",
+        "sales:manage",
+        "crm:manage",
+    )),
+):
+    return service.update_commercial_settings(
+        db,
+        current_user.organization_id,
+        payload,
+    )
 
 @router.get("/goals", response_model=list[schemas.SalesGoalResponse], summary="Listar Metas Comerciais")
 def list_sales_goals(

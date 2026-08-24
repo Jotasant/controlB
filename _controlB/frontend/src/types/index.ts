@@ -89,7 +89,7 @@ export interface Team {
   organization_id: string;
   name: string;
   code?: string | null;
-  module_category: string; // SALES, PURCHASING, INVENTORY, FINANCE, SUPPORT, CRM
+  module_category: string; // SALES e compartilhado por CRM e Vendas
   description?: string | null;
   leader_id?: string | null;
   leader_name?: string | null;
@@ -853,8 +853,12 @@ export interface CustomerInteraction {
   summary: string;
   details?: string | null;
   interaction_date: string;
+  status?: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' | null;
+  responsible_id?: string | null;
   created_by_id?: string | null;
+  updated_by_id?: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 // ==============================================================================
@@ -955,6 +959,8 @@ export interface SalesQuote {
   net_amount: number;
   valid_until: string;
   status: 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'CONVERTED' | 'EXPIRED' | 'CANCELLED';
+  commercial_approval_status: ApprovalStatus | 'NOT_REQUIRED';
+  commercial_approvals: CommercialApprovalSummary[];
   cancellation_reason?: string | null;
   notes?: string | null;
   created_at: string;
@@ -989,11 +995,81 @@ export interface SalesOrder {
   delivery_status: 'PENDING' | 'RESERVED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELLED';
   billing_status: 'PENDING' | 'INVOICED';
   status: 'DRAFT' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+  credit_status: 'NOT_REQUIRED' | 'APPROVED' | 'PENDING' | 'REJECTED';
+  credit_limit_snapshot: number;
+  credit_exposure_snapshot: number;
+  credit_excess_amount: number;
+  credit_approval?: CreditApprovalSummary | null;
+  commercial_approval_status: ApprovalStatus | 'NOT_REQUIRED';
+  commercial_approvals: CommercialApprovalSummary[];
   cancellation_reason?: string | null;
   notes?: string | null;
   created_at: string;
   updated_at: string;
   items: SalesOrderItem[];
+}
+
+export interface CreditApprovalSummary {
+  id: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  request_reason?: string | null;
+  decision_reason?: string | null;
+  credit_limit: number;
+  exposure_before_order: number;
+  order_amount: number;
+  excess_amount: number;
+  requested_by_id?: string | null;
+  decided_by_id?: string | null;
+  decided_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+export type CommercialApprovalType = 'DISCOUNT' | 'MARGIN' | 'PAYMENT_TERM';
+
+export interface CommercialApprovalSummary {
+  id: string;
+  approval_type: CommercialApprovalType;
+  status: ApprovalStatus;
+  metric_value: number;
+  threshold_value: number;
+  request_reason: string;
+  decision_reason?: string | null;
+  requested_by_id?: string | null;
+  decided_by_id?: string | null;
+  decided_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommercialApprovalRequest extends CommercialApprovalSummary {
+  organization_id: string;
+  sales_quote_id?: string | null;
+  sales_order_id?: string | null;
+  quote?: Pick<SalesQuote, 'id' | 'quote_number' | 'customer_name' | 'net_amount' | 'commercial_approval_status'> | null;
+  order?: Pick<SalesOrder, 'id' | 'order_number' | 'customer_name' | 'net_amount' | 'commercial_approval_status'> | null;
+}
+
+export interface CreditApprovalRequest extends CreditApprovalSummary {
+  organization_id: string;
+  sales_order_id: string;
+  customer_id: string;
+  order: Pick<SalesOrder, 'id' | 'order_number' | 'customer_name' | 'net_amount' | 'credit_status'>;
+}
+
+export interface CustomerCreditAnalysis {
+  customer_id: string;
+  customer_name: string;
+  credit_limit: number;
+  unbilled_orders_amount: number;
+  open_receivables_amount: number;
+  utilized_amount: number;
+  available_amount: number;
+  proposed_order_amount: number;
+  projected_exposure: number;
+  excess_amount: number;
+  requires_approval: boolean;
 }
 
 export interface POSSaleItem {
@@ -1076,6 +1152,18 @@ export interface PriceTable {
   created_at: string;
   updated_at: string;
   items?: PriceTableItem[];
+}
+
+export interface CommercialSettings {
+  organization_id: string;
+  default_payment_terms: string;
+  quote_validity_days: number;
+  maximum_discount_percent: number;
+  default_commission_percent: number;
+  automatic_discount_limit_percent: number;
+  minimum_margin_percent: number;
+  maximum_payment_term_days_without_approval: number;
+  updated_at?: string | null;
 }
 
 export interface SalesReturnItem {
@@ -1162,7 +1250,3 @@ export interface Invoice {
   updated_at: string;
   installments: InvoiceInstallment[];
 }
-
-
-
-

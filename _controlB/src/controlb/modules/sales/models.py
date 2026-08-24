@@ -8,8 +8,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
-    String, Text, Boolean, DateTime, Date, Numeric, ForeignKey, ForeignKeyConstraint,
-    Integer, UniqueConstraint
+    String, Text, Boolean, CheckConstraint, DateTime, Date, Numeric, ForeignKey,
+    ForeignKeyConstraint, Integer, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -111,6 +111,9 @@ class SalesQuote(Base):
     payment_terms: Mapped[str | None] = mapped_column(String(100), nullable=True)
     valid_until: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="DRAFT", index=True)  # DRAFT, SENT, APPROVED, REJECTED, CONVERTED, EXPIRED, CANCELLED
+    commercial_approval_status: Mapped[str] = mapped_column(
+        String(30), default="NOT_REQUIRED", nullable=False, index=True
+    )  # NOT_REQUIRED, APPROVED, PENDING, REJECTED
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -126,6 +129,9 @@ class SalesQuote(Base):
     )
     document: Mapped["BusinessDocument"] = relationship(lazy="select")
     items: Mapped[list["SalesQuoteItem"]] = relationship(back_populates="quote", cascade="all, delete-orphan", lazy="selectin")
+    commercial_approvals: Mapped[list["CommercialApprovalRequest"]] = relationship(
+        back_populates="quote", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class SalesQuoteItem(Base):
@@ -189,6 +195,21 @@ class SalesOrder(Base):
     delivery_status: Mapped[str] = mapped_column(String(50), default="PENDING")  # PENDING, DISPATCHED, DELIVERED
     billing_status: Mapped[str] = mapped_column(String(50), default="PENDING", index=True)  # PENDING, INVOICED
     status: Mapped[str] = mapped_column(String(50), default="CONFIRMED", index=True)  # DRAFT, CONFIRMED, COMPLETED, CANCELLED
+    credit_status: Mapped[str] = mapped_column(
+        String(30), default="NOT_REQUIRED", nullable=False, index=True
+    )  # NOT_REQUIRED, APPROVED, PENDING, REJECTED
+    credit_limit_snapshot: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00"), nullable=False
+    )
+    credit_exposure_snapshot: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00"), nullable=False
+    )
+    credit_excess_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00"), nullable=False
+    )
+    commercial_approval_status: Mapped[str] = mapped_column(
+        String(30), default="NOT_REQUIRED", nullable=False, index=True
+    )  # NOT_REQUIRED, APPROVED, PENDING, REJECTED
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -202,6 +223,12 @@ class SalesOrder(Base):
     opportunity: Mapped["Opportunity | None"] = relationship(lazy="selectin")
     document: Mapped["BusinessDocument"] = relationship(lazy="select")
     items: Mapped[list["SalesOrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan", lazy="selectin")
+    credit_approval: Mapped["CreditApprovalRequest | None"] = relationship(
+        back_populates="order", cascade="all, delete-orphan", uselist=False, lazy="selectin"
+    )
+    commercial_approvals: Mapped[list["CommercialApprovalRequest"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class SalesOrderItem(Base):
@@ -222,6 +249,111 @@ class SalesOrderItem(Base):
 
     # Relacionamentos
     order: Mapped["SalesOrder"] = relationship(back_populates="items")
+
+
+class CreditApprovalRequest(Base):
+    """Solicitação auditável para liberar um pedido acima do limite de crédito."""
+    __tablename__ = "credit_approval_request"
+    __table_args__ = (
+        UniqueConstraint("sales_order_id", name="uq_credit_approval_sales_order"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sales_order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sales_order.id", ondelete="CASCADE"), nullable=False
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("customer.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30), default="PENDING", nullable=False, index=True
+    )  # PENDING, APPROVED, REJECTED, CANCELLED
+    request_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    credit_limit: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    exposure_before_order: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    order_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    excess_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+
+    requested_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    order: Mapped["SalesOrder"] = relationship(back_populates="credit_approval")
+
+
+class CommercialApprovalRequest(Base):
+    """Alçada comercial para desconto, margem ou prazo fora da política automática."""
+    __tablename__ = "commercial_approval_request"
+    __table_args__ = (
+        CheckConstraint(
+            "(sales_quote_id IS NOT NULL AND sales_order_id IS NULL) OR "
+            "(sales_quote_id IS NULL AND sales_order_id IS NOT NULL)",
+            name="ck_commercial_approval_single_document",
+        ),
+        UniqueConstraint(
+            "sales_quote_id", "approval_type", name="uq_commercial_approval_quote_type"
+        ),
+        UniqueConstraint(
+            "sales_order_id", "approval_type", name="uq_commercial_approval_order_type"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sales_quote_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sales_quote.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sales_order.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    approval_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(30), default="PENDING", nullable=False, index=True
+    )
+    metric_value: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    threshold_value: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    request_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    quote: Mapped["SalesQuote | None"] = relationship(back_populates="commercial_approvals")
+    order: Mapped["SalesOrder | None"] = relationship(back_populates="commercial_approvals")
 
 
 # ==============================================================================
@@ -379,6 +511,40 @@ class PriceTableItem(Base):
 
     # Relacionamentos
     price_table: Mapped["PriceTable"] = relationship(back_populates="items")
+
+
+class CommercialSettings(Base):
+    """Parâmetros comerciais únicos por organização, consumidos por CRM e Vendas."""
+    __tablename__ = "commercial_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    default_payment_terms: Mapped[str] = mapped_column(String(100), default="30 DDL", nullable=False)
+    quote_validity_days: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    maximum_discount_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("100.00"), nullable=False
+    )
+    default_commission_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("2.00"), nullable=False
+    )
+    automatic_discount_limit_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("5.00"), nullable=False
+    )
+    minimum_margin_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("0.00"), nullable=False
+    )
+    maximum_payment_term_days_without_approval: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # ==============================================================================

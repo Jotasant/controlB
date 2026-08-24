@@ -463,15 +463,52 @@ def register_interaction(
     current_user: User,
     payload: schemas.CustomerInteractionCreate
 ) -> models.CustomerInteraction:
+    if payload.lead_id and not repository.get_lead_by_id(db, payload.lead_id, organization_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado.")
+    if payload.opportunity_id and not repository.get_opportunity_by_id(
+        db, payload.opportunity_id, organization_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Oportunidade não encontrada.",
+        )
+
+    interaction_type = payload.interaction_type.upper()
+    is_note = interaction_type == "NOTE"
+    if is_note and payload.status is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Notas não possuem status de execução.",
+        )
+
+    responsible_id = None
+    if not is_note and payload.responsible_id:
+        responsible = db.get(User, payload.responsible_id)
+        if not responsible or responsible.organization_id != organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Responsável não encontrado na organização atual.",
+            )
+        responsible_id = responsible.id
+
+    summary = payload.summary.strip()
+    if not summary:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O resumo da interação não pode ser vazio.",
+        )
+
     interaction = models.CustomerInteraction(
         organization_id=organization_id,
         lead_id=payload.lead_id,
         opportunity_id=payload.opportunity_id,
-        interaction_type=payload.interaction_type.upper(),
-        summary=payload.summary.strip(),
-        details=payload.details,
+        interaction_type=interaction_type,
+        summary=summary,
+        details=payload.details.strip() if payload.details else None,
         interaction_date=payload.interaction_date,
-        created_by_id=current_user.id
+        status=None if is_note else payload.status or "SCHEDULED",
+        responsible_id=responsible_id,
+        created_by_id=current_user.id,
     )
     return repository.create_interaction(db, interaction)
 
@@ -483,6 +520,175 @@ def list_interactions(
     opportunity_id: uuid.UUID | None = None
 ) -> list[models.CustomerInteraction]:
     return repository.list_interactions(db, organization_id, lead_id, opportunity_id)
+
+
+def update_interaction(
+    db: Session,
+    interaction_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+    payload: schemas.CustomerInteractionUpdate,
+) -> models.CustomerInteraction:
+    interaction = repository.get_interaction_by_id(db, interaction_id, organization_id)
+    if not interaction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nota ou atividade não encontrada.",
+        )
+
+    from controlb.modules.identity import service as identity_service
+
+    permissions = set(identity_service.get_user_permissions(current_user))
+    can_manage = bool(
+        permissions.intersection({"crm:manage", "crm:manage_all", "*:*"})
+    )
+    if interaction.created_by_id != current_user.id and not can_manage:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Somente o autor ou um gestor do CRM pode editar esta interação.",
+        )
+
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        return interaction
+
+    previous_values = {
+        "interaction_type": interaction.interaction_type,
+        "summary": interaction.summary,
+        "details": interaction.details,
+        "interaction_date": interaction.interaction_date.isoformat(),
+        "status": interaction.status,
+        "responsible_id": (
+            str(interaction.responsible_id) if interaction.responsible_id else None
+        ),
+    }
+    updated_fields: list[str] = []
+
+    target_type = changes.get("interaction_type", interaction.interaction_type)
+    is_note = target_type == "NOTE"
+
+    if "summary" in changes:
+        summary = changes["summary"].strip()
+        if not summary:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O resumo da interação não pode ser vazio.",
+            )
+        if summary != interaction.summary:
+            interaction.summary = summary
+            updated_fields.append("summary")
+
+    if "details" in changes:
+        details = changes["details"].strip() if changes["details"] else None
+        if details != interaction.details:
+            interaction.details = details
+            updated_fields.append("details")
+
+    if "interaction_date" in changes and changes["interaction_date"] != interaction.interaction_date:
+        interaction.interaction_date = changes["interaction_date"]
+        updated_fields.append("interaction_date")
+
+    if target_type != interaction.interaction_type:
+        interaction.interaction_type = target_type
+        updated_fields.append("interaction_type")
+
+    if is_note:
+        if changes.get("status") is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Notas não possuem status de execução.",
+            )
+        if interaction.status is not None:
+            interaction.status = None
+            updated_fields.append("status")
+        if interaction.responsible_id is not None:
+            interaction.responsible_id = None
+            updated_fields.append("responsible_id")
+    else:
+        target_status = changes.get("status") or interaction.status or "SCHEDULED"
+        if target_status != interaction.status:
+            interaction.status = target_status
+            updated_fields.append("status")
+
+        if "responsible_id" in changes:
+            responsible_id = changes["responsible_id"]
+            if responsible_id:
+                responsible = db.get(User, responsible_id)
+                if not responsible or responsible.organization_id != organization_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Responsável não encontrado na organização atual.",
+                    )
+            if responsible_id != interaction.responsible_id:
+                interaction.responsible_id = responsible_id
+                updated_fields.append("responsible_id")
+
+    if not updated_fields:
+        return interaction
+
+    interaction.updated_by_id = current_user.id
+    interaction.updated_at = models.utcnow()
+    repository.update_interaction(db, interaction)
+
+    from controlb.modules.documents import service as documents_service
+
+    if interaction.opportunity_id:
+        opportunity = repository.get_opportunity_by_id(
+            db, interaction.opportunity_id, organization_id
+        )
+        document = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            category="crm.opportunity",
+            document_type="OPPORTUNITY",
+            native_id=opportunity.id,
+            document_number=opportunity.title,
+            title=opportunity.title,
+            current_status=opportunity.stage,
+            origin_module="CRM",
+        )
+    elif interaction.lead_id:
+        lead = repository.get_lead_by_id(db, interaction.lead_id, organization_id)
+        document = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            category="crm.lead",
+            document_type="LEAD",
+            native_id=lead.id,
+            document_number=lead.name,
+            title=f"Lead: {lead.name}",
+            current_status=lead.status,
+            origin_module="CRM",
+        )
+    else:
+        document = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            category="crm.interaction",
+            document_type="CRM_INTERACTION",
+            native_id=interaction.id,
+            document_number=f"Interação #{str(interaction.id)[:8]}",
+            title=interaction.summary,
+            current_status=interaction.status or "RECORDED",
+            origin_module="CRM",
+        )
+
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=document,
+        event_type="INTERACTION_UPDATED",
+        created_by_id=current_user.id,
+        event_metadata={
+            "interaction_id": str(interaction.id),
+            "updated_fields": updated_fields,
+            "previous_values": previous_values,
+        },
+        idempotency_key=f"crm:interaction:{interaction.id}:update:{uuid.uuid4().hex}",
+    )
+    db.commit()
+    db.refresh(interaction)
+    return interaction
 
 
 # ==============================================================================

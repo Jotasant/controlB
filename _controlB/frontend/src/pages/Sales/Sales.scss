@@ -162,6 +162,12 @@
       background: var(--bg-app);
       overflow-y: auto;
 
+      .sales-settings-pane {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+
       // Header de Conteúdo
       .content-header {
         display: flex;
@@ -1457,6 +1463,36 @@
         color: #000000;
         border: 1px solid #ccc;
       }
+    }
+  }
+
+  .credit-excess-value {
+    color: #dc2626;
+    font-weight: 700;
+  }
+
+  .credit-decision-modal {
+    .credit-decision-summary {
+      display: grid;
+      gap: 0.45rem;
+      padding: 0.8rem;
+      margin-bottom: 0.85rem;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      background: var(--bg-app);
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+
+      span {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+    }
+
+    textarea {
+      width: 100%;
+      resize: vertical;
     }
   }
 }

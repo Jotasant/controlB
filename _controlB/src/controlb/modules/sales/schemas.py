@@ -97,7 +97,7 @@ class SalesQuoteBase(BaseModel):
     customer_document: str | None = None
     customer_email: str | None = None
     customer_phone: str | None = None
-    payment_terms: str | None = "À Vista"
+    payment_terms: str | None = None
     valid_until: date | None = None
     notes: str | None = None
 
@@ -124,6 +124,23 @@ class SalesQuoteCancelRequest(BaseModel):
     reason: str = Field(..., min_length=2, max_length=1000, description="Motivo do cancelamento / desistência")
 
 
+class CommercialApprovalSummary(BaseModel):
+    id: uuid.UUID
+    approval_type: str
+    status: str
+    metric_value: Decimal
+    threshold_value: Decimal
+    request_reason: str
+    decision_reason: str | None = None
+    requested_by_id: uuid.UUID | None = None
+    decided_by_id: uuid.UUID | None = None
+    decided_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SalesQuoteResponse(SalesQuoteBase):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -132,6 +149,8 @@ class SalesQuoteResponse(SalesQuoteBase):
     discount_amount: Decimal
     net_amount: Decimal
     status: str
+    commercial_approval_status: str
+    commercial_approvals: list[CommercialApprovalSummary] = Field(default_factory=list)
     cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -169,7 +188,7 @@ class SalesOrderBase(BaseModel):
     opportunity_id: uuid.UUID | None = None
     customer_name: str = Field(..., max_length=255)
     customer_document: str | None = None
-    payment_terms: str | None = "À Vista"
+    payment_terms: str | None = None
     delivery_status: str = "PENDING"
     notes: str | None = None
 
@@ -190,6 +209,24 @@ class SalesOrderUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CreditApprovalSummary(BaseModel):
+    id: uuid.UUID
+    status: str
+    request_reason: str | None = None
+    decision_reason: str | None = None
+    credit_limit: Decimal
+    exposure_before_order: Decimal
+    order_amount: Decimal
+    excess_amount: Decimal
+    requested_by_id: uuid.UUID | None = None
+    decided_by_id: uuid.UUID | None = None
+    decided_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SalesOrderResponse(SalesOrderBase):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -199,12 +236,87 @@ class SalesOrderResponse(SalesOrderBase):
     net_amount: Decimal
     billing_status: str
     status: str
+    credit_status: str
+    credit_limit_snapshot: Decimal
+    credit_exposure_snapshot: Decimal
+    credit_excess_amount: Decimal
+    credit_approval: CreditApprovalSummary | None = None
+    commercial_approval_status: str
+    commercial_approvals: list[CommercialApprovalSummary] = Field(default_factory=list)
     cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     items: list[SalesOrderItemResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerCreditAnalysisResponse(BaseModel):
+    customer_id: uuid.UUID
+    customer_name: str
+    credit_limit: Decimal
+    unbilled_orders_amount: Decimal
+    open_receivables_amount: Decimal
+    utilized_amount: Decimal
+    available_amount: Decimal
+    proposed_order_amount: Decimal
+    projected_exposure: Decimal
+    excess_amount: Decimal
+    requires_approval: bool
+
+
+class CreditApprovalOrderSummary(BaseModel):
+    id: uuid.UUID
+    order_number: str
+    customer_name: str
+    net_amount: Decimal
+    credit_status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CreditApprovalResponse(CreditApprovalSummary):
+    organization_id: uuid.UUID
+    sales_order_id: uuid.UUID
+    customer_id: uuid.UUID
+    order: CreditApprovalOrderSummary
+
+
+class CreditApprovalRequestCreate(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=1000)
+
+
+class CreditApprovalDecision(BaseModel):
+    approved: bool
+    reason: str = Field(..., min_length=3, max_length=1000)
+
+
+class CommercialApprovalQuoteSummary(BaseModel):
+    id: uuid.UUID
+    quote_number: str
+    customer_name: str
+    net_amount: Decimal
+    commercial_approval_status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommercialApprovalOrderSummary(BaseModel):
+    id: uuid.UUID
+    order_number: str
+    customer_name: str
+    net_amount: Decimal
+    commercial_approval_status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommercialApprovalResponse(CommercialApprovalSummary):
+    organization_id: uuid.UUID
+    sales_quote_id: uuid.UUID | None = None
+    sales_order_id: uuid.UUID | None = None
+    quote: CommercialApprovalQuoteSummary | None = None
+    order: CommercialApprovalOrderSummary | None = None
 
 
 # ==============================================================================
@@ -372,6 +484,41 @@ class PriceTableResponse(PriceTableBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CommercialSettingsBase(BaseModel):
+    default_payment_terms: str = Field(default="30 DDL", min_length=1, max_length=100)
+    quote_validity_days: int = Field(default=15, ge=1, le=365)
+    maximum_discount_percent: Decimal = Field(default=Decimal("100.00"), ge=0, le=100)
+    default_commission_percent: Decimal = Field(default=Decimal("2.00"), ge=0, le=100)
+    automatic_discount_limit_percent: Decimal = Field(
+        default=Decimal("5.00"), ge=0, le=100
+    )
+    minimum_margin_percent: Decimal = Field(default=Decimal("0.00"), ge=0, le=100)
+    maximum_payment_term_days_without_approval: int = Field(default=0, ge=0, le=3650)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CommercialSettingsUpdate(BaseModel):
+    default_payment_terms: str | None = Field(default=None, min_length=1, max_length=100)
+    quote_validity_days: int | None = Field(default=None, ge=1, le=365)
+    maximum_discount_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    default_commission_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    automatic_discount_limit_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    minimum_margin_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    maximum_payment_term_days_without_approval: int | None = Field(
+        default=None, ge=0, le=3650
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CommercialSettingsResponse(CommercialSettingsBase):
+    organization_id: uuid.UUID
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ==============================================================================
 # 6. PÓS-VENDA (DEVOLUÇÕES, TROCAS E CANCELAMENTOS)
 # ==============================================================================
@@ -465,4 +612,3 @@ class SellerResponse(BaseModel):
     sales_team_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
-

@@ -179,6 +179,26 @@ def create_interaction(
     return service.register_interaction(db, current_user.organization_id, current_user, payload)
 
 
+@router.patch(
+    "/interactions/{interaction_id}",
+    response_model=schemas.CustomerInteractionResponse,
+    summary="Atualizar Nota ou Atividade",
+)
+def update_interaction(
+    interaction_id: uuid.UUID,
+    payload: schemas.CustomerInteractionUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_interaction(
+        db,
+        interaction_id,
+        current_user.organization_id,
+        current_user,
+        payload,
+    )
+
+
 # ==============================================================================
 # INTEGRAÇÃO COM MÓDULO DE VENDAS
 # ==============================================================================
@@ -208,4 +228,3 @@ def create_quote_from_opportunity(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.create_quote_from_opportunity(db, opp_id, current_user.organization_id, current_user)
-

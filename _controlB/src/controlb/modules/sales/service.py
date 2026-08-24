@@ -2,6 +2,7 @@
 modules/sales/service.py - Regras de Negócio e Serviços do Módulo de Vendas & PDV
 """
 
+import re
 import uuid
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
@@ -29,6 +30,290 @@ QUOTE_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     "CANCELLED": frozenset(),
     "CONVERTED": frozenset(),
 }
+
+
+def _default_commercial_settings(organization_id: uuid.UUID) -> models.CommercialSettings:
+    return models.CommercialSettings(
+        organization_id=organization_id,
+        default_payment_terms="30 DDL",
+        quote_validity_days=15,
+        maximum_discount_percent=Decimal("100.00"),
+        default_commission_percent=Decimal("2.00"),
+        automatic_discount_limit_percent=Decimal("5.00"),
+        minimum_margin_percent=Decimal("0.00"),
+        maximum_payment_term_days_without_approval=0,
+    )
+
+
+def get_commercial_settings(
+    db: Session,
+    organization_id: uuid.UUID,
+) -> models.CommercialSettings:
+    """Retorna parâmetros persistidos ou defaults sem criar dados durante uma leitura."""
+    return (
+        repository.get_commercial_settings(db, organization_id)
+        or _default_commercial_settings(organization_id)
+    )
+
+
+def update_commercial_settings(
+    db: Session,
+    organization_id: uuid.UUID,
+    payload: schemas.CommercialSettingsUpdate,
+) -> models.CommercialSettings:
+    settings = repository.get_commercial_settings(db, organization_id)
+    if settings is None:
+        settings = _default_commercial_settings(organization_id)
+
+    if payload.default_payment_terms is not None:
+        payment_terms = payload.default_payment_terms.strip()
+        if not payment_terms:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A condição de pagamento padrão é obrigatória.",
+            )
+        settings.default_payment_terms = payment_terms
+    if payload.quote_validity_days is not None:
+        settings.quote_validity_days = payload.quote_validity_days
+    if payload.maximum_discount_percent is not None:
+        settings.maximum_discount_percent = payload.maximum_discount_percent
+    if payload.default_commission_percent is not None:
+        settings.default_commission_percent = payload.default_commission_percent
+    if payload.automatic_discount_limit_percent is not None:
+        settings.automatic_discount_limit_percent = payload.automatic_discount_limit_percent
+    if payload.minimum_margin_percent is not None:
+        settings.minimum_margin_percent = payload.minimum_margin_percent
+    if payload.maximum_payment_term_days_without_approval is not None:
+        settings.maximum_payment_term_days_without_approval = (
+            payload.maximum_payment_term_days_without_approval
+        )
+    if settings.automatic_discount_limit_percent > settings.maximum_discount_percent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A alçada automática não pode superar o desconto máximo absoluto.",
+        )
+
+    return repository.save_commercial_settings(db, settings)
+
+
+def _validate_discount_limit(
+    settings: models.CommercialSettings,
+    total_gross: Decimal,
+    total_discount: Decimal,
+) -> None:
+    if total_gross <= 0:
+        return
+    discount_percent = (total_discount / total_gross) * Decimal("100")
+    if discount_percent > settings.maximum_discount_percent:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"O desconto de {discount_percent.quantize(Decimal('0.01'))}% supera o limite "
+                f"comercial de {settings.maximum_discount_percent}% configurado para a organização."
+            ),
+        )
+
+
+def _payment_term_days(payment_terms: str | None) -> int:
+    if not payment_terms:
+        return 0
+    normalized = payment_terms.casefold()
+    if "vista" in normalized:
+        return 0
+    days = [int(value) for value in re.findall(r"\d+", normalized)]
+    return max(days, default=0)
+
+
+def _commercial_approval_triggers(
+    db: Session,
+    organization_id: uuid.UUID,
+    document: models.SalesQuote | models.SalesOrder,
+    settings: models.CommercialSettings,
+) -> dict[str, tuple[Decimal, Decimal, str]]:
+    triggers: dict[str, tuple[Decimal, Decimal, str]] = {}
+    total_gross = Decimal(document.total_amount or 0)
+    total_discount = Decimal(document.discount_amount or 0)
+    net_amount = Decimal(document.net_amount or 0)
+
+    discount_percent = (
+        (total_discount / total_gross) * Decimal("100")
+        if total_gross > 0
+        else Decimal("0.00")
+    )
+    if discount_percent > settings.automatic_discount_limit_percent:
+        triggers["DISCOUNT"] = (
+            discount_percent,
+            Decimal(settings.automatic_discount_limit_percent),
+            (
+                f"Desconto de {discount_percent.quantize(Decimal('0.01'))}% acima da "
+                f"alçada automática de {settings.automatic_discount_limit_percent}%."
+            ),
+        )
+
+    total_cost = Decimal("0.00")
+    for item in document.items:
+        product = inventory_repository.get_product_by_id(
+            db, item.product_id, organization_id
+        )
+        if product:
+            total_cost += Decimal(item.quantity) * Decimal(product.cost_price or 0)
+    margin_percent = (
+        ((net_amount - total_cost) / net_amount) * Decimal("100")
+        if net_amount > 0
+        else Decimal("0.00")
+    )
+    if (
+        settings.minimum_margin_percent > 0
+        and margin_percent < settings.minimum_margin_percent
+    ):
+        triggers["MARGIN"] = (
+            margin_percent,
+            Decimal(settings.minimum_margin_percent),
+            (
+                f"Margem de {margin_percent.quantize(Decimal('0.01'))}% abaixo da mínima "
+                f"de {settings.minimum_margin_percent}%."
+            ),
+        )
+
+    payment_days = _payment_term_days(document.payment_terms)
+    if (
+        settings.maximum_payment_term_days_without_approval > 0
+        and payment_days > settings.maximum_payment_term_days_without_approval
+    ):
+        triggers["PAYMENT_TERM"] = (
+            Decimal(payment_days),
+            Decimal(settings.maximum_payment_term_days_without_approval),
+            (
+                f"Prazo de {payment_days} dias acima da alçada automática de "
+                f"{settings.maximum_payment_term_days_without_approval} dias."
+            ),
+        )
+    return triggers
+
+
+def _recalculate_commercial_approval_status(
+    document: models.SalesQuote | models.SalesOrder,
+    approvals: list[models.CommercialApprovalRequest],
+) -> None:
+    active = [item for item in approvals if item.status != "CANCELLED"]
+    if any(item.status == "REJECTED" for item in active):
+        document.commercial_approval_status = "REJECTED"
+    elif any(item.status == "PENDING" for item in active):
+        document.commercial_approval_status = "PENDING"
+    elif active:
+        document.commercial_approval_status = "APPROVED"
+    else:
+        document.commercial_approval_status = "NOT_REQUIRED"
+
+
+def _apply_commercial_approval_rules(
+    db: Session,
+    organization_id: uuid.UUID,
+    document: models.SalesQuote | models.SalesOrder,
+    actor_id: uuid.UUID | None,
+) -> None:
+    settings = get_commercial_settings(db, organization_id)
+    triggers = _commercial_approval_triggers(db, organization_id, document, settings)
+    is_quote = isinstance(document, models.SalesQuote)
+    quote_id = document.id if is_quote else None
+    order_id = document.id if not is_quote else None
+    current = repository.list_commercial_approvals_for_document(
+        db,
+        organization_id,
+        quote_id=quote_id,
+        order_id=order_id,
+    )
+    current_by_type = {item.approval_type: item for item in current}
+    requested: list[models.CommercialApprovalRequest] = []
+
+    for approval_type, (metric, threshold, reason) in triggers.items():
+        approval = current_by_type.get(approval_type)
+        changed = (
+            approval is None
+            or Decimal(approval.metric_value) != metric
+            or Decimal(approval.threshold_value) != threshold
+        )
+        should_request = approval is None or changed or approval.status in {
+            "REJECTED", "CANCELLED"
+        }
+        if approval is None:
+            approval = models.CommercialApprovalRequest(
+                organization_id=organization_id,
+                sales_quote_id=quote_id,
+                sales_order_id=order_id,
+                approval_type=approval_type,
+                status="PENDING",
+                metric_value=metric,
+                threshold_value=threshold,
+                request_reason=reason,
+                requested_by_id=actor_id,
+            )
+        elif changed or approval.status in {"REJECTED", "CANCELLED"}:
+            approval.status = "PENDING"
+            approval.metric_value = metric
+            approval.threshold_value = threshold
+            approval.request_reason = reason
+            approval.requested_by_id = actor_id
+            approval.decision_reason = None
+            approval.decided_by_id = None
+            approval.decided_at = None
+        repository.save_commercial_approval_request(db, approval)
+        if should_request:
+            requested.append(approval)
+
+    for approval in current:
+        if approval.approval_type not in triggers and approval.status != "CANCELLED":
+            approval.status = "CANCELLED"
+
+    db.flush()
+    approvals = repository.list_commercial_approvals_for_document(
+        db,
+        organization_id,
+        quote_id=quote_id,
+        order_id=order_id,
+    )
+    _recalculate_commercial_approval_status(document, approvals)
+
+    if requested:
+        business_document = (
+            _ensure_quote_document(db, document, organization_id)
+            if is_quote
+            else _ensure_order_document(db, document, organization_id)
+        )
+        for approval in requested:
+            documents_service.record_event(
+                db,
+                organization_id=organization_id,
+                document=business_document,
+                event_type="COMMERCIAL_APPROVAL_REQUESTED",
+                previous_status=None,
+                new_status=None,
+                created_by_id=actor_id,
+                event_metadata={
+                    "approval_id": str(approval.id),
+                    "approval_type": approval.approval_type,
+                    "metric_value": str(approval.metric_value),
+                    "threshold_value": str(approval.threshold_value),
+                    "reason": approval.request_reason,
+                },
+                idempotency_key=(
+                    f"sales-commercial-approval:{approval.id}:requested:"
+                    f"{uuid.uuid4().hex}"
+                ),
+            )
+
+
+def _assert_commercial_approval_released(
+    document: models.SalesQuote | models.SalesOrder,
+) -> None:
+    if document.commercial_approval_status in {"PENDING", "REJECTED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "O documento possui aprovação comercial pendente ou rejeitada. "
+                "Conclua as alçadas de desconto, margem e prazo antes de prosseguir."
+            ),
+        )
 
 
 # ==============================================================================
@@ -319,6 +604,151 @@ def _ensure_order_document(
     return document
 
 
+def get_customer_credit_analysis(
+    db: Session,
+    organization_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    proposed_order_amount: Decimal = Decimal("0.00"),
+    exclude_order_id: uuid.UUID | None = None,
+) -> schemas.CustomerCreditAnalysisResponse:
+    """Calcula a exposição sem duplicar pedido faturado e título a receber."""
+    customer = repository.get_customer_by_id(db, customer_id, organization_id)
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cliente não encontrado.",
+        )
+    if proposed_order_amount < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O valor proposto não pode ser negativo.",
+        )
+
+    unbilled = repository.get_unbilled_order_exposure(
+        db,
+        organization_id,
+        customer.id,
+        exclude_order_id=exclude_order_id,
+    )
+    receivables = repository.get_open_receivable_exposure(
+        db,
+        organization_id,
+        customer.document,
+    )
+    credit_limit = Decimal(customer.credit_limit or 0)
+    utilized = unbilled + receivables
+    available = max(credit_limit - utilized, Decimal("0.00"))
+    projected = utilized + proposed_order_amount
+    excess = (
+        max(projected - credit_limit, Decimal("0.00"))
+        if credit_limit > 0
+        else Decimal("0.00")
+    )
+
+    return schemas.CustomerCreditAnalysisResponse(
+        customer_id=customer.id,
+        customer_name=customer.name,
+        credit_limit=credit_limit,
+        unbilled_orders_amount=unbilled,
+        open_receivables_amount=receivables,
+        utilized_amount=utilized,
+        available_amount=available,
+        proposed_order_amount=proposed_order_amount,
+        projected_exposure=projected,
+        excess_amount=excess,
+        requires_approval=credit_limit > 0 and excess > 0,
+    )
+
+
+def _apply_credit_analysis_to_order(
+    db: Session,
+    organization_id: uuid.UUID,
+    order: models.SalesOrder,
+    current_user: User,
+    *,
+    request_reason: str,
+) -> None:
+    if not order.customer_id:
+        order.credit_status = "NOT_REQUIRED"
+        return
+
+    # O lock no cliente serializa emissões concorrentes para o mesmo limite.
+    customer = repository.get_customer_by_id_for_update(
+        db,
+        order.customer_id,
+        organization_id,
+    )
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cliente não encontrado durante a análise de crédito.",
+        )
+    analysis = get_customer_credit_analysis(
+        db,
+        organization_id,
+        customer.id,
+        proposed_order_amount=Decimal(order.net_amount or 0),
+        exclude_order_id=order.id,
+    )
+    order.credit_limit_snapshot = analysis.credit_limit
+    order.credit_exposure_snapshot = analysis.utilized_amount
+    order.credit_excess_amount = analysis.excess_amount
+
+    if analysis.credit_limit <= 0:
+        order.credit_status = "NOT_REQUIRED"
+        return
+    if not analysis.requires_approval:
+        order.credit_status = "APPROVED"
+        return
+
+    order.credit_status = "PENDING"
+    approval = models.CreditApprovalRequest(
+        organization_id=organization_id,
+        sales_order_id=order.id,
+        customer_id=customer.id,
+        status="PENDING",
+        request_reason=request_reason,
+        credit_limit=analysis.credit_limit,
+        exposure_before_order=analysis.utilized_amount,
+        order_amount=Decimal(order.net_amount),
+        excess_amount=analysis.excess_amount,
+        requested_by_id=current_user.id,
+    )
+    order.credit_approval = approval
+    repository.save_credit_approval_request(db, approval)
+
+    order_document = _ensure_order_document(db, order, organization_id)
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="CREDIT_APPROVAL_REQUESTED",
+        previous_status=None,
+        new_status=None,
+        created_by_id=current_user.id,
+        event_metadata={
+            "approval_id": str(approval.id),
+            "credit_limit": str(analysis.credit_limit),
+            "exposure_before_order": str(analysis.utilized_amount),
+            "order_amount": str(order.net_amount),
+            "excess_amount": str(analysis.excess_amount),
+            "reason": request_reason,
+        },
+        idempotency_key=f"sales-order:{order.id}:credit-requested",
+    )
+
+
+def _assert_credit_released(order: models.SalesOrder) -> None:
+    if order.credit_status in {"PENDING", "REJECTED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "O pedido aguarda liberação de crédito. "
+                "A reserva, expedição e o faturamento permanecem bloqueados."
+            ),
+        )
+
+
 def _record_created_event(
     db: Session,
     *,
@@ -414,6 +844,7 @@ def create_sales_quote(
         opportunity_id=payload.opportunity_id,
         product_ids=[item.product_id for item in payload.items],
     )
+    commercial_settings = get_commercial_settings(db, organization_id)
 
     quote_num = f"ORC-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
     quote_id = uuid.uuid4()
@@ -424,11 +855,17 @@ def create_sales_quote(
         customer_id=payload.customer_id,
         opportunity_id=payload.opportunity_id,
         customer_name=payload.customer_name.strip(),
-        customer_document=payload.customer_document.strip() if payload.customer_document else None,
+        customer_document=(
+            customer.document
+            if customer
+            else payload.customer_document.strip() if payload.customer_document else None
+        ),
         customer_email=payload.customer_email.strip() if payload.customer_email else None,
         customer_phone=payload.customer_phone.strip() if payload.customer_phone else None,
-        payment_terms=payload.payment_terms or "À Vista",
-        valid_until=payload.valid_until or (date.today() + timedelta(days=15)),
+        payment_terms=payload.payment_terms or commercial_settings.default_payment_terms,
+        valid_until=payload.valid_until or (
+            date.today() + timedelta(days=commercial_settings.quote_validity_days)
+        ),
         status="DRAFT",
         notes=payload.notes,
         created_by_id=current_user.id
@@ -463,6 +900,7 @@ def create_sales_quote(
     quote.total_amount = total_gross
     quote.discount_amount = total_disc
     quote.net_amount = total_gross - total_disc
+    _validate_discount_limit(commercial_settings, total_gross, total_disc)
 
     saved_quote = repository.create_quote(db, quote)
     quote_document.issued_at = saved_quote.created_at
@@ -474,6 +912,12 @@ def create_sales_quote(
         native_id=saved_quote.id,
         status_value=saved_quote.status,
         created_by_id=current_user.id,
+    )
+    _apply_commercial_approval_rules(
+        db,
+        organization_id,
+        saved_quote,
+        current_user.id,
     )
 
     if opportunity:
@@ -524,7 +968,8 @@ def update_sales_quote(
     db: Session,
     quote_id: uuid.UUID,
     organization_id: uuid.UUID,
-    payload: schemas.SalesQuoteUpdate
+    payload: schemas.SalesQuoteUpdate,
+    current_user: User | None = None,
 ) -> models.SalesQuote:
     quote = repository.get_quote_by_id(db, quote_id, organization_id)
     if not quote:
@@ -610,8 +1055,21 @@ def update_sales_quote(
         quote.total_amount = total_gross
         quote.discount_amount = total_disc
         quote.net_amount = total_gross - total_disc
+        _validate_discount_limit(
+            get_commercial_settings(db, organization_id),
+            total_gross,
+            total_disc,
+        )
 
-    return repository.update_quote(db, quote)
+    saved_quote = repository.update_quote(db, quote)
+    if payload.items is not None or payload.payment_terms is not None:
+        _apply_commercial_approval_rules(
+            db,
+            organization_id,
+            saved_quote,
+            current_user.id if current_user else quote.created_by_id,
+        )
+    return saved_quote
 
 
 def update_sales_quote_status(
@@ -646,6 +1104,8 @@ def update_sales_quote_status(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Não é permitido alterar a cotação de {quote.status} para {normalized_status}.",
         )
+    if normalized_status == "APPROVED":
+        _assert_commercial_approval_released(quote)
 
     previous_status = quote.status
     quote_document = _ensure_quote_document(db, quote, organization_id)
@@ -696,6 +1156,10 @@ def cancel_sales_quote(
     quote_document = _ensure_quote_document(db, quote, organization_id)
     quote.status = "CANCELLED"
     quote.cancellation_reason = reason.strip()
+    for approval in quote.commercial_approvals:
+        if approval.status == "PENDING":
+            approval.status = "CANCELLED"
+    quote.commercial_approval_status = "NOT_REQUIRED"
 
     documents_service.record_event(
         db,
@@ -771,13 +1235,14 @@ def convert_quote_to_order(
             status_code=status.HTTP_409_CONFLICT,
             detail="Somente uma cotação aprovada pode ser convertida em pedido de venda.",
         )
+    _assert_commercial_approval_released(quote)
     if not quote.items:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Não é possível converter uma cotação sem itens.",
         )
 
-    _, opportunity = _validate_commercial_references(
+    customer, opportunity = _validate_commercial_references(
         db,
         organization_id,
         customer_id=quote.customer_id,
@@ -794,11 +1259,16 @@ def convert_quote_to_order(
         sales_quote_id=quote.id,
         opportunity_id=quote.opportunity_id,
         customer_name=quote.customer_name,
-        customer_document=quote.customer_document,
+        customer_document=quote.customer_document or (customer.document if customer else None),
         payment_terms=quote.payment_terms,
         delivery_status="PENDING",
         billing_status="PENDING",
         status="CONFIRMED",
+        commercial_approval_status=(
+            "APPROVED"
+            if quote.commercial_approval_status == "APPROVED"
+            else "NOT_REQUIRED"
+        ),
         total_amount=quote.total_amount,
         discount_amount=quote.discount_amount,
         net_amount=quote.net_amount,
@@ -826,6 +1296,14 @@ def convert_quote_to_order(
     )
     quote.status = "CONVERTED"
     db.add(order)
+    db.flush()
+    _apply_credit_analysis_to_order(
+        db,
+        organization_id,
+        order,
+        current_user,
+        request_reason="Solicitação automática na conversão da cotação.",
+    )
     if opportunity:
         opportunity.stage = "WON"
         db.add(opportunity)
@@ -862,6 +1340,10 @@ def delete_sales_quote(
     previous_status = quote.status
     quote_document = _ensure_quote_document(db, quote, organization_id)
     quote.status = "CANCELLED"
+    for approval in quote.commercial_approvals:
+        if approval.status == "PENDING":
+            approval.status = "CANCELLED"
+    quote.commercial_approval_status = "NOT_REQUIRED"
     documents_service.record_event(
         db,
         organization_id=organization_id,
@@ -904,13 +1386,14 @@ def create_sales_order(
             detail="Um pedido novo deve iniciar com entrega PENDING.",
         )
 
-    _, opportunity = _validate_commercial_references(
+    customer, opportunity = _validate_commercial_references(
         db,
         organization_id,
         customer_id=payload.customer_id,
         opportunity_id=payload.opportunity_id,
         product_ids=[item.product_id for item in payload.items],
     )
+    commercial_settings = get_commercial_settings(db, organization_id)
 
     order_num = f"PED-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
 
@@ -922,8 +1405,12 @@ def create_sales_order(
         sales_quote_id=None,
         opportunity_id=payload.opportunity_id,
         customer_name=payload.customer_name.strip(),
-        customer_document=payload.customer_document.strip() if payload.customer_document else None,
-        payment_terms=payload.payment_terms or "À Vista",
+        customer_document=(
+            customer.document
+            if customer
+            else payload.customer_document.strip() if payload.customer_document else None
+        ),
+        payment_terms=payload.payment_terms or commercial_settings.default_payment_terms,
         delivery_status="PENDING",
         billing_status="PENDING",
         status="CONFIRMED",
@@ -960,6 +1447,7 @@ def create_sales_order(
     order.total_amount = total_gross
     order.discount_amount = total_disc
     order.net_amount = total_gross - total_disc
+    _validate_discount_limit(commercial_settings, total_gross, total_disc)
 
     saved_order = repository.create_order(db, order)
     order_document.issued_at = saved_order.created_at
@@ -972,6 +1460,19 @@ def create_sales_order(
         status_value=saved_order.status,
         created_by_id=current_user.id,
         event_metadata={"origin": "DIRECT"},
+    )
+    _apply_commercial_approval_rules(
+        db,
+        organization_id,
+        saved_order,
+        current_user.id,
+    )
+    _apply_credit_analysis_to_order(
+        db,
+        organization_id,
+        saved_order,
+        current_user,
+        request_reason="Solicitação automática na emissão do pedido.",
     )
     if opportunity:
         opportunity.stage = "WON"
@@ -989,6 +1490,286 @@ def get_sales_order(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID
 
 def list_sales_orders(db: Session, organization_id: uuid.UUID) -> list[models.SalesOrder]:
     return repository.list_orders(db, organization_id)
+
+
+def list_credit_approval_requests(
+    db: Session,
+    organization_id: uuid.UUID,
+    approval_status: str | None = None,
+) -> list[models.CreditApprovalRequest]:
+    normalized_status = approval_status.strip().upper() if approval_status else None
+    if normalized_status and normalized_status not in {
+        "PENDING", "APPROVED", "REJECTED", "CANCELLED"
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Status de aprovação de crédito inválido.",
+        )
+    return repository.list_credit_approval_requests(
+        db,
+        organization_id,
+        normalized_status,
+    )
+
+
+def list_commercial_approval_requests(
+    db: Session,
+    organization_id: uuid.UUID,
+    approval_status: str | None = None,
+    approval_type: str | None = None,
+) -> list[models.CommercialApprovalRequest]:
+    normalized_status = approval_status.strip().upper() if approval_status else None
+    normalized_type = approval_type.strip().upper() if approval_type else None
+    if normalized_status and normalized_status not in {
+        "PENDING", "APPROVED", "REJECTED", "CANCELLED"
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Status de aprovação comercial inválido.",
+        )
+    if normalized_type and normalized_type not in {
+        "DISCOUNT", "MARGIN", "PAYMENT_TERM"
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tipo de aprovação comercial inválido.",
+        )
+    return repository.list_commercial_approval_requests(
+        db,
+        organization_id,
+        normalized_status,
+        normalized_type,
+    )
+
+
+def decide_commercial_approval(
+    db: Session,
+    approval_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+    payload: schemas.CreditApprovalDecision,
+) -> models.CommercialApprovalRequest:
+    _validate_current_user_tenant(current_user, organization_id)
+    approval = repository.get_commercial_approval_by_id_for_update(
+        db, approval_id, organization_id
+    )
+    if not approval:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Solicitação de aprovação comercial não encontrada.",
+        )
+    if approval.status != "PENDING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Esta solicitação comercial já foi decidida.",
+        )
+
+    document = approval.quote or approval.order
+    if not document or document.status in {"CANCELLED", "CONVERTED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O documento não pode mais receber uma decisão comercial.",
+        )
+
+    approval.status = "APPROVED" if payload.approved else "REJECTED"
+    approval.decision_reason = payload.reason.strip()
+    approval.decided_by_id = current_user.id
+    approval.decided_at = utcnow()
+
+    is_quote = approval.sales_quote_id is not None
+    approvals = repository.list_commercial_approvals_for_document(
+        db,
+        organization_id,
+        quote_id=approval.sales_quote_id if is_quote else None,
+        order_id=approval.sales_order_id if not is_quote else None,
+    )
+    _recalculate_commercial_approval_status(document, approvals)
+    business_document = (
+        _ensure_quote_document(db, document, organization_id)
+        if is_quote
+        else _ensure_order_document(db, document, organization_id)
+    )
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=business_document,
+        event_type=(
+            "COMMERCIAL_APPROVED" if payload.approved else "COMMERCIAL_REJECTED"
+        ),
+        previous_status=None,
+        new_status=None,
+        created_by_id=current_user.id,
+        event_metadata={
+            "approval_id": str(approval.id),
+            "approval_type": approval.approval_type,
+            "metric_value": str(approval.metric_value),
+            "threshold_value": str(approval.threshold_value),
+            "reason": approval.decision_reason,
+        },
+        idempotency_key=(
+            f"sales-commercial-approval:{approval.id}:decision:{approval.status}"
+        ),
+    )
+    db.flush()
+    return approval
+
+
+def request_credit_approval(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+    reason: str,
+) -> models.CreditApprovalRequest:
+    _validate_current_user_tenant(current_user, organization_id)
+    order = repository.get_order_by_id_for_update(db, order_id, organization_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pedido de venda não encontrado.",
+        )
+    if order.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Um pedido cancelado não pode solicitar crédito.",
+        )
+    if not order.customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido precisa estar vinculado a um cliente cadastrado.",
+        )
+
+    customer = repository.get_customer_by_id_for_update(
+        db,
+        order.customer_id,
+        organization_id,
+    )
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    analysis = get_customer_credit_analysis(
+        db,
+        organization_id,
+        customer.id,
+        proposed_order_amount=Decimal(order.net_amount),
+        exclude_order_id=order.id,
+    )
+    if analysis.credit_limit <= 0 or not analysis.requires_approval:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido não excede o limite atual e não requer liberação.",
+        )
+
+    approval = repository.get_credit_approval_by_order_id(
+        db,
+        order.id,
+        organization_id,
+    )
+    if approval and approval.status == "PENDING":
+        approval.request_reason = reason.strip()
+        approval.requested_by_id = current_user.id
+    elif approval:
+        approval.status = "PENDING"
+        approval.request_reason = reason.strip()
+        approval.decision_reason = None
+        approval.decided_by_id = None
+        approval.decided_at = None
+    else:
+        approval = models.CreditApprovalRequest(
+            organization_id=organization_id,
+            sales_order_id=order.id,
+            customer_id=customer.id,
+            requested_by_id=current_user.id,
+            request_reason=reason.strip(),
+        )
+
+    approval.credit_limit = analysis.credit_limit
+    approval.exposure_before_order = analysis.utilized_amount
+    approval.order_amount = Decimal(order.net_amount)
+    approval.excess_amount = analysis.excess_amount
+    order.credit_status = "PENDING"
+    order.credit_limit_snapshot = analysis.credit_limit
+    order.credit_exposure_snapshot = analysis.utilized_amount
+    order.credit_excess_amount = analysis.excess_amount
+    repository.save_credit_approval_request(db, approval)
+
+    order_document = _ensure_order_document(db, order, organization_id)
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type="CREDIT_APPROVAL_REQUESTED",
+        previous_status=None,
+        new_status=None,
+        created_by_id=current_user.id,
+        event_metadata={
+            "approval_id": str(approval.id),
+            "excess_amount": str(approval.excess_amount),
+            "reason": approval.request_reason,
+        },
+        idempotency_key=f"sales-order:{order.id}:credit-request:{uuid.uuid4().hex}",
+    )
+    db.flush()
+    return approval
+
+
+def decide_credit_approval(
+    db: Session,
+    approval_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+    payload: schemas.CreditApprovalDecision,
+) -> models.CreditApprovalRequest:
+    _validate_current_user_tenant(current_user, organization_id)
+    approval = repository.get_credit_approval_by_id_for_update(
+        db,
+        approval_id,
+        organization_id,
+    )
+    if not approval:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Solicitação de crédito não encontrada.",
+        )
+    if approval.status != "PENDING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Esta solicitação de crédito já foi decidida.",
+        )
+
+    order = approval.order
+    if order.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido foi cancelado e não pode receber decisão de crédito.",
+        )
+
+    previous_status = approval.status
+    approval.status = "APPROVED" if payload.approved else "REJECTED"
+    approval.decision_reason = payload.reason.strip()
+    approval.decided_by_id = current_user.id
+    approval.decided_at = utcnow()
+    order.credit_status = approval.status
+
+    order_document = _ensure_order_document(db, order, organization_id)
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=order_document,
+        event_type=("CREDIT_APPROVED" if payload.approved else "CREDIT_REJECTED"),
+        previous_status=None,
+        new_status=None,
+        created_by_id=current_user.id,
+        event_metadata={
+            "approval_id": str(approval.id),
+            "previous_credit_status": previous_status,
+            "new_credit_status": approval.status,
+            "excess_amount": str(approval.excess_amount),
+            "reason": approval.decision_reason,
+        },
+        idempotency_key=f"sales-order:{order.id}:credit-decision:{approval.status}",
+    )
+    db.flush()
+    return approval
 
 
 def delete_sales_order(
@@ -1032,6 +1813,12 @@ def delete_sales_order(
     )
     order.status = "CANCELLED"
     order.delivery_status = "CANCELLED"
+    if order.credit_approval and order.credit_approval.status == "PENDING":
+        order.credit_approval.status = "CANCELLED"
+    for approval in order.commercial_approvals:
+        if approval.status == "PENDING":
+            approval.status = "CANCELLED"
+    order.commercial_approval_status = "NOT_REQUIRED"
     if reason:
         order.cancellation_reason = reason.strip()
 
@@ -1075,7 +1862,9 @@ def update_sales_order_status(
             )
         if order.customer_id != customer.id:
             order.customer_id = customer.id
+            order.customer_document = customer.document
             updated_fields.append("customer_id")
+            updated_fields.append("customer_document")
 
     if payload.customer_name is not None:
         customer_name = payload.customer_name.strip()
@@ -1100,6 +1889,11 @@ def update_sales_order_status(
             order.payment_terms = payment_terms
             updated_fields.append("payment_terms")
 
+    if "payment_terms" in updated_fields:
+        _apply_commercial_approval_rules(
+            db, organization_id, order, current_user.id
+        )
+
     if payload.status is not None:
         norm_status = payload.status.strip().upper()
         if norm_status == "CANCELLED":
@@ -1113,6 +1907,9 @@ def update_sales_order_status(
                 detail="Status comercial do pedido inválido.",
             )
         if order.status != norm_status:
+            if norm_status == "COMPLETED":
+                _assert_credit_released(order)
+                _assert_commercial_approval_released(order)
             order.status = norm_status
             updated_fields.append("status")
 
@@ -1129,6 +1926,9 @@ def update_sales_order_status(
                 detail="Status de entrega do pedido inválido.",
             )
         if order.delivery_status != norm_deliv:
+            if norm_deliv in {"RESERVED", "DISPATCHED", "DELIVERED"}:
+                _assert_credit_released(order)
+                _assert_commercial_approval_released(order)
             order.delivery_status = norm_deliv
             updated_fields.append("delivery_status")
 
@@ -1189,6 +1989,9 @@ def request_order_billing(
             status_code=status.HTTP_409_CONFLICT,
             detail="Não é possível faturar um pedido cancelado.",
         )
+
+    _assert_credit_released(order)
+    _assert_commercial_approval_released(order)
 
     from controlb.modules.billing import service as billing_service, schemas as billing_schemas
     
@@ -1395,6 +2198,11 @@ def process_pos_sale(
         db.add(movement)
 
     sale.total_amount = total_gross
+    _validate_discount_limit(
+        get_commercial_settings(db, organization_id),
+        total_gross,
+        payload.discount_amount,
+    )
     sale.net_amount = max(Decimal("0.00"), total_gross - payload.discount_amount)
 
     saved_sale = repository.create_pos_sale(db, sale)
@@ -1465,8 +2273,25 @@ def create_sales_goal(
     current_user: User,
     payload: schemas.SalesGoalCreate
 ) -> models.SalesGoal:
-    user = db.query(User).filter(User.id == payload.user_id, User.organization_id == organization_id).first()
-    seller_name = user.full_name if user else payload.seller_name or "Vendedor"
+    user = db.query(User).filter(
+        User.id == payload.user_id,
+        User.organization_id == organization_id,
+        User.is_active == True,
+        User.is_seller == True,
+    ).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O vendedor deve ser um usuário ativo da organização atual.",
+        )
+    seller_name = user.full_name
+
+    commercial_settings = get_commercial_settings(db, organization_id)
+    commission_percent = (
+        payload.commission_percent
+        if "commission_percent" in payload.model_fields_set
+        else commercial_settings.default_commission_percent
+    )
 
     goal = models.SalesGoal(
         organization_id=organization_id,
@@ -1475,7 +2300,7 @@ def create_sales_goal(
         month=payload.month,
         year=payload.year,
         target_amount=payload.target_amount,
-        commission_percent=payload.commission_percent
+        commission_percent=commission_percent
     )
     return repository.create_sales_goal(db, goal)
 
@@ -1699,13 +2524,13 @@ def list_sellers(db: Session, organization_id: uuid.UUID) -> list[schemas.Seller
     Retorna todos os colaboradores que atuam como Vendedores na organização.
     Inclui a equipe comercial (SALES) vinculada.
     """
-    from controlb.modules.identity.models import User, Team
+    from controlb.modules.identity.models import User
 
-    # Busca usuários que são vendedores ou pertencem a equipe comercial
+    # Pertencer a uma equipe comercial concede escopo, mas nao transforma o lider em vendedor.
     users = db.query(User).filter(
         User.organization_id == organization_id,
         User.is_active == True,
-        (User.is_seller == True) | (User.teams.any(Team.module_category == "SALES"))
+        User.is_seller == True,
     ).all()
 
     # Fallback caso a base ainda não tenha marcado nenhum vendedor
