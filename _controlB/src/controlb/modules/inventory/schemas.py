@@ -11,7 +11,7 @@ Define contratos de validação e serialização para:
 import uuid
 from decimal import Decimal
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -138,8 +138,10 @@ class StockAdjustmentCreate(BaseModel):
     
     # Justificativa & Auditoria
     reason: str | None = Field(None, description="Motivo padronizado da movimentação")
+    outbound_reason: str | None = Field(None, description="Motivo específico de saída: loss_damage, internal_consumption, supplier_return, inventory_adjustment")
     notes: str | None = Field(None, description="Justificativa formal ou observações detalhadas da conferência")
     auditor_name: str | None = Field(None, description="Nome do responsável / auditor pela contagem física")
+    fiscal_document_id: uuid.UUID | None = None
 
 
 class StockMovementResponse(BaseModel):
@@ -147,11 +149,21 @@ class StockMovementResponse(BaseModel):
 
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     product_id: uuid.UUID
+    receipt_id: uuid.UUID | None = None
+    delivery_id: uuid.UUID | None = None
+    transfer_id: uuid.UUID | None = None
+    fiscal_document_id: uuid.UUID | None = None
+    payable_id: uuid.UUID | None = None
+    location_id: uuid.UUID | None = None
+    source_location_id: uuid.UUID | None = None
+    destination_location_id: uuid.UUID | None = None
     movement_type: str
     quantity: Decimal
     unit_cost: Decimal
     balance_after: Decimal
+    location_balance_after: Decimal | None = None
     reference_doc: str | None = None
     invoice_attachment: str | None = None
     notes: str | None = None
@@ -183,14 +195,118 @@ class StockReservationResponse(BaseModel):
     sales_order_id: uuid.UUID
     document_id: uuid.UUID
     reservation_number: str
-    status: Literal["RESERVED", "RELEASED"]
+    status: Literal["RESERVED", "RELEASED", "CONSUMED"]
     status_version: int
     created_by_id: uuid.UUID | None = None
     released_by_id: uuid.UUID | None = None
     released_at: datetime | None = None
+    consumed_by_id: uuid.UUID | None = None
+    consumed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     items: list[StockReservationItemResponse]
+
+
+class InventoryDeliveryItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    delivery_id: uuid.UUID
+    product_id: uuid.UUID
+    quantity: Decimal
+    created_at: datetime
+    product: ProductResponse | None = None
+
+
+class InventoryDeliveryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    sales_order_id: uuid.UUID
+    reservation_id: uuid.UUID | None = None
+    document_id: uuid.UUID
+    fiscal_document_id: uuid.UUID | None = None
+    delivery_number: str
+    status: Literal["DISPATCHED", "DELIVERED", "CANCELLED"]
+    stock_posted: bool
+    dispatched_at: datetime
+    delivered_at: datetime | None = None
+    created_by_id: uuid.UUID | None = None
+    delivered_by_id: uuid.UUID | None = None
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[InventoryDeliveryItemResponse]
+
+
+class InventoryLocationCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=50)
+    name: str = Field(..., min_length=1, max_length=150)
+    description: str | None = None
+
+
+class InventoryLocationResponse(InventoryLocationCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    is_default: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class InventoryBalanceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    product_id: uuid.UUID
+    location_id: uuid.UUID
+    quantity: Decimal
+    updated_at: datetime
+
+
+class InventoryTransferItemCreate(BaseModel):
+    product_id: uuid.UUID
+    quantity: Decimal = Field(..., gt=0)
+
+
+class InventoryTransferCreate(BaseModel):
+    source_location_id: uuid.UUID
+    destination_location_id: uuid.UUID
+    items: list[InventoryTransferItemCreate] = Field(..., min_length=1)
+    notes: str | None = None
+
+
+class InventoryTransferItemResponse(InventoryTransferItemCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    transfer_id: uuid.UUID
+    created_at: datetime
+    product: ProductResponse | None = None
+
+
+class InventoryTransferResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    document_id: uuid.UUID
+    transfer_number: str
+    source_location_id: uuid.UUID
+    destination_location_id: uuid.UUID
+    status: Literal["COMPLETED", "CANCELLED"]
+    completed_by_id: uuid.UUID | None = None
+    completed_at: datetime
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[InventoryTransferItemResponse]
 
 
 class ProductAvailabilityResponse(BaseModel):
@@ -207,19 +323,35 @@ class ProductAvailabilityResponse(BaseModel):
 # ==============================================================================
 
 class InventoryImportItemDetail(BaseModel):
+    id: uuid.UUID | None = None
     code: str
     name: str
     barcode: str | None = None
+    sku: str | None = None
     ncm: str | None = None
+    unit_of_measure: str = "UN"
     previous_stock: Decimal
     new_stock: Decimal
     delta_stock: Decimal
-    action_type: str  # 'created', 'sale_detected', 'entry_detected', 'unchanged'
-    cost_price: Decimal
-    sale_price: Decimal
+    action_type: str  # 'created', 'sale_detected', 'entry_detected', 'stagnant_unchanged', 'zero_stock_unchanged'
+    previous_cost_price: Decimal | None = None
+    new_cost_price: Decimal
+    # Ausência de variação é representada por ``None`` no serviço para que o
+    # consumidor diferencie "não houve variação" de um valor calculado igual a
+    # zero. O contrato HTTP precisa refletir esse estado válido.
+    cost_variation_amount: Decimal | None = None
+    cost_variation_percent: Decimal | None = None
+    previous_sale_price: Decimal | None = None
+    new_sale_price: Decimal
+    sale_variation_amount: Decimal | None = None
+    sale_variation_percent: Decimal | None = None
+    stagnant_value: Decimal = Decimal("0.00")
+    estimated_sales_revenue: Decimal = Decimal("0.00")
 
 
 class InventoryImportSummaryResponse(BaseModel):
+    batch_id: uuid.UUID | None = None
+    batch_number: str | None = None
     total_products_read: int
     created_products_count: int
     updated_products_count: int
@@ -227,14 +359,109 @@ class InventoryImportSummaryResponse(BaseModel):
     
     sales_identified_count: int
     total_sales_quantity: Decimal
+    total_sales_estimated_revenue: Decimal = Decimal("0.00")
     entries_identified_count: int
     total_entries_quantity: Decimal
+    total_entries_cost: Decimal = Decimal("0.00")
+
+    cost_increases_count: int = 0
+    cost_decreases_count: int = 0
+    stagnant_products_count: int = 0
+    total_stagnant_capital: Decimal = Decimal("0.00")
     
     total_cost_value: Decimal
     total_sale_value: Decimal
     inventory_date: str | None = None
     message: str
-    sample_items: list[InventoryImportItemDetail] = []
+    sample_items: list[InventoryImportItemDetail] = Field(default_factory=list)
+
+
+class InventoryImportBatchResponse(BaseModel):
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    document_id: uuid.UUID | None = None
+    batch_number: str
+    filename: str | None = None
+    inventory_date: str | None = None
+
+    total_products_read: int
+    created_products_count: int
+    updated_products_count: int
+    created_categories_count: int
+
+    sales_identified_count: int
+    total_sales_quantity: Decimal
+    total_sales_estimated_revenue: Decimal
+
+    entries_identified_count: int
+    total_entries_quantity: Decimal
+    total_entries_cost: Decimal
+
+    cost_increases_count: int
+    cost_decreases_count: int
+
+    stagnant_products_count: int
+    total_stagnant_capital: Decimal
+
+    total_inventory_cost: Decimal
+    total_inventory_sale: Decimal
+
+    imported_by_id: uuid.UUID | None = None
+    notes: str | None = None
+    created_at: datetime
+    items: list[InventoryImportItemDetail] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InventoryImportBatchListItem(BaseModel):
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    document_id: uuid.UUID | None = None
+    batch_number: str
+    filename: str | None = None
+    inventory_date: str | None = None
+
+    total_products_read: int
+    created_products_count: int
+    updated_products_count: int
+    sales_identified_count: int
+    total_sales_quantity: Decimal
+    total_sales_estimated_revenue: Decimal
+    entries_identified_count: int
+    total_entries_quantity: Decimal
+    cost_increases_count: int
+    cost_decreases_count: int
+    stagnant_products_count: int
+    total_stagnant_capital: Decimal
+    total_inventory_cost: Decimal
+    total_inventory_sale: Decimal
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StagnantProductItem(BaseModel):
+    product_id: uuid.UUID
+    code: str | None = None
+    sku: str | None = None
+    name: str
+    category_name: str | None = None
+    current_stock: Decimal
+    unit_of_measure: str
+    cost_price: Decimal
+    sale_price: Decimal
+    stagnant_capital: Decimal
+    last_movement_date: datetime | None = None
+    days_without_sale: int | None = None
+
+
+class StagnantInventoryReportResponse(BaseModel):
+    total_stagnant_products: int
+    total_stagnant_units: Decimal
+    total_stagnant_capital: Decimal
+    stagnant_by_category: list[dict[str, Any]] = []
+    top_stagnant_products: list[StagnantProductItem] = []
 
 
 # Aliases para compatibilidade

@@ -13,6 +13,37 @@ from controlb.modules.documents import repository, schemas
 from controlb.modules.documents.models import BusinessDocument, DocumentEvent, DocumentRelation
 from controlb.modules.identity.models import User
 
+TERMINAL_DOCUMENT_STATUSES = frozenset(
+    {
+        "CANCELLED",
+        "CLOSED",
+        "COMPLETED",
+        "CONVERTED",
+        "DELETED",
+        "DELIVERED",
+        "DISQUALIFIED",
+        "EXPIRED",
+        "INVOICED",
+        "LOST",
+        "ORDERED",
+        "PAID",
+        "RECEIVED",
+        "REJECTED",
+        "WON",
+    }
+)
+
+
+def _project_event_status(document: BusinessDocument, new_status: str | None) -> None:
+    if not new_status:
+        return
+    normalized_status = new_status.upper()
+    document.current_status = normalized_status
+    if normalized_status in TERMINAL_DOCUMENT_STATUSES:
+        if document.completed_at is None:
+            document.completed_at = datetime.now(UTC)
+    else:
+        document.completed_at = None
 
 # ==============================================================================
 # 1. GESTÃO CENTRALIZADA DE DOCUMENTOS TRANSACIONAIS (CRUD & Ciclo de Vida)
@@ -62,6 +93,8 @@ def update_document(
     """Atualiza metadados ou status do documento registrando eventos de transição."""
     document = get_document(db, document_id, organization_id)
     prev_status = document.current_status
+    prev_priority = document.priority
+    prev_responsible_id = document.responsible_id
     user_id = current_user.id if current_user else None
 
     updated = repository.update_document(db, document, payload)
@@ -76,6 +109,47 @@ def update_document(
             previous_status=prev_status,
             new_status=updated.current_status,
             event_metadata={"updated_fields": list(payload.model_dump(exclude_unset=True).keys())},
+            created_by_id=user_id,
+        )
+        _project_event_status(updated, updated.current_status)
+
+    if (
+        "responsible_id" in payload.model_fields_set
+        and updated.responsible_id != prev_responsible_id
+    ):
+        repository.create_event(
+            db,
+            organization_id=organization_id,
+            document_id=document.id,
+            event_type="RESPONSIBLE_CHANGED",
+            previous_status=None,
+            new_status=None,
+            event_metadata={
+                "previous_responsible_id": (
+                    str(prev_responsible_id) if prev_responsible_id else None
+                ),
+                "new_responsible_id": (
+                    str(updated.responsible_id) if updated.responsible_id else None
+                ),
+            },
+            created_by_id=user_id,
+        )
+
+    if (
+        "priority" in payload.model_fields_set
+        and updated.priority != prev_priority
+    ):
+        repository.create_event(
+            db,
+            organization_id=organization_id,
+            document_id=document.id,
+            event_type="PRIORITY_CHANGED",
+            previous_status=None,
+            new_status=None,
+            event_metadata={
+                "previous_priority": prev_priority,
+                "new_priority": updated.priority,
+            },
             created_by_id=user_id,
         )
 
@@ -97,8 +171,7 @@ def change_document_status(
     user_id = current_user.id if current_user else None
 
     document.current_status = norm_status
-    if norm_status in ("COMPLETED", "DELIVERED", "INVOICED", "CLOSED"):
-        document.completed_at = datetime.now(UTC)
+    _project_event_status(document, norm_status)
 
     meta: dict[str, Any] = {}
     if reason:
@@ -151,6 +224,10 @@ def list_documents(
     db: Session,
     organization_id: uuid.UUID,
     params: schemas.DocumentFilterParams | None = None,
+    *,
+    authorized_document_types: set[str] | None = None,
+    mapped_document_types: set[str] | None = None,
+    allow_unmapped_document_types: bool = False,
 ) -> list[BusinessDocument]:
     """Consulta transversal com filtros de categoria, módulo, status, responsável e busca textual."""
     p = params or schemas.DocumentFilterParams()
@@ -162,6 +239,9 @@ def list_documents(
         current_status=p.current_status,
         responsible_id=p.responsible_id,
         search=p.search,
+        authorized_document_types=authorized_document_types,
+        mapped_document_types=mapped_document_types,
+        allow_unmapped_document_types=allow_unmapped_document_types,
         limit=p.limit,
         offset=p.offset,
     )
@@ -359,7 +439,21 @@ def record_event(
             db, organization_id, idempotency_key
         )
         if existing:
+            _project_event_status(document, existing.new_status)
             return existing
+    if event_type.strip().upper() == "CREATED":
+        existing_created = next(
+            (
+                event
+                for event in repository.list_events_by_document(
+                    db, document.id, organization_id
+                )
+                if event.event_type == "CREATED"
+            ),
+            None,
+        )
+        if existing_created:
+            return existing_created
 
     event = repository.create_event(
         db,
@@ -372,8 +466,7 @@ def record_event(
         idempotency_key=idempotency_key,
         created_by_id=created_by_id,
     )
-    if new_status:
-        document.current_status = new_status.upper()
+    _project_event_status(document, new_status)
     return event
 
 
@@ -422,19 +515,7 @@ def _auto_ensure_native_document(
                     Opportunity.organization_id == organization_id,
                 ).first()
                 if opp:
-                    opp_doc = ensure_document(
-                        db,
-                        organization_id=organization_id,
-                        category="crm.opportunity",
-                        document_type="OPPORTUNITY",
-                        native_id=opp.id,
-                        document_number=opp.title,
-                        title=opp.title,
-                        current_status=opp.stage,
-                        origin_module="CRM",
-                        created_by_id=opp.assigned_to_id,
-                        issued_at=opp.created_at,
-                    )
+                    opp_doc = get_document(db, opp.document_id, organization_id)
                     relate_documents(
                         db,
                         organization_id=organization_id,
@@ -508,38 +589,14 @@ def _auto_ensure_native_document(
             Opportunity.organization_id == organization_id,
         ).first()
         if opp:
-            doc = ensure_document(
-                db,
-                organization_id=organization_id,
-                category="crm.opportunity",
-                document_type="OPPORTUNITY",
-                native_id=opp.id,
-                document_number=opp.title,
-                title=opp.title,
-                current_status=opp.stage,
-                origin_module="CRM",
-                created_by_id=opp.assigned_to_id,
-                issued_at=opp.created_at,
-            )
+            doc = get_document(db, opp.document_id, organization_id)
             if opp.lead_id:
                 lead = db.query(Lead).filter(
                     Lead.id == opp.lead_id,
                     Lead.organization_id == organization_id,
                 ).first()
                 if lead:
-                    lead_doc = ensure_document(
-                        db,
-                        organization_id=organization_id,
-                        category="crm.lead",
-                        document_type="LEAD",
-                        native_id=lead.id,
-                        document_number=lead.name,
-                        title=lead.name,
-                        current_status=lead.status,
-                        origin_module="CRM",
-                        created_by_id=lead.assigned_to_id,
-                        issued_at=lead.created_at,
-                    )
+                    lead_doc = get_document(db, lead.document_id, organization_id)
                     relate_documents(
                         db,
                         organization_id=organization_id,
@@ -556,64 +613,72 @@ def _auto_ensure_native_document(
             PurchaseRequest.organization_id == organization_id,
         ).first()
         if pr:
-            doc = ensure_document(
+            doc = get_document(db, pr.document_id, organization_id)
+            return doc
+
+    elif norm_type == "PURCHASE_QUOTATION":
+        from controlb.modules.purchasing.models import QuotationProcess
+        quotation = db.query(QuotationProcess).filter(
+            QuotationProcess.id == native_id,
+            QuotationProcess.organization_id == organization_id,
+        ).first()
+        if quotation:
+            doc = get_document(db, quotation.document_id, organization_id)
+            request_doc = get_document(
+                db, quotation.purchase_request.document_id, organization_id
+            )
+            relate_documents(
                 db,
                 organization_id=organization_id,
-                category="purchase.request",
-                document_type="PURCHASE_REQUEST",
-                native_id=pr.id,
-                document_number=pr.request_number,
-                title=f"Solicitação {pr.request_number}",
-                current_status=pr.status,
-                origin_module="PURCHASING",
-                created_by_id=pr.requester_id,
-                issued_at=pr.created_at,
+                parent_document=request_doc,
+                child_document=doc,
+                relation_type="generated",
             )
             return doc
 
     elif norm_type == "PURCHASE_ORDER":
-        from controlb.modules.purchasing.models import PurchaseOrder, PurchaseRequest
+        from controlb.modules.purchasing.models import (
+            PurchaseOrder,
+            PurchaseRequest,
+            QuotationProcess,
+            SupplierQuote,
+        )
         po = db.query(PurchaseOrder).filter(
             PurchaseOrder.id == native_id,
             PurchaseOrder.organization_id == organization_id,
         ).first()
         if po:
-            doc = ensure_document(
-                db,
-                organization_id=organization_id,
-                category="purchase.order",
-                document_type="PURCHASE_ORDER",
-                native_id=po.id,
-                document_number=po.order_number,
-                title=f"Ordem de Compra {po.order_number}",
-                current_status=po.status,
-                origin_module="PURCHASING",
-                created_by_id=po.buyer_id,
-                issued_at=po.created_at,
-            )
+            doc = get_document(db, po.document_id, organization_id)
             if po.purchase_request_id:
                 pr = db.query(PurchaseRequest).filter(
                     PurchaseRequest.id == po.purchase_request_id,
                     PurchaseRequest.organization_id == organization_id,
                 ).first()
                 if pr:
-                    pr_doc = ensure_document(
-                        db,
-                        organization_id=organization_id,
-                        category="purchase.request",
-                        document_type="PURCHASE_REQUEST",
-                        native_id=pr.id,
-                        document_number=pr.request_number,
-                        title=f"Solicitação {pr.request_number}",
-                        current_status=pr.status,
-                        origin_module="PURCHASING",
-                        created_by_id=pr.requester_id,
-                        issued_at=pr.created_at,
-                    )
+                    pr_doc = get_document(db, pr.document_id, organization_id)
                     relate_documents(
                         db,
                         organization_id=organization_id,
                         parent_document=pr_doc,
+                        child_document=doc,
+                        relation_type="generated",
+                    )
+            if po.supplier_quote_id:
+                quotation = db.query(QuotationProcess).join(
+                    SupplierQuote,
+                    SupplierQuote.quotation_process_id == QuotationProcess.id,
+                ).filter(
+                    SupplierQuote.id == po.supplier_quote_id,
+                    QuotationProcess.organization_id == organization_id,
+                ).first()
+                if quotation:
+                    quotation_doc = get_document(
+                        db, quotation.document_id, organization_id
+                    )
+                    relate_documents(
+                        db,
+                        organization_id=organization_id,
+                        parent_document=quotation_doc,
                         child_document=doc,
                         relation_type="generated",
                     )

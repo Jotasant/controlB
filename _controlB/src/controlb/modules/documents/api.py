@@ -7,28 +7,69 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from controlb.db import get_db
-from controlb.modules.documents import schemas, service
+from controlb.modules.documents import schemas, security, service
 from controlb.modules.identity import service as identity_service
 from controlb.modules.identity.models import User
 
 router = APIRouter(prefix="/documents", tags=["Documentos & Rastreabilidade Transversal"])
 
-DOCUMENT_VIEW_PERMISSIONS = {
-    "SALES_QUOTE": "sales:view",
-    "SALES_ORDER": "sales:view",
-    "STOCK_RESERVATION": "products:view",
-    "OPPORTUNITY": "crm:view",
-    "LEAD": "crm:view",
-    "PURCHASE_REQUEST": "purchasing:view",
-    "PURCHASE_ORDER": "purchasing:view",
-    "FISCAL_DOCUMENT": "billing:view",
-    "PAYABLE": "finance:payables",
-    "RECEIVABLE": "finance:receivables",
-}
+def _user_permissions(current_user: User) -> set[str]:
+    return set(identity_service.get_user_permissions(current_user))
+
+
+def _require_document_access(document_type: str, user_permissions: set[str]) -> None:
+    if security.can_view_document_type(document_type, user_permissions):
+        return
+    required_permission = security.required_view_permission(document_type)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Acesso negado: permissão '{required_permission}' necessária.",
+    )
+
+
+def _filter_tree_by_permissions(
+    tree: schemas.DocumentTreeResponse,
+    user_permissions: set[str],
+) -> schemas.DocumentTreeResponse:
+    for field in ("origin", "previous", "derived", "related", "dependencies"):
+        nodes = getattr(tree, field)
+        setattr(
+            tree,
+            field,
+            [
+                node
+                for node in nodes
+                if security.can_view_document_type(node.document_type, user_permissions)
+            ],
+        )
+    return tree
+
+
+def _filter_chain_by_permissions(
+    chain: schemas.DocumentChainResponse,
+    user_permissions: set[str],
+) -> schemas.DocumentChainResponse:
+    visible_documents = [
+        document
+        for document in chain.documents
+        if security.can_view_document_type(document.document_type, user_permissions)
+    ]
+    visible_ids = {document.id for document in visible_documents}
+    return schemas.DocumentChainResponse(
+        root_document_id=chain.root_document_id,
+        documents=visible_documents,
+        relations=[
+            relation
+            for relation in chain.relations
+            if relation.parent_document_id in visible_ids
+            and relation.child_document_id in visible_ids
+        ],
+        events=[event for event in chain.events if event.document_id in visible_ids],
+    )
 
 
 @router.get(
-    "",
+    "/",
     response_model=list[schemas.DocumentResponse],
     summary="Pesquisa transversal de documentos com filtros",
 )
@@ -52,7 +93,19 @@ def list_documents(
         limit=limit,
         offset=offset,
     )
-    return service.list_documents(db, current_user.organization_id, params)
+    user_permissions = _user_permissions(current_user)
+    authorized_types = security.authorized_mapped_document_types(user_permissions)
+    mapped_types = (
+        None if authorized_types is None else set(security.DOCUMENT_VIEW_PERMISSIONS)
+    )
+    return service.list_documents(
+        db,
+        current_user.organization_id,
+        params,
+        authorized_document_types=authorized_types,
+        mapped_document_types=mapped_types,
+        allow_unmapped_document_types="documents:view" in user_permissions,
+    )
 
 
 @router.get(
@@ -65,7 +118,9 @@ def get_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(identity_service.get_current_user),
 ):
-    return service.get_document(db, document_id, current_user.organization_id)
+    document = service.get_document(db, document_id, current_user.organization_id)
+    _require_document_access(document.document_type, _user_permissions(current_user))
+    return document
 
 
 @router.get(
@@ -78,7 +133,10 @@ def get_document_tree(
     db: Session = Depends(get_db),
     current_user: User = Depends(identity_service.get_current_user),
 ):
-    return service.get_document_tree(db, current_user.organization_id, document_id)
+    tree = service.get_document_tree(db, current_user.organization_id, document_id)
+    user_permissions = _user_permissions(current_user)
+    _require_document_access(tree.document.document_type, user_permissions)
+    return _filter_tree_by_permissions(tree, user_permissions)
 
 
 @router.get(
@@ -93,16 +151,12 @@ def get_document_chain(
     current_user: Annotated[User, Depends(identity_service.get_current_user)],
 ):
     normalized_type = document_type.strip().upper()
-    required_permission = DOCUMENT_VIEW_PERMISSIONS.get(normalized_type, "documents:view")
-    user_perms = identity_service.get_user_permissions(current_user)
-    if required_permission != "documents:view" and required_permission not in user_perms:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Acesso negado: permissão '{required_permission}' necessária.",
-        )
-    return service.get_document_chain(
+    user_permissions = _user_permissions(current_user)
+    _require_document_access(normalized_type, user_permissions)
+    chain = service.get_document_chain(
         db,
         organization_id=current_user.organization_id,
         document_type=normalized_type,
         native_id=native_id,
     )
+    return _filter_chain_by_permissions(chain, user_permissions)

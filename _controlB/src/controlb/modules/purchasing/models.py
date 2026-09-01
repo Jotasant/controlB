@@ -12,11 +12,23 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, Numeric, Integer
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
+from controlb.modules.documents.models import BusinessDocument
 from controlb.modules.inventory.models import Product, ProductCategory
 
 
@@ -88,13 +100,39 @@ class PurchaseRequest(Base):
     Tabela 'purchase_request' - Solicitações de compra emitidas pelos setores da empresa.
     """
     __tablename__ = "purchase_request"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_purchase_request_document_org",
+        ),
+        ForeignKeyConstraint(
+            ["replenishment_id", "organization_id"],
+            ["inventory_replenishment.id", "inventory_replenishment.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_purchase_request_replenishment_org",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "request_number",
+            name="uq_purchase_request_org_number",
+        ),
+        UniqueConstraint("replenishment_id", name="uq_purchase_request_replenishment"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
+    )
     requester_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     cost_center_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True)
+    replenishment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     
-    request_number: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    request_number: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     justification: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="draft", index=True)  # draft, pending_approval, approved, rejected, cancelled
     total_estimated_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
@@ -104,6 +142,7 @@ class PurchaseRequest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamento 1:N com os itens da solicitação
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     items: Mapped[list["PurchaseRequestItem"]] = relationship(
         back_populates="purchase_request", 
         cascade="all, delete-orphan", 
@@ -149,7 +188,9 @@ class PurchaseRequestItem(Base):
 
     # Relacionamentos
     purchase_request: Mapped["PurchaseRequest"] = relationship(back_populates="items")
-    product: Mapped["Product"] = relationship(lazy="selectin")
+    product: Mapped["Product"] = relationship(
+        lazy="selectin", overlaps="items,replenishment"
+    )
 
 
 class ApprovalEvent(Base):
@@ -177,23 +218,159 @@ class ApprovalEvent(Base):
 # 3. ORDENS DE COMPRA OFICIAIS (PurchaseOrder)
 # ==============================================================================
 
+class InventoryReplenishment(Base):
+    """Necessidade de reposição persistida antes da emissão da compra."""
+
+    __tablename__ = "inventory_replenishment"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_inventory_replenishment_document_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("document_id", name="uq_inventory_replenishment_document"),
+        UniqueConstraint("id", "organization_id", name="uq_inventory_replenishment_id_org"),
+        UniqueConstraint(
+            "organization_id",
+            "replenishment_number",
+            name="uq_inventory_replenishment_number_org",
+        ),
+        CheckConstraint(
+            "status IN ('OPEN', 'REQUESTED', 'ORDERED', 'CANCELLED')",
+            name="ck_inventory_replenishment_status",
+        ),
+        CheckConstraint(
+            "estimated_total_amount >= 0",
+            name="ck_inventory_replenishment_total_nonnegative",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    replenishment_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEN")
+    estimated_total_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), nullable=False, default=Decimal("0.00")
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
+    items: Mapped[list["InventoryReplenishmentItem"]] = relationship(
+        back_populates="replenishment",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class InventoryReplenishmentItem(Base):
+    __tablename__ = "inventory_replenishment_item"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replenishment_id", "organization_id"],
+            ["inventory_replenishment.id", "inventory_replenishment.organization_id"],
+            name="fk_inventory_replenishment_item_header_org",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["product_id", "organization_id"],
+            ["product.id", "product.organization_id"],
+            name="fk_inventory_replenishment_item_product_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "replenishment_id",
+            "product_id",
+            name="uq_inventory_replenishment_item_product",
+        ),
+        CheckConstraint(
+            "current_stock >= 0 AND min_stock >= 0 AND target_stock >= 0",
+            name="ck_inventory_replenishment_item_stock_nonnegative",
+        ),
+        CheckConstraint(
+            "requested_quantity > 0 AND estimated_unit_price >= 0",
+            name="ck_inventory_replenishment_item_request_valid",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    replenishment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    current_stock: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    min_stock: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    target_stock: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    requested_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    estimated_unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    replenishment: Mapped["InventoryReplenishment"] = relationship(back_populates="items")
+    product: Mapped["Product"] = relationship(
+        lazy="selectin", overlaps="items,replenishment"
+    )
+
 class PurchaseOrder(Base):
     """
     Tabela 'purchase_order' - Ordens de compra oficiais emitidas para fornecedores.
     """
     __tablename__ = "purchase_order"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_purchase_order_document_org",
+        ),
+        ForeignKeyConstraint(
+            ["replenishment_id", "organization_id"],
+            ["inventory_replenishment.id", "inventory_replenishment.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_purchase_order_replenishment_org",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "order_number",
+            name="uq_purchase_order_org_number",
+        ),
+        UniqueConstraint("id", "organization_id", name="uq_purchase_order_id_org"),
+        UniqueConstraint("replenishment_id", name="uq_purchase_order_replenishment"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
+    )
     purchase_request_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("purchase_request.id", ondelete="SET NULL"), 
         nullable=True
+    )
+    replenishment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     supplier_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("supplier.id", ondelete="RESTRICT"), nullable=False)
     buyer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     cost_center_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True)
     
-    order_number: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    order_number: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="draft", index=True)  # draft, issued, partially_received, received, closed, cancelled
     payment_terms: Mapped[str | None] = mapped_column(String(200), nullable=True)  # Ex: 30 dias, A vista
     freight_type: Mapped[str | None] = mapped_column(String(50), default="CIF")  # CIF, FOB, Sem Frete
@@ -214,6 +391,7 @@ class PurchaseOrder(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamentos
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     items: Mapped[list["PurchaseOrderItem"]] = relationship(
         back_populates="purchase_order", 
         cascade="all, delete-orphan", 
@@ -221,6 +399,9 @@ class PurchaseOrder(Base):
     )
     supplier: Mapped["Supplier"] = relationship(lazy="selectin")
     purchase_request: Mapped["PurchaseRequest | None"] = relationship(lazy="selectin")
+    replenishment: Mapped["InventoryReplenishment | None"] = relationship(
+        lazy="selectin", overlaps="document"
+    )
     supplier_quote_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("supplier_quote.id", ondelete="SET NULL"), 
         nullable=True
@@ -262,12 +443,28 @@ class QuotationProcess(Base):
     Tabela 'quotation_process' - Processos de cotação abertos para solicitações aprovadas.
     """
     __tablename__ = "quotation_process"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_quotation_process_document_org",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "quotation_number",
+            name="uq_quotation_process_org_number",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
+    )
     purchase_request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("purchase_request.id", ondelete="CASCADE"), nullable=False, unique=True)
 
-    quotation_number: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    quotation_number: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="open", index=True)  # open, analyzing, completed, cancelled
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -276,6 +473,7 @@ class QuotationProcess(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamentos
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     purchase_request: Mapped["PurchaseRequest"] = relationship(back_populates="quotation_process", lazy="selectin")
     quotes: Mapped[list["SupplierQuote"]] = relationship(
         back_populates="quotation_process", 
@@ -348,5 +546,3 @@ class SupplierQuoteItem(Base):
     # Relacionamentos
     supplier_quote: Mapped["SupplierQuote"] = relationship(back_populates="items")
     product: Mapped["Product"] = relationship(lazy="selectin")
-
-

@@ -286,7 +286,8 @@ def update_purchase_request(
         db,
         request_id=request_id,
         organization_id=current_user.organization_id,
-        request_data=request_data
+        request_data=request_data,
+        current_user=current_user,
     )
 
 
@@ -300,7 +301,8 @@ def delete_purchase_request(
     return service.delete_purchase_request_record(
         db,
         request_id=request_id,
-        organization_id=current_user.organization_id
+        organization_id=current_user.organization_id,
+        current_user=current_user,
     )
 
 
@@ -314,7 +316,8 @@ def purge_all_purchase_requests(
     return service.purge_purchase_requests(
         db,
         organization_id=current_user.organization_id,
-        request_ids=request_ids
+        request_ids=request_ids,
+        current_user=current_user,
     )
 
 
@@ -329,7 +332,8 @@ def cancel_purchase_request(
     return service.cancel_purchase_request(
         db,
         request_id=request_id,
-        organization_id=current_user.organization_id
+        organization_id=current_user.organization_id,
+        current_user=current_user,
     )
 
 
@@ -435,7 +439,8 @@ def cancel_purchase_order(
     return service.cancel_purchase_order(
         db, 
         order_id=order_id, 
-        organization_id=current_user.organization_id
+        organization_id=current_user.organization_id,
+        current_user=current_user,
     )
 
 
@@ -449,7 +454,8 @@ def delete_purchase_order(
     return service.delete_purchase_order_record(
         db,
         order_id=order_id,
-        organization_id=current_user.organization_id
+        organization_id=current_user.organization_id,
+        current_user=current_user,
     )
 
 
@@ -463,7 +469,8 @@ def purge_all_purchase_orders(
     return service.purge_purchase_orders(
         db,
         organization_id=current_user.organization_id,
-        order_ids=order_ids
+        order_ids=order_ids,
+        current_user=current_user,
     )
 
 
@@ -481,7 +488,8 @@ def delete_quotation(
     return service.delete_quotation_record(
         db,
         quotation_id=quotation_id,
-        organization_id=current_user.organization_id
+        organization_id=current_user.organization_id,
+        current_user=current_user,
     )
 
 
@@ -495,7 +503,8 @@ def purge_all_quotations(
     return service.purge_quotations(
         db,
         organization_id=current_user.organization_id,
-        quotation_ids=quotation_ids
+        quotation_ids=quotation_ids,
+        current_user=current_user,
     )
 
 
@@ -641,6 +650,19 @@ def delete_supplier_quote(
 # 9. ENDPOINTS DE REPOSIÇÃO ÁGIL & CONTROLE DE INVENTÁRIO (ESTOQUE)
 # ==============================================================================
 
+@router.get(
+    "/replenishments",
+    response_model=list[schemas.InventoryReplenishmentResponse],
+)
+def list_inventory_replenishments(
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("purchasing:view")),
+):
+    """Lista necessidades de reposição persistidas e rastreáveis em Documents."""
+    return service.list_inventory_replenishments(
+        db, organization_id=current_user.organization_id
+    )
+
 @router.get("/suggestions", response_model=schemas.PurchaseSuggestionsSummary)
 def get_replenishment_suggestions(
     db: Session = Depends(get_db),
@@ -672,4 +694,17 @@ def create_quick_replenishment_order(
     )
 
 
-
+@router.post(
+    "/replenishments/requests",
+    response_model=schemas.PurchaseRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_formal_replenishment_request(
+    data: schemas.PurchaseRequestCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.get_current_user),
+):
+    """Converte sugestões de estoque em uma solicitação formal rastreável."""
+    data.organization_id = current_user.organization_id
+    data.replenishment_id = None
+    return service.create_formal_replenishment_request(db, current_user, data)

@@ -1,0 +1,174 @@
+.documents-page {
+  min-height: 100vh;
+  padding: 76px clamp(1rem, 3vw, 2.5rem) 2rem;
+  background: var(--bg-app);
+  color: var(--text-primary);
+
+  .ui-page-header__info > p {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+  }
+
+  &__toolbar {
+    margin-bottom: 1rem;
+
+    .ui-search-box { max-width: none; }
+  }
+
+  &__workspace {
+    display: grid;
+    grid-template-columns: minmax(360px, 0.9fr) minmax(430px, 1.1fr);
+    gap: 1rem;
+    min-height: calc(100vh - 230px);
+  }
+
+  &__results,
+  &__trace {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--bg-surface);
+
+    > header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      min-height: 48px;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--bg-surface-elevated);
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+
+      > div { display: flex; align-items: center; gap: 0.45rem; color: var(--text-primary); }
+      > span { color: var(--text-muted); }
+    }
+  }
+
+  &__results { display: flex; flex-direction: column; }
+
+  &__trace-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+
+    > span { color: var(--text-muted); }
+  }
+
+  &__trace {
+    padding-bottom: 1rem;
+
+    > .ui-document-timeline { padding: 1rem; }
+  }
+
+  &__list {
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+  }
+
+  &__document {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.8rem 0.9rem;
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s;
+
+    &:last-child { border-bottom: 0; }
+    &:hover { background: var(--bg-surface-hover); }
+    &:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+    &.is-selected { background: var(--accent-brand-subtle); box-shadow: inset 3px 0 var(--accent-brand); }
+  }
+
+  &__document-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-surface-elevated);
+    color: var(--accent-brand);
+  }
+
+  &__document-main,
+  &__document-meta {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+
+  &__document-main {
+    gap: 0.18rem;
+
+    > span { color: var(--text-muted); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
+    > strong { overflow: hidden; font-size: 0.8rem; text-overflow: ellipsis; white-space: nowrap; }
+    > small { color: var(--text-secondary); font-size: 0.68rem; }
+  }
+
+  &__document-meta {
+    align-items: flex-end;
+    gap: 0.35rem;
+
+    time { color: var(--text-muted); font-size: 0.63rem; white-space: nowrap; }
+  }
+
+  &__state {
+    display: flex;
+    min-height: 240px;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    padding: 2rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    text-align: center;
+
+    strong { color: var(--text-primary); }
+  }
+
+  &__alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    margin: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-red);
+    font-size: 0.78rem;
+  }
+
+  .is-spinning { animation: documents-spin 0.8s linear infinite; }
+}
+
+@keyframes documents-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 900px) {
+  .documents-page {
+    &__workspace { grid-template-columns: 1fr; }
+    &__list { max-height: 480px; }
+  }
+}
+
+@media (max-width: 600px) {
+  .documents-page {
+    padding-inline: 0.75rem;
+
+    &__document { grid-template-columns: 34px minmax(0, 1fr); }
+    &__document-meta { grid-column: 2; align-items: flex-start; }
+  }
+}

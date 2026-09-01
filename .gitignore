@@ -4,6 +4,8 @@
 # Variaveis de Ambiente e Segredos
 .env
 *.env
+.env.example
+*.env.example
 
 # Ambientes Virtuais Python
 .venv/
@@ -21,3 +23,13 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+*.md
+*claude*
+*CLAUDE*
+*claude.md
+*CLAUDE.MD
+
+*.ps1
+*.ps1xml
+*ps1
+*ps1xml

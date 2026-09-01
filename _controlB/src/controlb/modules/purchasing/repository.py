@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from controlb.modules.purchasing.models import (
     Supplier, CostCenter, ProductCategory, Product, 
     PurchaseRequest, PurchaseRequestItem, ApprovalEvent, 
-    PurchaseOrder, PurchaseOrderItem,
+    PurchaseOrder, PurchaseOrderItem, InventoryReplenishment,
     QuotationProcess, SupplierQuote, SupplierQuoteItem
 )
 from controlb.modules.purchasing.schemas import (
@@ -338,6 +338,8 @@ def count_purchase_requests_in_year(db: Session, organization_id: uuid.UUID, yea
 
 def create_purchase_request(
     db: Session, 
+    request_id: uuid.UUID,
+    document_id: uuid.UUID,
     requester_id: uuid.UUID,
     request_number: str,
     total_estimated: Decimal,
@@ -345,9 +347,12 @@ def create_purchase_request(
 ) -> PurchaseRequest:
     """Cria o cabeçalho da solicitação de compra e persiste suas linhas de itens."""
     db_request = PurchaseRequest(
+        id=request_id,
         organization_id=request_data.organization_id,
+        document_id=document_id,
         requester_id=requester_id,
         cost_center_id=request_data.cost_center_id,
+        replenishment_id=request_data.replenishment_id,
         request_number=request_number,
         justification=request_data.justification,
         status="pending_approval",
@@ -370,7 +375,7 @@ def create_purchase_request(
         )
         db.add(db_item)
 
-    db.commit()
+    db.flush()
     db.refresh(db_request)
     return db_request
 
@@ -382,8 +387,7 @@ def update_purchase_request_status(
 ) -> PurchaseRequest:
     """Atualiza o status da solicitação de compra."""
     db_request.status = new_status
-    db.commit()
-    db.refresh(db_request)
+    db.flush()
     return db_request
 
 
@@ -396,8 +400,7 @@ def update_purchase_request(
     update_data = request_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_request, field, value)
-    db.commit()
-    db.refresh(db_request)
+    db.flush()
     return db_request
 
 
@@ -426,8 +429,7 @@ def create_approval_event(
         comments=comments
     )
     db.add(db_event)
-    db.commit()
-    db.refresh(db_event)
+    db.flush()
     return db_event
 
 
@@ -461,6 +463,37 @@ def get_purchase_order_by_id(
     return db.execute(stmt).scalar_one_or_none()
 
 
+def get_inventory_replenishment_by_id(
+    db: Session,
+    replenishment_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> InventoryReplenishment | None:
+    stmt = select(InventoryReplenishment).where(
+        InventoryReplenishment.id == replenishment_id,
+        InventoryReplenishment.organization_id == organization_id,
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def list_inventory_replenishments(
+    db: Session, organization_id: uuid.UUID
+) -> list[InventoryReplenishment]:
+    stmt = (
+        select(InventoryReplenishment)
+        .where(InventoryReplenishment.organization_id == organization_id)
+        .order_by(InventoryReplenishment.created_at.desc())
+    )
+    return list(db.scalars(stmt).all())
+
+
+def create_inventory_replenishment(
+    db: Session, replenishment: InventoryReplenishment
+) -> InventoryReplenishment:
+    db.add(replenishment)
+    db.flush()
+    return replenishment
+
+
 def count_purchase_orders_in_year(db: Session, organization_id: uuid.UUID, year: int) -> int:
     """Retorna o total de ordens no ano para geração do número sequencial."""
     stmt = select(func.count(PurchaseOrder.id)).where(
@@ -471,15 +504,20 @@ def count_purchase_orders_in_year(db: Session, organization_id: uuid.UUID, year:
 
 
 def create_purchase_order(
-    db: Session, 
+    db: Session,
+    order_id: uuid.UUID,
+    document_id: uuid.UUID,
     order_number: str,
     total_amount: Decimal,
     order_data: PurchaseOrderCreate
 ) -> PurchaseOrder:
     """Cria e persiste uma nova ordem de compra oficial com seus itens negociados."""
     db_order = PurchaseOrder(
+        id=order_id,
+        document_id=document_id,
         organization_id=order_data.organization_id,
         purchase_request_id=order_data.purchase_request_id,
+        replenishment_id=order_data.replenishment_id,
         supplier_quote_id=order_data.supplier_quote_id,
         supplier_id=order_data.supplier_id,
         buyer_id=order_data.buyer_id,
@@ -508,8 +546,7 @@ def create_purchase_order(
         )
         db.add(db_item)
 
-    db.commit()
-    db.refresh(db_order)
+    db.flush()
     return db_order
 
 
@@ -531,8 +568,7 @@ def receive_purchase_order(
     if notes:
         db_order.notes = f"{db_order.notes or ''}\n[Recebimento]: {notes}".strip()
 
-    db.commit()
-    db.refresh(db_order)
+    db.flush()
     return db_order
 
 
@@ -556,21 +592,20 @@ def update_purchase_order_status(
 ) -> PurchaseOrder:
     """Atualiza o status da ordem de compra (ex: cancelled, closed)."""
     db_order.status = new_status
-    db.commit()
-    db.refresh(db_order)
+    db.flush()
     return db_order
 
 
 def delete_purchase_order(db: Session, db_order: PurchaseOrder) -> None:
     """Remove a ordem de compra e seus itens em cascata."""
     db.delete(db_order)
-    db.commit()
+    db.flush()
 
 
 def delete_quotation_process(db: Session, quotation: QuotationProcess) -> None:
     """Remove o processo de cotação e propostas em cascata."""
     db.delete(quotation)
-    db.commit()
+    db.flush()
 
 
 # ==============================================================================
@@ -628,6 +663,8 @@ def get_quotation_process_by_request_id(
 
 def create_quotation_process(
     db: Session,
+    process_id: uuid.UUID,
+    document_id: uuid.UUID,
     organization_id: uuid.UUID,
     purchase_request_id: uuid.UUID,
     quotation_number: str,
@@ -635,6 +672,8 @@ def create_quotation_process(
 ) -> QuotationProcess:
     """Cria e abre um novo processo de cotação oficial para uma SC aprovada."""
     db_process = QuotationProcess(
+        id=process_id,
+        document_id=document_id,
         organization_id=organization_id,
         purchase_request_id=purchase_request_id,
         quotation_number=quotation_number,
@@ -642,8 +681,7 @@ def create_quotation_process(
         notes=notes
     )
     db.add(db_process)
-    db.commit()
-    db.refresh(db_process)
+    db.flush()
     return db_process
 
 
@@ -686,8 +724,7 @@ def create_supplier_quote(
         )
         db.add(db_item)
 
-    db.commit()
-    db.refresh(db_quote)
+    db.flush()
     return db_quote
 
 
@@ -711,8 +748,7 @@ def update_supplier_quote_status(
 ) -> SupplierQuote:
     """Atualiza o status da proposta comercial (selected, rejected, pending)."""
     db_quote.status = new_status
-    db.commit()
-    db.refresh(db_quote)
+    db.flush()
     return db_quote
 
 
@@ -723,12 +759,11 @@ def update_quotation_process_status(
 ) -> QuotationProcess:
     """Atualiza o status do processo de cotação (analyzing, completed, cancelled)."""
     db_process.status = new_status
-    db.commit()
-    db.refresh(db_process)
+    db.flush()
     return db_process
 
 
 def delete_supplier_quote(db: Session, db_quote: SupplierQuote) -> None:
     """Exclui permanentemente uma proposta comercial do fornecedor na cotação."""
     db.delete(db_quote)
-    db.commit()
+    db.flush()

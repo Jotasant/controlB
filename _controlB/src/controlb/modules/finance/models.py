@@ -10,12 +10,14 @@ import uuid
 from datetime import datetime, timezone, date
 from decimal import Decimal
 from sqlalchemy import (
-    String, Text, Boolean, DateTime, Date, Numeric, ForeignKey, Index, Integer
+    String, Text, Boolean, DateTime, Date, Numeric, ForeignKey, ForeignKeyConstraint,
+    Index, Integer, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
+from controlb.modules.documents.models import BusinessDocument
 
 
 def utcnow() -> datetime:
@@ -88,9 +90,26 @@ class FiscalDocument(Base):
     Tabela 'fiscal_document' - Registro de Documentos Fiscais emitidos ou recebidos (NF-e, NFS-e, NFC-e, CT-e).
     """
     __tablename__ = "fiscal_document"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_fiscal_document_document_org",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["purchase_order_id", "organization_id"],
+            ["purchase_order.id", "purchase_order.organization_id"],
+            name="fk_fiscal_document_purchase_order_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("document_id", name="uq_fiscal_document_document"),
+        UniqueConstraint("id", "organization_id", name="uq_fiscal_document_id_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     
     direction: Mapped[str] = mapped_column(String(20), nullable=False, default="INBOUND")  # INBOUND (Entrada) ou OUTBOUND (Saída)
     document_type: Mapped[str] = mapped_column(String(50), nullable=False, default="NFE")  # NFE, NFSE, NFCE, CTE, OUTRO
@@ -107,7 +126,7 @@ class FiscalDocument(Base):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
     
-    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("purchase_order.id", ondelete="SET NULL"), nullable=True)
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     supplier_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("supplier.id", ondelete="SET NULL"), nullable=True)
     
     file_attachment: Mapped[str | None] = mapped_column(Text, nullable=True)  # Arquivo XML/PDF em base64 ou URL
@@ -118,7 +137,10 @@ class FiscalDocument(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamentos
-    payables: Mapped[list["Payable"]] = relationship(back_populates="fiscal_document")
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
+    payables: Mapped[list["Payable"]] = relationship(
+        back_populates="fiscal_document", overlaps="document"
+    )
     receivables: Mapped[list["Receivable"]] = relationship(back_populates="fiscal_document")
 
 
@@ -132,13 +154,47 @@ class Payable(Base):
     Suporta compras formais (com purchase_order_id) e despesas avulsas (purchase_order_id=NULL).
     """
     __tablename__ = "payable"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_payable_document_org",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["purchase_order_id", "organization_id"],
+            ["purchase_order.id", "purchase_order.organization_id"],
+            name="fk_payable_purchase_order_org",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["fiscal_document_id", "organization_id"],
+            ["fiscal_document.id", "fiscal_document.organization_id"],
+            name="fk_payable_fiscal_document_org",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["inventory_receipt_id", "organization_id"],
+            ["inventory_receipt.id", "inventory_receipt.organization_id"],
+            name="fk_payable_inventory_receipt_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("document_id", name="uq_payable_document"),
+        UniqueConstraint(
+            "organization_id", "payable_number", name="uq_payable_org_number"
+        ),
+        UniqueConstraint("id", "organization_id", name="uq_payable_id_org"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    payable_number: Mapped[str] = mapped_column(String(100), nullable=False)
     
     supplier_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("supplier.id", ondelete="SET NULL"), nullable=True)
-    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("purchase_order.id", ondelete="SET NULL"), nullable=True)
-    fiscal_document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("fiscal_document.id", ondelete="SET NULL"), nullable=True)
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    fiscal_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    inventory_receipt_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     cost_center_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True)
     financial_category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("financial_category.id", ondelete="SET NULL"), nullable=True)
     
@@ -151,7 +207,11 @@ class Payable(Base):
     issue_date: Mapped[date] = mapped_column(Date, nullable=False)
     due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     
-    expense_nature: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEX")  # CAPEX ou OPEX
+    # Dimensões independentes da obrigação. OPEX/CAPEX não define quem
+    # recebe nem qual processo de negócio originou o título.
+    expense_nature: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEX")
+    obligation_type: Mapped[str] = mapped_column(String(40), nullable=False, default="OTHER")
+    business_origin: Mapped[str] = mapped_column(String(40), nullable=False, default="MANUAL")
     payment_method_expected: Mapped[str | None] = mapped_column(String(50), nullable=True)  # BOLETO, PIX, TRANSFERENCIA, CARTAO
     
     installment_number: Mapped[int] = mapped_column(Integer, default=1)
@@ -167,8 +227,13 @@ class Payable(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamentos
+    document: Mapped["BusinessDocument"] = relationship(
+        lazy="select", overlaps="fiscal_document,payables"
+    )
     financial_category: Mapped["FinancialCategory | None"] = relationship(back_populates="payables", lazy="selectin")
-    fiscal_document: Mapped["FiscalDocument | None"] = relationship(back_populates="payables", lazy="selectin")
+    fiscal_document: Mapped["FiscalDocument | None"] = relationship(
+        back_populates="payables", lazy="selectin", overlaps="document"
+    )
     instruments: Mapped[list["PaymentInstrument"]] = relationship(back_populates="payable", cascade="all, delete-orphan", lazy="selectin")
     payments: Mapped[list["Payment"]] = relationship(back_populates="payable", cascade="all, delete-orphan", lazy="selectin")
 
@@ -272,11 +337,18 @@ class BankTransaction(Base):
     document_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     balance_after: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     
+    fiscal_document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("fiscal_document.id", ondelete="SET NULL"), nullable=True)
+    payment_attachment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("payment_attachment.id", ondelete="SET NULL"), nullable=True)
+    receipt_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Anexo direto / Comprovante
+    receipt_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, reconciled, ignored
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     # Relacionamento
     bank_account: Mapped["BankAccount"] = relationship(back_populates="transactions", lazy="selectin")
+    fiscal_document: Mapped["FiscalDocument | None"] = relationship(lazy="selectin")
+    payment_attachment: Mapped["PaymentAttachment | None"] = relationship(lazy="selectin")
     reconciliation: Mapped["Reconciliation | None"] = relationship(back_populates="bank_transaction")
 
 
@@ -313,14 +385,47 @@ class Receivable(Base):
     Tabela 'receivable' - Títulos e Valores a Receber (Vendas, Convênios, Faturas).
     """
     __tablename__ = "receivable"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_receivable_document_org",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["fiscal_document_id", "organization_id"],
+            ["fiscal_document.id", "fiscal_document.organization_id"],
+            name="fk_receivable_fiscal_document_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("document_id", name="uq_receivable_document"),
+        UniqueConstraint(
+            "organization_id", "receivable_number", name="uq_receivable_org_number"
+        ),
+        UniqueConstraint("id", "organization_id", name="uq_receivable_id_org"),
+        UniqueConstraint(
+            "invoice_installment_id", name="uq_receivable_invoice_installment"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    receivable_number: Mapped[str] = mapped_column(String(100), nullable=False)
     
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("customer.id", ondelete="SET NULL"), nullable=True)
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
     customer_document: Mapped[str | None] = mapped_column(String(30), nullable=True)
     
-    fiscal_document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("fiscal_document.id", ondelete="SET NULL"), nullable=True)
+    fiscal_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    invoice_installment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "invoice_installment.id",
+            name="fk_receivable_invoice_installment",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
     cost_center_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True)
     financial_category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("financial_category.id", ondelete="SET NULL"), nullable=True)
     
@@ -339,6 +444,9 @@ class Receivable(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relacionamentos
+    document: Mapped["BusinessDocument"] = relationship(
+        lazy="select", overlaps="fiscal_document,receivables"
+    )
     financial_category: Mapped["FinancialCategory | None"] = relationship(back_populates="receivables", lazy="selectin")
     fiscal_document: Mapped["FiscalDocument | None"] = relationship(back_populates="receivables", lazy="selectin")
     receipts: Mapped[list["Receipt"]] = relationship(back_populates="receivable", cascade="all, delete-orphan", lazy="selectin")

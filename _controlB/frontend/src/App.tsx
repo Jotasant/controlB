@@ -18,9 +18,7 @@ import { POS } from '@/pages/POS/POS';
 import { Finance } from '@/pages/Finance/Finance';
 import { Billing } from '@/pages/Billing/Billing';
 import { Cadastros } from '@/pages/Cadastros/Cadastros';
-import { Organizations } from '@/pages/Organizations/Organizations';
-import { Users } from '@/pages/Users/Users';
-import { Roles } from '@/pages/Roles/Roles';
+import { Documents } from '@/pages/Documents/Documents';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { PublicRoute } from '@/components/PublicRoute';
 import { AppLayout } from '@/components/AppLayout';
@@ -53,10 +51,11 @@ export const App: React.FC = () => {
               <Route path="/financeiro" element={<Finance />} />
               <Route path="/estoque" element={<Inventory />} />
               <Route path="/compras" element={<Purchasing />} />
+              <Route path="/documentos" element={<Documents />} />
               <Route path="/cadastros" element={<Cadastros />} />
-              <Route path="/organizacoes" element={<Organizations />} />
-              <Route path="/usuarios" element={<Users />} />
-              <Route path="/cargos" element={<Roles />} />
+              <Route path="/organizacoes" element={<Cadastros initialMenu="organizacoes" />} />
+              <Route path="/usuarios" element={<Cadastros initialMenu="usuarios" />} />
+              <Route path="/cargos" element={<Cadastros initialMenu="cargos" />} />
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
             </Route>
           </Route>

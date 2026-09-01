@@ -3,25 +3,54 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Landmark, ArrowUpRight, ArrowDownLeft, DollarSign, Plus,
   RefreshCw, CheckCircle2, Calendar, Search,
   FileText, Tag,
-  Building2, Wallet, ArrowRightLeft, TrendingUp, BarChart3
+  Building2, Wallet, ArrowRightLeft, TrendingUp, BarChart3, Ban, Power,
+  Paperclip, Upload, X, ExternalLink, FileCheck
 } from 'lucide-react';
-import { financeService, purchasingService } from '@/services/api';
+import { financeService, purchasingService, salesService } from '@/services/api';
 import {
   Payable, Receivable, BankAccount, BankTransaction,
-  FiscalDocument, FinancialCategory, FinanceDashboardSummary, CostCenter
+  FiscalDocument, FinancialCategory, FinanceDashboardSummary, CostCenter,
+  Supplier, PurchaseOrder, Customer
 } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
+import {
+  EditableFinanceRecord,
+  FinanceRecordEditModal
+} from '@/components/FinanceRecordEditModal/FinanceRecordEditModal';
+import { BulkActionsBar } from '@/components/BulkActionsBar';
+import { ListPagination } from '@/components/ListPagination';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { useListPagination } from '@/hooks/useListPagination';
+import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
 import './Finance.scss';
 
+const ALLOWED_FINANCE_TABS = [
+  'payables', 'receivables', 'treasury', 'reconciliation', 'fiscal-documents', 'categories', 'reports'
+] as const;
+type FinanceTab = typeof ALLOWED_FINANCE_TABS[number];
+
+const payableTypeLabels: Record<Payable['obligation_type'], string> = {
+  GOODS_SUPPLIER: 'Fornecedor', SERVICE_PROVIDER: 'Prestador', TAX: 'Tributo',
+  PAYROLL: 'Folha', RENT_LEASE: 'Aluguel', FINANCING: 'Financiamento',
+  REIMBURSEMENT: 'Reembolso', INVESTMENT: 'Investimento', OTHER: 'Outro'
+};
+
+const payableOriginLabels: Record<Payable['business_origin'], string> = {
+  PURCHASE: 'Compra', REPLENISHMENT: 'Reposição', INVESTMENT: 'Investimento',
+  CONTRACT: 'Contrato', FISCAL_DOCUMENT: 'Documento fiscal', MANUAL: 'Manual', OTHER: 'Outra'
+};
+
 export const Finance: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const initialFinanceTab = isRequestedView(searchParams, ALLOWED_FINANCE_TABS, 'payables');
+
   // Controle de Abas
-  const [activeTab, setActiveTab] = useState<
-    'payables' | 'receivables' | 'treasury' | 'reconciliation' | 'fiscal-documents' | 'categories' | 'reports'
-  >('payables');
+  const [activeTab, setActiveTab] = useState<FinanceTab>(initialFinanceTab);
 
   // Estados de Dados
   const [loading, setLoading] = useState<boolean>(true);
@@ -33,10 +62,19 @@ export const Finance: React.FC = () => {
   const [fiscalDocs, setFiscalDocs] = useState<FiscalDocument[]>([]);
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const payableSelection = useBulkSelection<Payable>();
+  const receivableSelection = useBulkSelection<Receivable>();
+  const fiscalSelection = useBulkSelection<FiscalDocument>();
+  const categorySelection = useBulkSelection<FinancialCategory>();
 
   // Filtros
   const [payableStatusFilter, setPayableStatusFilter] = useState<string>('ALL');
   const [payableNatureFilter, setPayableNatureFilter] = useState<string>('ALL');
+  const [payableTypeFilter, setPayableTypeFilter] = useState<string>('ALL');
+  const [payableOriginFilter, setPayableOriginFilter] = useState<string>('ALL');
   const [receivableStatusFilter, setReceivableStatusFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -48,10 +86,40 @@ export const Finance: React.FC = () => {
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [isTxModalOpen, setIsTxModalOpen] = useState<boolean>(false);
+  const [isLinkFiscalModalOpen, setIsLinkFiscalModalOpen] = useState<boolean>(false);
+  const [isAttachReceiptModalOpen, setIsAttachReceiptModalOpen] = useState<boolean>(false);
 
   // Seleções para Ações
   const [selectedPayable, setSelectedPayable] = useState<Payable | null>(null);
   const [selectedReceivable, setSelectedReceivable] = useState<Receivable | null>(null);
+  const [selectedTxForLink, setSelectedTxForLink] = useState<BankTransaction | null>(null);
+  const [editingRecord, setEditingRecord] = useState<EditableFinanceRecord | null>(null);
+
+  // Form Vínculo de Nota Fiscal
+  const [fiscalLinkMode, setFiscalLinkMode] = useState<'EXISTING' | 'NEW'>('EXISTING');
+  const [existingFiscalDocId, setExistingFiscalDocId] = useState<string>('');
+  const [newFiscalDocForm, setNewFiscalDocForm] = useState({
+    direction: 'INBOUND',
+    document_type: 'NFE',
+    document_number: '',
+    series: '',
+    access_key: '',
+    issuer_name: '',
+    issuer_cnpj_cpf: '',
+    issue_date: new Date().toISOString().split('T')[0],
+    total_amount: '',
+    tax_amount: '0.00',
+    file_attachment: '',
+    notes: ''
+  });
+
+  // Form Anexo de Comprovante de Extrato
+  const [txReceiptForm, setTxReceiptForm] = useState({
+    file_name: '',
+    file_url: '',
+    mime_type: 'application/pdf',
+    payable_id: ''
+  });
 
   // Forms de Nova Despesa Avulsa
   const [expenseForm, setExpenseForm] = useState({
@@ -60,7 +128,12 @@ export const Finance: React.FC = () => {
     original_amount: '',
     issue_date: new Date().toISOString().split('T')[0],
     due_date: new Date().toISOString().split('T')[0],
-    expense_nature: 'OPEX' as 'CAPEX' | 'OPEX',
+    expense_nature: 'OPEX' as Payable['expense_nature'],
+    obligation_type: 'OTHER' as Payable['obligation_type'],
+    business_origin: 'MANUAL' as Payable['business_origin'],
+    supplier_id: '',
+    purchase_order_id: '',
+    fiscal_document_id: '',
     payment_method_expected: 'BOLETO',
     financial_category_id: '',
     cost_center_id: '',
@@ -87,6 +160,7 @@ export const Finance: React.FC = () => {
 
   // Form Novo Recebível
   const [receivableForm, setReceivableForm] = useState({
+    customer_id: '',
     customer_name: '',
     customer_document: '',
     description: '',
@@ -149,7 +223,10 @@ export const Finance: React.FC = () => {
         txRes,
         fiscalRes,
         categoriesRes,
-        costCentersRes
+        costCentersRes,
+        suppliersRes,
+        purchaseOrdersRes,
+        customersRes
       ] = await Promise.all([
         financeService.getDashboard().catch(() => null),
         financeService.getPayables().catch(() => []),
@@ -158,7 +235,10 @@ export const Finance: React.FC = () => {
         financeService.getBankTransactions().catch(() => []),
         financeService.getFiscalDocuments().catch(() => []),
         financeService.getCategories().catch(() => []),
-        purchasingService.getCostCenters().catch(() => [])
+        purchasingService.getCostCenters().catch(() => []),
+        purchasingService.getSuppliers().catch(() => []),
+        purchasingService.getPurchaseOrders(undefined, true).catch(() => []),
+        salesService.getCustomers(undefined, true).catch(() => [])
       ]);
 
       setDashboard(dashRes);
@@ -169,6 +249,9 @@ export const Finance: React.FC = () => {
       setFiscalDocs(fiscalRes);
       setCategories(categoriesRes);
       setCostCenters(costCentersRes);
+      setSuppliers(suppliersRes);
+      setPurchaseOrders(purchaseOrdersRes);
+      setCustomers(customersRes);
     } catch (err) {
       console.error("Erro ao carregar dados financeiros:", err);
     } finally {
@@ -225,6 +308,11 @@ export const Finance: React.FC = () => {
         issue_date: expenseForm.issue_date,
         due_date: expenseForm.due_date,
         expense_nature: expenseForm.expense_nature,
+        obligation_type: expenseForm.obligation_type,
+        business_origin: expenseForm.business_origin,
+        supplier_id: expenseForm.supplier_id || undefined,
+        purchase_order_id: expenseForm.purchase_order_id || undefined,
+        fiscal_document_id: expenseForm.fiscal_document_id || undefined,
         payment_method_expected: expenseForm.payment_method_expected || undefined,
         financial_category_id: expenseForm.financial_category_id || undefined,
         cost_center_id: expenseForm.cost_center_id || undefined,
@@ -245,6 +333,11 @@ export const Finance: React.FC = () => {
         issue_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
         expense_nature: 'OPEX',
+        obligation_type: 'OTHER',
+        business_origin: 'MANUAL',
+        supplier_id: '',
+        purchase_order_id: '',
+        fiscal_document_id: '',
         payment_method_expected: 'BOLETO',
         financial_category_id: '',
         cost_center_id: '',
@@ -258,6 +351,22 @@ export const Finance: React.FC = () => {
     } catch (err: any) {
       alert(err.response?.data?.detail || "Erro ao criar despesa.");
     }
+  };
+
+  const handleExpensePurchaseOrderChange = (purchaseOrderId: string) => {
+    const order = purchaseOrders.find(item => item.id === purchaseOrderId);
+    const supplier = order
+      ? suppliers.find(item => item.id === order.supplier_id) || order.supplier || null
+      : null;
+    setExpenseForm(current => ({
+      ...current,
+      purchase_order_id: purchaseOrderId,
+      supplier_id: order?.supplier_id || current.supplier_id,
+      favored_name: supplier?.name || current.favored_name,
+      cost_center_id: order?.cost_center_id || current.cost_center_id,
+      business_origin: order?.replenishment_id ? 'REPLENISHMENT' : order ? 'PURCHASE' : current.business_origin,
+      obligation_type: order ? 'GOODS_SUPPLIER' : current.obligation_type
+    }));
   };
 
   const handleOpenPaymentModal = (payable: Payable) => {
@@ -305,6 +414,7 @@ export const Finance: React.FC = () => {
     e.preventDefault();
     try {
       await financeService.createReceivable({
+        customer_id: receivableForm.customer_id || undefined,
         customer_name: receivableForm.customer_name,
         customer_document: receivableForm.customer_document || undefined,
         description: receivableForm.description,
@@ -312,10 +422,13 @@ export const Finance: React.FC = () => {
         issue_date: receivableForm.issue_date,
         due_date: receivableForm.due_date,
         payment_method_expected: receivableForm.payment_method_expected || undefined,
+        financial_category_id: receivableForm.financial_category_id || undefined,
+        cost_center_id: receivableForm.cost_center_id || undefined,
         notes: receivableForm.notes || undefined
       });
       setIsReceivableModalOpen(false);
       setReceivableForm({
+        customer_id: '',
         customer_name: '',
         customer_document: '',
         description: '',
@@ -440,14 +553,132 @@ export const Finance: React.FC = () => {
     }
   };
 
+  const handleOpenLinkFiscalModal = (tx: BankTransaction) => {
+    setSelectedTxForLink(tx);
+    setFiscalLinkMode('EXISTING');
+    setExistingFiscalDocId('');
+    setNewFiscalDocForm({
+      direction: tx.transaction_type === 'CREDIT' ? 'INBOUND' : 'OUTBOUND',
+      document_type: 'NFE',
+      document_number: '',
+      series: '',
+      access_key: '',
+      issuer_name: '',
+      issuer_cnpj_cpf: '',
+      issue_date: tx.transaction_date,
+      total_amount: tx.amount.toString(),
+      tax_amount: '0.00',
+      file_attachment: '',
+      notes: `Vínculo com movimentação bancária #${tx.document_number || tx.id.slice(0, 8)}`
+    });
+    setIsLinkFiscalModalOpen(true);
+  };
+
+  const handleSubmitLinkFiscal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTxForLink) return;
+    try {
+      if (fiscalLinkMode === 'EXISTING') {
+        if (!existingFiscalDocId) {
+          alert('Selecione uma nota fiscal para vincular.');
+          return;
+        }
+        await financeService.linkTransactionFiscalDocument(selectedTxForLink.id, {
+          fiscal_document_id: existingFiscalDocId
+        });
+      } else {
+        if (!newFiscalDocForm.document_number || !newFiscalDocForm.issuer_name) {
+          alert('Preencha os campos obrigatórios da nota fiscal.');
+          return;
+        }
+        await financeService.linkTransactionFiscalDocument(selectedTxForLink.id, {
+          new_fiscal_document: {
+            direction: newFiscalDocForm.direction,
+            document_type: newFiscalDocForm.document_type,
+            document_number: newFiscalDocForm.document_number,
+            series: newFiscalDocForm.series || undefined,
+            access_key: newFiscalDocForm.access_key || undefined,
+            issuer_name: newFiscalDocForm.issuer_name,
+            issuer_cnpj_cpf: newFiscalDocForm.issuer_cnpj_cpf || undefined,
+            issue_date: newFiscalDocForm.issue_date,
+            total_amount: parseFloat(newFiscalDocForm.total_amount),
+            tax_amount: parseFloat(newFiscalDocForm.tax_amount || '0'),
+            file_attachment: newFiscalDocForm.file_attachment || undefined,
+            notes: newFiscalDocForm.notes || undefined
+          }
+        });
+      }
+      setIsLinkFiscalModalOpen(false);
+      loadAllFinanceData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Erro ao vincular nota fiscal.');
+    }
+  };
+
+  const handleUnlinkFiscal = async (e: React.MouseEvent, tx: BankTransaction) => {
+    e.stopPropagation();
+    if (!window.confirm('Deseja realmente desvincular o documento fiscal desta movimentação?')) return;
+    try {
+      await financeService.unlinkTransactionFiscalDocument(tx.id);
+      loadAllFinanceData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Erro ao desvincular documento fiscal.');
+    }
+  };
+
+  const handleOpenAttachReceiptModal = (tx: BankTransaction) => {
+    setSelectedTxForLink(tx);
+    setTxReceiptForm({
+      file_name: '',
+      file_url: '',
+      mime_type: 'application/pdf',
+      payable_id: ''
+    });
+    setIsAttachReceiptModalOpen(true);
+  };
+
+  const handleSubmitAttachReceipt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTxForLink) return;
+    if (!txReceiptForm.file_name || !txReceiptForm.file_url) {
+      alert('Informe o nome e o arquivo/URL do comprovante.');
+      return;
+    }
+    try {
+      await financeService.attachTransactionReceipt(selectedTxForLink.id, {
+        file_name: txReceiptForm.file_name,
+        file_url: txReceiptForm.file_url,
+        mime_type: txReceiptForm.mime_type,
+        payable_id: txReceiptForm.payable_id || undefined
+      });
+      setIsAttachReceiptModalOpen(false);
+      loadAllFinanceData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Erro ao anexar comprovante de pagamento.');
+    }
+  };
+
+  const handleRemoveReceipt = async (e: React.MouseEvent, tx: BankTransaction) => {
+    e.stopPropagation();
+    if (!window.confirm('Deseja remover o comprovante de pagamento desta movimentação?')) return;
+    try {
+      await financeService.removeTransactionReceipt(tx.id);
+      loadAllFinanceData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Erro ao remover comprovante.');
+    }
+  };
+
   // Filtragem
   const filteredPayables = payables.filter(p => {
     const matchesStatus = payableStatusFilter === 'ALL' || p.status === payableStatusFilter;
     const matchesNature = payableNatureFilter === 'ALL' || p.expense_nature === payableNatureFilter;
+    const matchesType = payableTypeFilter === 'ALL' || p.obligation_type === payableTypeFilter;
+    const matchesOrigin = payableOriginFilter === 'ALL' || p.business_origin === payableOriginFilter;
     const matchesSearch = searchTerm === '' ||
       p.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       p.favored_name.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesStatus && matchesNature && matchesSearch;
+    return matchesStatus && matchesNature && matchesType && matchesOrigin && matchesSearch;
   });
 
   const filteredReceivables = receivables.filter(r => {
@@ -456,6 +687,58 @@ export const Finance: React.FC = () => {
       r.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       r.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesStatus && matchesSearch;
+  });
+
+  const payablePagination = useListPagination(filteredPayables);
+  const receivablePagination = useListPagination(filteredReceivables);
+  const transactionPagination = useListPagination(transactions);
+  const fiscalPagination = useListPagination(fiscalDocs);
+  const categoryPagination = useListPagination(categories);
+  const cancellablePayablesOnPage = payablePagination.pageItems.filter(item => !['PAID', 'CANCELLED', 'RECONCILED'].includes(item.status));
+  const cancellableReceivablesOnPage = receivablePagination.pageItems.filter(item => !['RECEIVED', 'CANCELLED'].includes(item.status));
+  const cancellableFiscalOnPage = fiscalPagination.pageItems.filter(item => ['DRAFT', 'PENDING'].includes(item.status.toUpperCase()));
+  const activeCategoriesOnPage = categoryPagination.pageItems.filter(item => item.is_active);
+
+  const runBulkFinanceAction = async (
+    ids: string[],
+    label: string,
+    action: (id: string) => Promise<unknown>,
+    clearSelection: () => void,
+  ) => {
+    if (ids.length === 0 || !window.confirm(`${label} ${ids.length} registro(s) selecionado(s)?`)) return;
+    const results = await Promise.allSettled(ids.map(action));
+    const succeeded = results.filter(result => result.status === 'fulfilled').length;
+    const failed = results.length - succeeded;
+    clearSelection();
+    await loadAllFinanceData();
+    window.alert(failed ? `${succeeded} registro(s) processado(s); ${failed} não puderam ser alterados.` : `${succeeded} registro(s) processado(s) com sucesso.`);
+  };
+
+  useRecordDeepLink({
+    types: ['PAYABLE'],
+    records: payables,
+    onOpen: (p) => {
+      setActiveTab('payables');
+      setEditingRecord({ kind: 'payable', value: p });
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['RECEIVABLE'],
+    records: receivables,
+    onOpen: (r) => {
+      setActiveTab('receivables');
+      setEditingRecord({ kind: 'receivable', value: r });
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['FISCAL_DOCUMENT'],
+    records: fiscalDocs,
+    onOpen: (doc) => {
+      setActiveTab('fiscal-documents');
+      setEditingRecord({ kind: 'fiscal', value: doc });
+    },
   });
 
   return (
@@ -688,14 +971,33 @@ export const Finance: React.FC = () => {
                     <option value="ALL">Todas as Naturezas</option>
                     <option value="OPEX">OPEX (Operacional)</option>
                     <option value="CAPEX">CAPEX (Investimento)</option>
+                    <option value="FINANCIAL">Financeira</option>
+                    <option value="TAX">Tributária</option>
+                    <option value="PAYROLL">Folha</option>
+                    <option value="TRANSFER">Transferência</option>
+                    <option value="NOT_APPLICABLE">Não aplicável</option>
+                  </select>
+
+                  <select value={payableTypeFilter} onChange={(e) => setPayableTypeFilter(e.target.value)}>
+                    <option value="ALL">Todos os Tipos</option>
+                    {Object.entries(payableTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+
+                  <select value={payableOriginFilter} onChange={(e) => setPayableOriginFilter(e.target.value)}>
+                    <option value="ALL">Todas as Origens</option>
+                    {Object.entries(payableOriginLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                 </div>
               </div>
 
+              <BulkActionsBar selectedCount={payableSelection.selectedCount} resourceName={{ singular: 'conta', plural: 'contas' }} onClear={payableSelection.clearSelection}>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(payableSelection.selectedIdList, 'Cancelar', (id) => financeService.updatePayable(id, { status: 'CANCELLED' }), payableSelection.clearSelection)}><Ban size={14} /> Cancelar selecionadas</button>
+              </BulkActionsBar>
               <div className="table-responsive">
                 <table className="finance-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar contas canceláveis desta página" checked={payableSelection.isAllSelected(cancellablePayablesOnPage)} onChange={() => payableSelection.toggleSelectAll(cancellablePayablesOnPage)} /></th>
                       <th>Favorecido / Descrição</th>
                       <th>Vencimento</th>
                       <th>Classificação</th>
@@ -709,17 +1011,44 @@ export const Finance: React.FC = () => {
                   <tbody>
                     {filteredPayables.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state">
+                        <td colSpan={9} className="empty-state">
                           Nenhuma conta a pagar encontrada com os filtros selecionados.
                         </td>
                       </tr>
                     ) : (
-                      filteredPayables.map((p) => (
-                        <tr key={p.id} className={p.status === 'OVERDUE' ? 'row-overdue' : ''}>
+                      payablePagination.pageItems.map((p) => (
+                        <tr
+                          key={p.id}
+                          className={`${p.status === 'OVERDUE' ? 'row-overdue' : ''} ${!['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) ? 'ui-record-row' : ''} ${payableSelection.isSelected(p.id) ? 'ui-record-row--selected' : ''}`}
+                          role={!['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) ? 'button' : undefined}
+                          tabIndex={!['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) ? 0 : undefined}
+                          onClick={() => !['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) && setEditingRecord({ kind: 'payable', value: p })}
+                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && !['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status)) { event.preventDefault(); setEditingRecord({ kind: 'payable', value: p }); } }}
+                        >
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar conta ${p.payable_number}`} disabled={['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status)} checked={payableSelection.isSelected(p.id)} onClick={(event) => event.stopPropagation()} onChange={() => payableSelection.toggleSelect(p.id)} /></td>
                           <td>
                             <div className="favored-cell">
-                              <span className="favored-name">{p.favored_name}</span>
+                              <RecordLink type="SUPPLIER" id={p.supplier_id} className="favored-name">
+                                {p.favored_name}
+                              </RecordLink>
                               <span className="desc-text">{p.description}</span>
+                              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                                {p.purchase_order_id && (
+                                  <RecordLink type="PURCHASE_ORDER" id={p.purchase_order_id}>
+                                    PO #{p.purchase_order_id.slice(0, 8)}
+                                  </RecordLink>
+                                )}
+                                {p.fiscal_document_id && (
+                                  <span className="cat-badge" style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <FileText size={11} /> NF-e Vinculada
+                                  </span>
+                                )}
+                                {p.inventory_receipt_id && (
+                                  <span className="cat-badge" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <FileCheck size={11} /> Entrada Física
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td>
@@ -733,6 +1062,8 @@ export const Finance: React.FC = () => {
                               <span className={`nature-badge ${p.expense_nature.toLowerCase()}`}>
                                 {p.expense_nature}
                               </span>
+                              <span className="cat-badge">{payableTypeLabels[p.obligation_type]}</span>
+                              <span className="cat-badge">{payableOriginLabels[p.business_origin]}</span>
                               {p.financial_category && (
                                 <span className="cat-badge">{p.financial_category.name}</span>
                               )}
@@ -750,7 +1081,7 @@ export const Finance: React.FC = () => {
                             {p.status !== 'PAID' && p.status !== 'CANCELLED' ? (
                               <button
                                 className="btn-action-pay"
-                                onClick={() => handleOpenPaymentModal(p)}
+                                onClick={(event) => { event.stopPropagation(); handleOpenPaymentModal(p); }}
                                 title="Efetuar Baixa / Pagamento"
                               >
                                 <DollarSign size={13} />
@@ -767,6 +1098,7 @@ export const Finance: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...payablePagination} onPageChange={payablePagination.setPage} onPageSizeChange={payablePagination.setPageSize} />
               </div>
             </div>
           )}
@@ -799,10 +1131,14 @@ export const Finance: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar selectedCount={receivableSelection.selectedCount} resourceName={{ singular: 'título', plural: 'títulos' }} onClear={receivableSelection.clearSelection}>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(receivableSelection.selectedIdList, 'Cancelar', (id) => financeService.updateReceivable(id, { status: 'CANCELLED' }), receivableSelection.clearSelection)}><Ban size={14} /> Cancelar selecionados</button>
+              </BulkActionsBar>
               <div className="table-responsive">
                 <table className="finance-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar títulos canceláveis desta página" checked={receivableSelection.isAllSelected(cancellableReceivablesOnPage)} onChange={() => receivableSelection.toggleSelectAll(cancellableReceivablesOnPage)} /></th>
                       <th>Cliente / Devedor</th>
                       <th>Descrição</th>
                       <th>Vencimento</th>
@@ -815,16 +1151,33 @@ export const Finance: React.FC = () => {
                   <tbody>
                     {filteredReceivables.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="empty-state">
+                        <td colSpan={8} className="empty-state">
                           Nenhum título a receber registrado.
                         </td>
                       </tr>
                     ) : (
-                      filteredReceivables.map((r) => (
-                        <tr key={r.id}>
+                      receivablePagination.pageItems.map((r) => (
+                        <tr
+                          key={r.id}
+                          className={`${!['RECEIVED', 'CANCELLED'].includes(r.status) ? 'ui-record-row' : ''} ${receivableSelection.isSelected(r.id) ? 'ui-record-row--selected' : ''}`}
+                          role={!['RECEIVED', 'CANCELLED'].includes(r.status) ? 'button' : undefined}
+                          tabIndex={!['RECEIVED', 'CANCELLED'].includes(r.status) ? 0 : undefined}
+                          onClick={() => !['RECEIVED', 'CANCELLED'].includes(r.status) && setEditingRecord({ kind: 'receivable', value: r })}
+                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && !['RECEIVED', 'CANCELLED'].includes(r.status)) { event.preventDefault(); setEditingRecord({ kind: 'receivable', value: r }); } }}
+                        >
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar título ${r.receivable_number}`} disabled={['RECEIVED', 'CANCELLED'].includes(r.status)} checked={receivableSelection.isSelected(r.id)} onClick={(event) => event.stopPropagation()} onChange={() => receivableSelection.toggleSelect(r.id)} /></td>
                           <td>
-                            <strong>{r.customer_name}</strong>
+                            <RecordLink type="CUSTOMER" id={r.customer_id}>
+                              <strong>{r.customer_name}</strong>
+                            </RecordLink>
                             {r.customer_document && <span className="doc-sub"> ({r.customer_document})</span>}
+                            {r.sales_order_id && (
+                              <div style={{ marginTop: '0.2rem' }}>
+                                <RecordLink type="SALES_ORDER" id={r.sales_order_id}>
+                                  Pedido #{r.sales_order_id.slice(0, 8)}
+                                </RecordLink>
+                              </div>
+                            )}
                           </td>
                           <td>{r.description}</td>
                           <td>
@@ -840,7 +1193,7 @@ export const Finance: React.FC = () => {
                             {r.status !== 'RECEIVED' && r.status !== 'CANCELLED' && (
                               <button
                                 className="btn-action-receive"
-                                onClick={() => handleOpenReceiptModal(r)}
+                                onClick={(event) => { event.stopPropagation(); handleOpenReceiptModal(r); }}
                                 title="Registrar Recebimento"
                               >
                                 <CheckCircle2 size={13} />
@@ -853,6 +1206,7 @@ export const Finance: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...receivablePagination} onPageChange={receivablePagination.setPage} onPageSizeChange={receivablePagination.setPageSize} />
               </div>
             </div>
           )}
@@ -862,7 +1216,7 @@ export const Finance: React.FC = () => {
             <div className="tab-pane">
               <div className="treasury-cards-row">
                 {bankAccounts.map((acc) => (
-                  <div key={acc.id} className="bank-account-card">
+                  <div key={acc.id} className="bank-account-card ui-record-card" role="button" tabIndex={0} onClick={() => setEditingRecord({ kind: 'bank', value: acc })} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); setEditingRecord({ kind: 'bank', value: acc }); } }}>
                     <div className="acc-header">
                       <Building2 size={16} />
                       <span className="acc-type">{acc.account_type}</span>
@@ -904,19 +1258,20 @@ export const Finance: React.FC = () => {
                       <th>Tipo</th>
                       <th>Valor</th>
                       <th>Saldo Após</th>
+                      <th>Nota Fiscal / Comprovante</th>
                       <th>Status Conciliação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {transactions.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state">
+                        <td colSpan={9} className="empty-state">
                           Nenhuma movimentação bancária registrada.
                         </td>
                       </tr>
                     ) : (
-                      transactions.map((tx) => (
-                        <tr key={tx.id}>
+                      transactionPagination.pageItems.map((tx) => (
+                        <tr key={tx.id} className={tx.status === 'pending' ? 'ui-record-row' : ''} role={tx.status === 'pending' ? 'button' : undefined} tabIndex={tx.status === 'pending' ? 0 : undefined} onClick={() => tx.status === 'pending' && setEditingRecord({ kind: 'transaction', value: tx })} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && tx.status === 'pending') { event.preventDefault(); setEditingRecord({ kind: 'transaction', value: tx }); } }}>
                           <td>{fmtDate(tx.transaction_date)}</td>
                           <td>{bankAccounts.find(b => b.id === tx.bank_account_id)?.bank_name || '-'}</td>
                           <td>{tx.description}</td>
@@ -931,6 +1286,72 @@ export const Finance: React.FC = () => {
                           </td>
                           <td>{tx.balance_after ? fmtCurrency(tx.balance_after) : '-'}</td>
                           <td>
+                            {tx.transaction_type === 'CREDIT' ? (
+                              tx.fiscal_document_id && tx.fiscal_document ? (
+                                <div className="doc-link-pill-wrap" onClick={(e) => e.stopPropagation()}>
+                                  <RecordLink type="FISCAL_DOCUMENT" id={tx.fiscal_document_id}>
+                                    <span className="doc-pill fiscal-pill">
+                                      <FileText size={12} />
+                                      <span>{tx.fiscal_document.document_type} {tx.fiscal_document.document_number}</span>
+                                    </span>
+                                  </RecordLink>
+                                  <button
+                                    type="button"
+                                    className="btn-unlink-icon"
+                                    title="Desvincular Nota Fiscal"
+                                    onClick={(e) => handleUnlinkFiscal(e, tx)}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn-quick-link-nf"
+                                  onClick={(e) => { e.stopPropagation(); handleOpenLinkFiscalModal(tx); }}
+                                  title="Vincular ou Cadastrar Nota Fiscal de Entrada"
+                                >
+                                  <Plus size={12} />
+                                  <span>Vincular NF</span>
+                                </button>
+                              )
+                            ) : (
+                              tx.receipt_url ? (
+                                <div className="doc-link-pill-wrap" onClick={(e) => e.stopPropagation()}>
+                                  <a
+                                    href={tx.receipt_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="doc-pill receipt-pill"
+                                    title="Visualizar Comprovante de Pagamento"
+                                  >
+                                    <Paperclip size={12} />
+                                    <span>{tx.receipt_filename || 'Comprovante'}</span>
+                                    <ExternalLink size={10} />
+                                  </a>
+                                  <button
+                                    type="button"
+                                    className="btn-unlink-icon"
+                                    title="Remover Comprovante"
+                                    onClick={(e) => handleRemoveReceipt(e, tx)}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn-quick-attach-receipt"
+                                  onClick={(e) => { e.stopPropagation(); handleOpenAttachReceiptModal(tx); }}
+                                  title="Anexar Comprovante de Pagamento"
+                                >
+                                  <Paperclip size={12} />
+                                  <span>Anexar Comp.</span>
+                                </button>
+                              )
+                            )}
+                          </td>
+                          <td>
                             <span className={`reconcile-badge ${tx.status}`}>
                               {tx.status === 'reconciled' ? 'Conciliado' : 'Pendente'}
                             </span>
@@ -940,6 +1361,7 @@ export const Finance: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...transactionPagination} onPageChange={transactionPagination.setPage} onPageSizeChange={transactionPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -984,10 +1406,14 @@ export const Finance: React.FC = () => {
           {/* ABA 5: DOCUMENTOS FISCAIS */}
           {activeTab === 'fiscal-documents' && (
             <div className="tab-pane">
+              <BulkActionsBar selectedCount={fiscalSelection.selectedCount} resourceName={{ singular: 'documento', plural: 'documentos' }} onClear={fiscalSelection.clearSelection}>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(fiscalSelection.selectedIdList, 'Cancelar', (id) => financeService.updateFiscalDocument(id, { status: 'CANCELLED' }), fiscalSelection.clearSelection)}><Ban size={14} /> Cancelar rascunhos</button>
+              </BulkActionsBar>
               <div className="table-responsive">
                 <table className="finance-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar documentos fiscais em rascunho" checked={fiscalSelection.isAllSelected(cancellableFiscalOnPage)} onChange={() => fiscalSelection.toggleSelectAll(cancellableFiscalOnPage)} /></th>
                       <th>Direção</th>
                       <th>Tipo</th>
                       <th>Número / Série</th>
@@ -1001,13 +1427,14 @@ export const Finance: React.FC = () => {
                   <tbody>
                     {fiscalDocs.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state">
+                        <td colSpan={9} className="empty-state">
                           Nenhum documento fiscal registrado.
                         </td>
                       </tr>
                     ) : (
-                      fiscalDocs.map((doc) => (
-                        <tr key={doc.id}>
+                      fiscalPagination.pageItems.map((doc) => (
+                        <tr key={doc.id} className={`${doc.status.toLowerCase() !== 'cancelled' ? 'ui-record-row' : ''} ${fiscalSelection.isSelected(doc.id) ? 'ui-record-row--selected' : ''}`} role={doc.status.toLowerCase() !== 'cancelled' ? 'button' : undefined} tabIndex={doc.status.toLowerCase() !== 'cancelled' ? 0 : undefined} onClick={() => doc.status.toLowerCase() !== 'cancelled' && setEditingRecord({ kind: 'fiscal', value: doc })} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && doc.status.toLowerCase() !== 'cancelled') { event.preventDefault(); setEditingRecord({ kind: 'fiscal', value: doc }); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar documento ${doc.document_number}`} disabled={!['DRAFT', 'PENDING'].includes(doc.status.toUpperCase())} checked={fiscalSelection.isSelected(doc.id)} onClick={(event) => event.stopPropagation()} onChange={() => fiscalSelection.toggleSelect(doc.id)} /></td>
                           <td>
                             <span className={`direction-badge ${doc.direction.toLowerCase()}`}>
                               {doc.direction === 'INBOUND' ? 'Entrada' : 'Saída'}
@@ -1015,7 +1442,17 @@ export const Finance: React.FC = () => {
                           </td>
                           <td>{doc.document_type}</td>
                           <td><strong>{doc.document_number}</strong> {doc.series && `(Série ${doc.series})`}</td>
-                          <td>{doc.issuer_name}</td>
+                          <td>
+                            {doc.direction === 'INBOUND' ? (
+                              <RecordLink type="SUPPLIER" id={doc.supplier_id}>
+                                {doc.issuer_name}
+                              </RecordLink>
+                            ) : (
+                              <RecordLink type="CUSTOMER" id={doc.customer_id}>
+                                {doc.issuer_name || doc.recipient_name}
+                              </RecordLink>
+                            )}
+                          </td>
                           <td>{fmtDate(doc.issue_date)}</td>
                           <td>{fmtCurrency(doc.total_amount)}</td>
                           <td>{fmtCurrency(doc.tax_amount)}</td>
@@ -1025,6 +1462,7 @@ export const Finance: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...fiscalPagination} onPageChange={fiscalPagination.setPage} onPageSizeChange={fiscalPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -1032,10 +1470,14 @@ export const Finance: React.FC = () => {
           {/* ABA 6: CATEGORIAS & CONTAS */}
           {activeTab === 'categories' && (
             <div className="tab-pane">
+              <BulkActionsBar selectedCount={categorySelection.selectedCount} resourceName={{ singular: 'categoria', plural: 'categorias' }} onClear={categorySelection.clearSelection}>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(categorySelection.selectedIdList, 'Inativar', (id) => financeService.updateCategory(id, { is_active: false }), categorySelection.clearSelection)}><Power size={14} /> Inativar selecionadas</button>
+              </BulkActionsBar>
               <div className="table-responsive">
                 <table className="finance-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar categorias ativas desta página" checked={categorySelection.isAllSelected(activeCategoriesOnPage)} onChange={() => categorySelection.toggleSelectAll(activeCategoriesOnPage)} /></th>
                       <th>Código</th>
                       <th>Nome da Categoria</th>
                       <th>Tipo</th>
@@ -1046,13 +1488,14 @@ export const Finance: React.FC = () => {
                   <tbody>
                     {categories.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="empty-state">
+                        <td colSpan={6} className="empty-state">
                           Nenhuma categoria cadastrada.
                         </td>
                       </tr>
                     ) : (
-                      categories.map((c) => (
-                        <tr key={c.id}>
+                      categoryPagination.pageItems.map((c) => (
+                        <tr key={c.id} className={`ui-record-row ${categorySelection.isSelected(c.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={() => setEditingRecord({ kind: 'category', value: c })} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); setEditingRecord({ kind: 'category', value: c }); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar categoria ${c.name}`} disabled={!c.is_active} checked={categorySelection.isSelected(c.id)} onClick={(event) => event.stopPropagation()} onChange={() => categorySelection.toggleSelect(c.id)} /></td>
                           <td><code>{c.code || '-'}</code></td>
                           <td><strong>{c.name}</strong></td>
                           <td>
@@ -1067,6 +1510,7 @@ export const Finance: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...categoryPagination} onPageChange={categoryPagination.setPage} onPageSizeChange={categoryPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -1113,6 +1557,34 @@ export const Finance: React.FC = () => {
         size="lg"
       >
         <form onSubmit={handleCreateExpense} className="wizard-form">
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Pedido de Compra / Reposição</label>
+              <select value={expenseForm.purchase_order_id} onChange={(e) => handleExpensePurchaseOrderChange(e.target.value)}>
+                <option value="">Sem pedido vinculado</option>
+                {purchaseOrders.map(order => <option key={order.id} value={order.id}>{order.order_number} · {order.replenishment_id ? 'Reposição' : 'Compra'} · {fmtCurrency(order.total_amount)}</option>)}
+              </select>
+            </div>
+            <div className="form-group flex-1">
+              <label>Documento Fiscal</label>
+              <select value={expenseForm.fiscal_document_id} onChange={(e) => setExpenseForm(current => ({ ...current, fiscal_document_id: e.target.value, business_origin: e.target.value ? 'FISCAL_DOCUMENT' : current.business_origin }))}>
+                <option value="">Sem documento fiscal vinculado</option>
+                {fiscalDocs.filter(doc => doc.direction === 'INBOUND').map(doc => <option key={doc.id} value={doc.id}>{doc.document_type} {doc.document_number} · {doc.issuer_name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Fornecedor Cadastrado</label>
+            <select value={expenseForm.supplier_id} onChange={(e) => {
+              const supplier = suppliers.find(item => item.id === e.target.value);
+              setExpenseForm(current => ({ ...current, supplier_id: e.target.value, favored_name: supplier?.name || current.favored_name, obligation_type: e.target.value ? 'GOODS_SUPPLIER' : current.obligation_type }));
+            }}>
+              <option value="">Sem fornecedor cadastrado</option>
+              {suppliers.filter(item => item.is_active).map(item => <option key={item.id} value={item.id}>{item.name} · {item.cnpj_cpf}</option>)}
+            </select>
+          </div>
+
           <div className="form-row">
             <div className="form-group flex-2">
               <label>Favorecido / Fornecedor *</label>
@@ -1172,13 +1644,33 @@ export const Finance: React.FC = () => {
             </div>
 
             <div className="form-group flex-1">
-              <label>Classificação *</label>
+              <label>Natureza Contábil *</label>
               <select
                 value={expenseForm.expense_nature}
                 onChange={(e) => setExpenseForm({ ...expenseForm, expense_nature: e.target.value as any })}
               >
                 <option value="OPEX">OPEX (Despesa Operacional)</option>
                 <option value="CAPEX">CAPEX (Investimento em Ativos)</option>
+                <option value="FINANCIAL">Despesa Financeira</option>
+                <option value="TAX">Tributária</option>
+                <option value="PAYROLL">Folha de Pagamento</option>
+                <option value="TRANSFER">Transferência</option>
+                <option value="NOT_APPLICABLE">Não Aplicável</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Tipo da Obrigação *</label>
+              <select value={expenseForm.obligation_type} onChange={(e) => setExpenseForm({ ...expenseForm, obligation_type: e.target.value as Payable['obligation_type'] })}>
+                {Object.entries(payableTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            <div className="form-group flex-1">
+              <label>Origem do Negócio *</label>
+              <select disabled={!!(expenseForm.purchase_order_id || expenseForm.fiscal_document_id)} value={expenseForm.business_origin} onChange={(e) => setExpenseForm({ ...expenseForm, business_origin: e.target.value as Payable['business_origin'] })}>
+                {Object.entries(payableOriginLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </div>
           </div>
@@ -1250,6 +1742,8 @@ export const Finance: React.FC = () => {
             />
           </div>
 
+          <div className="form-group"><label>Observações</label><textarea rows={3} value={expenseForm.notes} onChange={(e) => setExpenseForm({ ...expenseForm, notes: e.target.value })} /></div>
+
           <div className="modal-footer">
             <button type="button" className="btn-secondary" onClick={() => setIsExpenseModalOpen(false)}>
               Cancelar (ESC)
@@ -1273,7 +1767,9 @@ export const Finance: React.FC = () => {
           <form onSubmit={handleRegisterPayment} className="wizard-form">
             <div className="payable-summary-banner">
               <div>
-                <strong>{selectedPayable.favored_name}</strong>
+                <RecordLink type="SUPPLIER" id={selectedPayable.supplier_id}>
+                  <strong>{selectedPayable.favored_name}</strong>
+                </RecordLink>
                 <span>{selectedPayable.description}</span>
               </div>
               <div className="banner-val">
@@ -1358,7 +1854,38 @@ export const Finance: React.FC = () => {
       >
         <form onSubmit={handleCreateReceivable} className="wizard-form">
           <div className="form-row">
-            <div className="form-group flex-2">
+            <div className="form-group flex-1">
+              <label>Cliente Cadastrado</label>
+              <select
+                value={receivableForm.customer_id}
+                onChange={(e) => {
+                  const selectedId = e.target.value;
+                  const selectedCust = customers.find(c => c.id === selectedId);
+                  if (selectedCust) {
+                    setReceivableForm({
+                      ...receivableForm,
+                      customer_id: selectedId,
+                      customer_name: selectedCust.name,
+                      customer_document: selectedCust.document || ''
+                    });
+                  } else {
+                    setReceivableForm({
+                      ...receivableForm,
+                      customer_id: ''
+                    });
+                  }
+                }}
+              >
+                <option value="">-- Selecione um cliente cadastrado ou digite avulso --</option>
+                {customers.map(cust => (
+                  <option key={cust.id} value={cust.id}>
+                    {cust.name} {cust.document ? `(${cust.document})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group flex-1">
               <label>Cliente / Sacado *</label>
               <input
                 type="text"
@@ -1426,6 +1953,14 @@ export const Finance: React.FC = () => {
             </div>
           </div>
 
+          <div className="form-row">
+            <div className="form-group flex-1"><label>Categoria Financeira</label><select value={receivableForm.financial_category_id} onChange={(e) => setReceivableForm({ ...receivableForm, financial_category_id: e.target.value })}><option value="">Sem categoria</option>{categories.filter(item => item.category_type === 'REVENUE').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+            <div className="form-group flex-1"><label>Centro de Custo</label><select value={receivableForm.cost_center_id} onChange={(e) => setReceivableForm({ ...receivableForm, cost_center_id: e.target.value })}><option value="">Sem centro</option>{costCenters.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+            <div className="form-group flex-1"><label>Forma Prevista</label><select value={receivableForm.payment_method_expected} onChange={(e) => setReceivableForm({ ...receivableForm, payment_method_expected: e.target.value })}><option value="PIX">PIX</option><option value="BOLETO">Boleto</option><option value="TRANSFERENCIA">Transferência</option><option value="CARTAO">Cartão</option></select></div>
+          </div>
+
+          <div className="form-group"><label>Observações</label><textarea rows={3} value={receivableForm.notes} onChange={(e) => setReceivableForm({ ...receivableForm, notes: e.target.value })} /></div>
+
           <div className="modal-footer">
             <button type="button" className="btn-secondary" onClick={() => setIsReceivableModalOpen(false)}>
               Cancelar (ESC)
@@ -1449,7 +1984,9 @@ export const Finance: React.FC = () => {
           <form onSubmit={handleRegisterReceipt} className="wizard-form">
             <div className="payable-summary-banner">
               <div>
-                <strong>{selectedReceivable.customer_name}</strong>
+                <RecordLink type="CUSTOMER" id={selectedReceivable.customer_id}>
+                  <strong>{selectedReceivable.customer_name}</strong>
+                </RecordLink>
                 <span>{selectedReceivable.description}</span>
               </div>
               <div className="banner-val" style={{ color: '#10b981' }}>
@@ -1726,6 +2263,302 @@ export const Finance: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* MODAL 8: VINCULAR OU CADASTRAR NOTA FISCAL */}
+      <Modal
+        isOpen={isLinkFiscalModalOpen}
+        onClose={() => setIsLinkFiscalModalOpen(false)}
+        title="Vincular Documento Fiscal à Movimentação Bancária"
+        subtitle="Rastreabilidade contábil entre extrato e faturamento/compras"
+        size="lg"
+      >
+        {selectedTxForLink && (
+          <div className="tx-preview-banner">
+            <div className="tx-info">
+              <span className="tx-title">{selectedTxForLink.description}</span>
+              <span className="tx-sub">Data: {fmtDate(selectedTxForLink.transaction_date)} {selectedTxForLink.document_number && `· Doc: ${selectedTxForLink.document_number}`}</span>
+            </div>
+            <div className={`tx-val ${selectedTxForLink.transaction_type.toLowerCase()}`}>
+              {selectedTxForLink.transaction_type === 'CREDIT' ? '+' : '-'}{fmtCurrency(selectedTxForLink.amount)}
+            </div>
+          </div>
+        )}
+
+        <div className="modal-mode-tabs">
+          <button
+            type="button"
+            className={`mode-tab-btn ${fiscalLinkMode === 'EXISTING' ? 'active' : ''}`}
+            onClick={() => setFiscalLinkMode('EXISTING')}
+          >
+            Vincular Nota Já Cadastrada
+          </button>
+          <button
+            type="button"
+            className={`mode-tab-btn ${fiscalLinkMode === 'NEW' ? 'active' : ''}`}
+            onClick={() => setFiscalLinkMode('NEW')}
+          >
+            Cadastrar Nova Nota Fiscal
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmitLinkFiscal} className="wizard-form">
+          {fiscalLinkMode === 'EXISTING' ? (
+            <div className="form-group">
+              <label>Selecione a Nota Fiscal *</label>
+              <select
+                required
+                value={existingFiscalDocId}
+                onChange={(e) => setExistingFiscalDocId(e.target.value)}
+              >
+                <option value="">Selecione um documento fiscal...</option>
+                {fiscalDocs.map(doc => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.direction === 'INBOUND' ? 'Entrada' : 'Saída'} · {doc.document_type} {doc.document_number} {doc.series && `(Série ${doc.series})`} · {doc.issuer_name || doc.recipient_name} · {fmtCurrency(doc.total_amount)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <>
+              <div className="form-row">
+                <div className="form-group flex-1">
+                  <label>Direção Fiscal *</label>
+                  <select
+                    value={newFiscalDocForm.direction}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, direction: e.target.value })}
+                  >
+                    <option value="INBOUND">Entrada (Compra / Recebimento)</option>
+                    <option value="OUTBOUND">Saída (Venda / Faturamento)</option>
+                  </select>
+                </div>
+
+                <div className="form-group flex-1">
+                  <label>Tipo de Documento *</label>
+                  <select
+                    value={newFiscalDocForm.document_type}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, document_type: e.target.value })}
+                  >
+                    <option value="NFE">NF-e (Nota Fiscal Eletrônica)</option>
+                    <option value="NFSE">NFS-e (Serviços)</option>
+                    <option value="NFCE">NFC-e (Consumidor)</option>
+                    <option value="OUTRO">Outro Documento</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group flex-2">
+                  <label>Número do Documento *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: 00012345"
+                    value={newFiscalDocForm.document_number}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, document_number: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group flex-1">
+                  <label>Série</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 1"
+                    value={newFiscalDocForm.series}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, series: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group flex-2">
+                  <label>Emissor / Razão Social *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Fornecedor de Medicamentos Ltda"
+                    value={newFiscalDocForm.issuer_name}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, issuer_name: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group flex-1">
+                  <label>CNPJ / CPF do Emissor</label>
+                  <input
+                    type="text"
+                    placeholder="00.000.000/0001-00"
+                    value={newFiscalDocForm.issuer_cnpj_cpf}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, issuer_cnpj_cpf: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Chave de Acesso (44 dígitos)</label>
+                <input
+                  type="text"
+                  maxLength={44}
+                  placeholder="35260800000000000000550010000123451000123456"
+                  value={newFiscalDocForm.access_key}
+                  onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, access_key: e.target.value })}
+                />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group flex-1">
+                  <label>Data de Emissão *</label>
+                  <input
+                    type="date"
+                    required
+                    value={newFiscalDocForm.issue_date}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, issue_date: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group flex-1">
+                  <label>Valor Total (R$) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    value={newFiscalDocForm.total_amount}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, total_amount: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group flex-1">
+                  <label>Valor dos Impostos (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={newFiscalDocForm.tax_amount}
+                    onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, tax_amount: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Anexo XML / PDF (URL ou Base64)</label>
+                <input
+                  type="text"
+                  placeholder="https://... ou cole o link do arquivo"
+                  value={newFiscalDocForm.file_attachment}
+                  onChange={(e) => setNewFiscalDocForm({ ...newFiscalDocForm, file_attachment: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsLinkFiscalModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              <FileCheck size={16} />
+              <span>Confirmar Vínculo Fiscal</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL 9: ANEXAR COMPROVANTE DE PAGAMENTO */}
+      <Modal
+        isOpen={isAttachReceiptModalOpen}
+        onClose={() => setIsAttachReceiptModalOpen(false)}
+        title="Anexar Comprovante de Pagamento"
+        subtitle="Vínculo de comprovantes bancários a saídas de caixa"
+        size="md"
+      >
+        {selectedTxForLink && (
+          <div className="tx-preview-banner">
+            <div className="tx-info">
+              <span className="tx-title">{selectedTxForLink.description}</span>
+              <span className="tx-sub">Data: {fmtDate(selectedTxForLink.transaction_date)} {selectedTxForLink.document_number && `· Doc: ${selectedTxForLink.document_number}`}</span>
+            </div>
+            <div className="tx-val debit">
+              -{fmtCurrency(selectedTxForLink.amount)}
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmitAttachReceipt} className="wizard-form">
+          <div className="form-group">
+            <label>Nome do Comprovante *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: comprovante_pix_fornecedor.pdf"
+              value={txReceiptForm.file_name}
+              onChange={(e) => setTxReceiptForm({ ...txReceiptForm, file_name: e.target.value })}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Arquivo / URL do Comprovante *</label>
+            <input
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    setTxReceiptForm(current => ({
+                      ...current,
+                      file_name: file.name,
+                      file_url: reader.result as string,
+                      mime_type: file.type || 'application/pdf'
+                    }));
+                  };
+                  reader.readAsDataURL(file);
+                }
+              }}
+            />
+            {txReceiptForm.file_url && (
+              <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <CheckCircle2 size={13} />
+                <span>Arquivo carregado: <strong>{txReceiptForm.file_name}</strong></span>
+              </div>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label>Vincular a Conta a Pagar (Opcional)</label>
+            <select
+              value={txReceiptForm.payable_id}
+              onChange={(e) => setTxReceiptForm({ ...txReceiptForm, payable_id: e.target.value })}
+            >
+              <option value="">Nenhum título vinculado (anexo avulso de extrato)</option>
+              {payables.filter(p => p.status === 'PAID' || p.status === 'PARTIALLY_PAID').map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.favored_name} · {p.description} · {fmtCurrency(p.original_amount)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={() => setIsAttachReceiptModalOpen(false)}>
+              Cancelar (ESC)
+            </button>
+            <button type="submit" className="btn-primary">
+              <Upload size={16} />
+              <span>Salvar Comprovante</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <FinanceRecordEditModal
+        record={editingRecord}
+        categories={categories}
+        costCenters={costCenters}
+        suppliers={suppliers}
+        customers={customers}
+        bankAccounts={bankAccounts}
+        onClose={() => setEditingRecord(null)}
+        onSaved={() => void loadAllFinanceData()}
+      />
     </div>
   );
 };

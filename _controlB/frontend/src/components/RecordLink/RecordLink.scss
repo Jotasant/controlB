@@ -1,0 +1,22 @@
+.ui-record-link {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--accent-brand);
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  > svg { flex: 0 0 auto; opacity: 0.72; }
+
+  &:hover { color: var(--accent-brand-hover); text-decoration: underline; }
+  &:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: 3px; }
+}
+

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     String, Text, Numeric, Integer, Date, DateTime, ForeignKey, Index,
-    CheckConstraint, Boolean, UniqueConstraint
+    CheckConstraint, Boolean, ForeignKeyConstraint, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from controlb.db import Base
 import controlb.modules.identity.models  # noqa: F401
 import controlb.modules.sales.models     # noqa: F401
+from controlb.modules.documents.models import BusinessDocument
 
 if TYPE_CHECKING:
     from controlb.modules.identity.models import Organization, User, Contact
@@ -73,10 +74,21 @@ class Lead(Base):
     Conectado diretamente à base de clientes centralizada de Vendas (Customer).
     """
     __tablename__ = "lead"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_lead_document_org",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organization.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
     )
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("customer.id", ondelete="SET NULL"), index=True, nullable=True
@@ -99,6 +111,7 @@ class Lead(Base):
 
     # Relacionamentos
     customer: Mapped["Customer | None"] = relationship(foreign_keys=[customer_id], lazy="select")
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_id], lazy="select")
     opportunities: Mapped[list["Opportunity"]] = relationship(back_populates="lead", lazy="select")
     interactions: Mapped[list["CustomerInteraction"]] = relationship(back_populates="lead", cascade="all, delete-orphan", lazy="select")
@@ -114,10 +127,21 @@ class Opportunity(Base):
     Integrado à base de clientes centralizada (Customer) e cotações (SalesQuote).
     """
     __tablename__ = "opportunity"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_opportunity_document_org",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organization.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True
     )
     lead_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("lead.id", ondelete="SET NULL"), nullable=True
@@ -147,10 +171,16 @@ class Opportunity(Base):
 
     # Relacionamentos
     lead: Mapped["Lead | None"] = relationship(back_populates="opportunities", lazy="select")
+    document: Mapped["BusinessDocument"] = relationship(lazy="select")
     customer: Mapped["Customer | None"] = relationship(back_populates="opportunities", lazy="select")
     assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_id], lazy="select")
     interactions: Mapped[list["CustomerInteraction"]] = relationship(back_populates="opportunity", cascade="all, delete-orphan", lazy="select")
     quotes: Mapped[list["SalesQuote"]] = relationship(back_populates="opportunity", cascade="all, delete-orphan", lazy="select")
+
+    @property
+    def priority(self) -> str:
+        """Prioridade projetada do cabeçalho canônico de Documents."""
+        return self.document.priority if self.document else "MEDIUM"
 
 
 # ==============================================================================

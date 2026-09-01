@@ -11,8 +11,8 @@
  * 7. ⚙️ Gestão Dinâmica de Etapas do Funil com Cores, Ordenação e Contadores
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   LayoutDashboard, Kanban, Users,
   Clock, Phone, Mail, FileText,
@@ -41,7 +41,15 @@ import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline
 import { CommercialTeamsSettings } from '@/components/CommercialTeamsSettings/CommercialTeamsSettings';
 import { CommercialPoliciesSettings } from '@/components/CommercialPoliciesSettings/CommercialPoliciesSettings';
 import { useToast } from '@/components/Toast/ToastContext';
+import { BulkActionsBar } from '@/components/BulkActionsBar';
+import { ListPagination } from '@/components/ListPagination';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { useListPagination } from '@/hooks/useListPagination';
+import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
 import './CRM.scss';
+
+const ALLOWED_CRM_TABS = ['dashboard', 'pipeline', 'leads', 'activities', 'stages', 'reports'] as const;
+type CRMTab = typeof ALLOWED_CRM_TABS[number];
 
 const COLOR_PRESETS = [
   '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6',
@@ -83,10 +91,11 @@ const DEFAULT_OPP_COLUMNS: Record<string, boolean> = {
 
 export const CRM: React.FC = () => {
   const toast = useToast();
-  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialCrmTab = isRequestedView(searchParams, ALLOWED_CRM_TABS, 'pipeline');
 
   // Tab & View Switcher State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pipeline' | 'leads' | 'activities' | 'stages' | 'reports'>('pipeline');
+  const [activeTab, setActiveTab] = useState<CRMTab>(initialCrmTab);
   const [oppViewMode, setOppViewMode] = useState<'kanban' | 'list'>('kanban');
   const [isColumnSelectorOpen, setIsColumnSelectorOpen] = useState<boolean>(false);
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
@@ -106,6 +115,9 @@ export const CRM: React.FC = () => {
   const [allInteractions, setAllInteractions] = useState<CustomerInteraction[]>([]);
   const [sellersList, setSellersList] = useState<SellerResponse[]>([]);
   const [pendingSidebarActivities, setPendingSidebarActivities] = useState<any[]>([]);
+  const opportunitySelection = useBulkSelection<Opportunity>();
+  const leadSelection = useBulkSelection<Lead>();
+  const activitySelection = useBulkSelection<CustomerInteraction>();
 
   const toggleColumnVisibility = (colKey: string) => {
     setVisibleColumns(prev => {
@@ -222,28 +234,6 @@ export const CRM: React.FC = () => {
       setDocumentTimelineLoading(false);
     }
   };
-
-  /** Handler de navegação clicável na cadeia documental */
-  const handleTimelineNavigate = useCallback((documentType: string, nativeId: string) => {
-    // Fecha o modal de rastreabilidade
-    setIsDocumentTimelineOpen(false);
-
-    if (documentType === 'OPPORTUNITY') {
-      // Encontra e abre o detalhe da oportunidade no próprio CRM
-      const opp = opportunities.find(o => o.id === nativeId);
-      if (opp) {
-        setActiveTab('pipeline');
-        setSelectedOpp(opp);
-      } else {
-        toast.info('Oportunidade não encontrada na listagem atual.');
-      }
-    } else if (documentType === 'LEAD') {
-      setActiveTab('leads');
-    } else {
-      // SALES_QUOTE, SALES_ORDER, INVOICE, etc. → módulo de Vendas
-      navigate('/vendas');
-    }
-  }, [opportunities, navigate, toast]);
 
   // Form Lead
   const [leadForm, setLeadForm] = useState({
@@ -584,7 +574,7 @@ export const CRM: React.FC = () => {
         responsible_name: matchedSeller ? matchedSeller.full_name : ((opp as any).assigned_to?.full_name || 'Vendedor Comercial'),
         sales_team: matchedSeller?.sales_team_name || 'Equipe Comercial',
         pipeline_stage: opp.stage,
-        priority: 'HIGH',
+        priority: opp.priority || 'MEDIUM',
         source: opp.lead?.source || 'Indicação',
         creation_date: opp.created_at ? opp.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
         expected_closing_date: opp.expected_closing_date ? opp.expected_closing_date.split('T')[0] : new Date(Date.now() + 20 * 86400000).toISOString().split('T')[0],
@@ -861,6 +851,33 @@ export const CRM: React.FC = () => {
       responsible_id: interaction.responsible_id || ''
     });
   };
+
+  useRecordDeepLink({
+    types: ['OPPORTUNITY'],
+    records: opportunities,
+    onOpen: (opp) => {
+      setActiveTab('pipeline');
+      void loadOpportunityDetails(opp);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['LEAD'],
+    records: leads,
+    onOpen: (lead) => {
+      setActiveTab('leads');
+      handleOpenEditLead(lead);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['CRM_INTERACTION', 'CRM_ACTIVITY'],
+    records: allInteractions,
+    onOpen: (interaction) => {
+      setActiveTab('activities');
+      handleOpenInteractionEditor(interaction);
+    },
+  });
 
   const handleSaveInteractionEdit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1160,6 +1177,7 @@ export const CRM: React.FC = () => {
           estimated_amount: proposalFinalTotal,
           probability_percent: proposalForm.probability_percent,
           expected_closing_date: proposalForm.expected_closing_date,
+          priority: proposalForm.priority,
           assigned_to_id: proposalForm.assigned_to_id || undefined,
         });
         
@@ -1197,6 +1215,7 @@ export const CRM: React.FC = () => {
           probability_percent: proposalForm.probability_percent,
           expected_closing_date: proposalForm.expected_closing_date,
           stage: proposalForm.pipeline_stage || o.stage,
+          priority: proposalForm.priority,
           assigned_to_id: proposalForm.assigned_to_id || o.assigned_to_id
         } : o));
 
@@ -1212,6 +1231,7 @@ export const CRM: React.FC = () => {
           probability_percent: proposalForm.probability_percent || 50,
           expected_closing_date: proposalForm.expected_closing_date || undefined,
           stage: proposalForm.pipeline_stage || (stages[0]?.code || 'PROSPECTING'),
+          priority: proposalForm.priority,
           lead_id: convertingLead ? convertingLead.id : undefined
         });
 
@@ -1700,6 +1720,26 @@ export const CRM: React.FC = () => {
       return true;
     });
   }, [allInteractions, activitySearch, activityTabFilter]);
+  const opportunityPagination = useListPagination(filteredOpportunities);
+  const leadPagination = useListPagination(filteredLeads);
+  const activityPagination = useListPagination(filteredActivities);
+  const scheduledActivitiesOnPage = activityPagination.pageItems.filter(activity => activity.status === 'SCHEDULED');
+
+  const runCrmBulkAction = async (
+    ids: string[],
+    label: string,
+    action: (id: string) => Promise<unknown>,
+    clearSelection: () => void,
+  ) => {
+    if (ids.length === 0 || !window.confirm(`${label} ${ids.length} registro(s) selecionado(s)?`)) return;
+    const results = await Promise.allSettled(ids.map(action));
+    const succeeded = results.filter(result => result.status === 'fulfilled').length;
+    const failed = results.length - succeeded;
+    clearSelection();
+    if (failed) toast.warning(`${succeeded} registro(s) processado(s); ${failed} falharam por regras ou vínculos existentes.`, 'Operação parcial');
+    else toast.success(`${succeeded} registro(s) processado(s).`, 'Operação concluída');
+    await loadCRMData();
+  };
 
   const recentOpps = useMemo(() => {
     return [...opportunities]
@@ -2068,7 +2108,7 @@ export const CRM: React.FC = () => {
                                   </span>
                                 )}
                               </div>
-                              <span>{opp.customer_name}</span>
+                              <RecordLink type="CUSTOMER" id={opp.customer_id}>{opp.customer_name}</RecordLink>
                             </div>
                             <div className="opp-meta">
                               <span className="opp-val">{fmtCurrency(opp.estimated_amount)}</span>
@@ -2199,7 +2239,9 @@ export const CRM: React.FC = () => {
 
                                     <div className="opp-customer">
                                       <Building2 size={13} />
-                                      <span>{opp.customer_name}</span>
+                                      <RecordLink type="CUSTOMER" id={opp.customer_id}>
+                                        {opp.customer_name}
+                                      </RecordLink>
                                     </div>
 
                                     <div className="opp-amount-row">
@@ -2362,10 +2404,18 @@ export const CRM: React.FC = () => {
                     </div>
                   </div>
 
+                  <BulkActionsBar
+                    selectedCount={opportunitySelection.selectedCount}
+                    resourceName={{ singular: 'oportunidade', plural: 'oportunidades' }}
+                    onClear={opportunitySelection.clearSelection}
+                    onDelete={() => void runCrmBulkAction(opportunitySelection.selectedIdList, 'Excluir', crmService.deleteOpportunity, opportunitySelection.clearSelection)}
+                    deleteLabel="Excluir selecionadas"
+                  />
                   <div className="table-responsive">
                     <table className="data-table">
                       <thead>
                         <tr>
+                          <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar oportunidades desta página" checked={opportunitySelection.isAllSelected(opportunityPagination.pageItems)} onChange={() => opportunitySelection.toggleSelectAll(opportunityPagination.pageItems)} /></th>
                           {visibleColumns.title && <th>Título do Negócio</th>}
                           {visibleColumns.customer && <th>Cliente / Empresa</th>}
                           {visibleColumns.estimated_amount && <th>Valor Estimado</th>}
@@ -2381,17 +2431,24 @@ export const CRM: React.FC = () => {
                       <tbody>
                         {filteredOpportunities.length === 0 ? (
                           <tr>
-                            <td colSpan={10} className="empty-row">Nenhuma oportunidade encontrada com os filtros selecionados.</td>
+                            <td colSpan={11} className="empty-row">Nenhuma oportunidade encontrada com os filtros selecionados.</td>
                           </tr>
                         ) : (
-                          filteredOpportunities.map(opp => {
+                          opportunityPagination.pageItems.map(opp => {
                             const stg = stages.find(s => s.code === opp.stage);
                             const inact = getOppInactivityInfo(opp);
                             const matchedSeller = sellersList.find(s => s.id === opp.assigned_to_id);
                             return (
-                              <tr key={opp.id} onClick={() => void loadOpportunityDetails(opp)} style={{ cursor: 'pointer' }}>
+                              <tr key={opp.id} className={`ui-record-row ${opportunitySelection.isSelected(opp.id) ? 'ui-record-row--selected' : ''}`} onClick={() => void loadOpportunityDetails(opp)}>
+                                <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar oportunidade ${opp.title}`} checked={opportunitySelection.isSelected(opp.id)} onClick={(event) => event.stopPropagation()} onChange={() => opportunitySelection.toggleSelect(opp.id)} /></td>
                                 {visibleColumns.title && <td><strong>{opp.title}</strong></td>}
-                                {visibleColumns.customer && <td>{opp.customer_name}</td>}
+                                {visibleColumns.customer && (
+                                  <td>
+                                    <RecordLink type="CUSTOMER" id={opp.customer_id}>
+                                      {opp.customer_name}
+                                    </RecordLink>
+                                  </td>
+                                )}
                                 {visibleColumns.estimated_amount && (
                                   <td><span className="opp-val-highlight">{fmtCurrency(opp.estimated_amount)}</span></td>
                                 )}
@@ -2459,6 +2516,7 @@ export const CRM: React.FC = () => {
                         )}
                       </tbody>
                     </table>
+                    <ListPagination {...opportunityPagination} onPageChange={opportunityPagination.setPage} onPageSizeChange={opportunityPagination.setPageSize} />
                   </div>
                 </div>
               )}
@@ -2496,9 +2554,17 @@ export const CRM: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar
+                selectedCount={leadSelection.selectedCount}
+                resourceName={{ singular: 'lead', plural: 'leads' }}
+                onClear={leadSelection.clearSelection}
+                onDelete={() => void runCrmBulkAction(leadSelection.selectedIdList, 'Excluir', crmService.deleteLead, leadSelection.clearSelection)}
+                deleteLabel="Excluir selecionados"
+              />
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar leads desta página" checked={leadSelection.isAllSelected(leadPagination.pageItems)} onChange={() => leadSelection.toggleSelectAll(leadPagination.pageItems)} /></th>
                     <th>Nome do Lead</th>
                     <th>Empresa / Razão Social</th>
                     <th>Contatos Rápidos</th>
@@ -2510,18 +2576,19 @@ export const CRM: React.FC = () => {
                 <tbody>
                   {filteredLeads.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="empty-row">Nenhum lead encontrado com os filtros selecionados.</td>
+                      <td colSpan={7} className="empty-row">Nenhum lead encontrado com os filtros selecionados.</td>
                     </tr>
                   ) : (
-                    filteredLeads.map((lead) => (
-                      <tr key={lead.id}>
+                    leadPagination.pageItems.map((lead) => (
+                      <tr key={lead.id} className={`ui-record-row ${leadSelection.isSelected(lead.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, select, input')) handleOpenEditLead(lead); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenEditLead(lead); } }}>
+                        <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar lead ${lead.name}`} checked={leadSelection.isSelected(lead.id)} onClick={(event) => event.stopPropagation()} onChange={() => leadSelection.toggleSelect(lead.id)} /></td>
                         <td>
                           <div className="lead-identity-cell">
                             <strong>{lead.name}</strong>
                             {lead.customer_id && (
-                              <span className="customer-sync-badge" title="Cliente sincronizado no módulo de Vendas">
+                              <RecordLink type="CUSTOMER" id={lead.customer_id} className="customer-sync-badge" title="Abrir cadastro do cliente no módulo de Vendas">
                                 <CheckCircle2 size={11} /> Cliente Vendas
-                              </span>
+                              </RecordLink>
                             )}
                           </div>
                         </td>
@@ -2591,14 +2658,6 @@ export const CRM: React.FC = () => {
                             )}
                             <button
                               type="button"
-                              className="btn-icon-action"
-                              onClick={() => handleOpenEditLead(lead)}
-                              title="Editar Informações do Lead"
-                            >
-                              <Edit3 size={15} />
-                            </button>
-                            <button
-                              type="button"
                               className="btn-icon-action danger"
                               onClick={() => void handleDeleteLead(lead.id, lead.name)}
                               title="Excluir Lead"
@@ -2612,6 +2671,7 @@ export const CRM: React.FC = () => {
                   )}
                 </tbody>
               </table>
+              <ListPagination {...leadPagination} onPageChange={leadPagination.setPage} onPageSizeChange={leadPagination.setPageSize} />
             </div>
           )}
 
@@ -2670,10 +2730,15 @@ export const CRM: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar selectedCount={activitySelection.selectedCount} resourceName={{ singular: 'atividade', plural: 'atividades' }} onClear={activitySelection.clearSelection}>
+                <button type="button" className="bulk-btn bulk-btn--success" onClick={() => void runCrmBulkAction(activitySelection.selectedIdList, 'Concluir', (id) => crmService.updateInteraction(id, { status: 'COMPLETED' }), activitySelection.clearSelection)}><CheckCheck size={14} /> Concluir selecionadas</button>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runCrmBulkAction(activitySelection.selectedIdList, 'Cancelar', (id) => crmService.updateInteraction(id, { status: 'CANCELLED' }), activitySelection.clearSelection)}><X size={14} /> Cancelar selecionadas</button>
+              </BulkActionsBar>
               <div className="table-card">
                 <table className="data-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar atividades agendadas desta página" checked={activitySelection.isAllSelected(scheduledActivitiesOnPage)} onChange={() => activitySelection.toggleSelectAll(scheduledActivitiesOnPage)} /></th>
                       <th>Tipo de Ação</th>
                       <th>Resumo da Atividade</th>
                       <th>Detalhes & Observações</th>
@@ -2685,15 +2750,16 @@ export const CRM: React.FC = () => {
                   <tbody>
                     {filteredActivities.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="empty-row">Nenhuma atividade encontrada com os filtros selecionados.</td>
+                        <td colSpan={7} className="empty-row">Nenhuma atividade encontrada com os filtros selecionados.</td>
                       </tr>
                     ) : (
-                      filteredActivities.map(act => {
+                      activityPagination.pageItems.map(act => {
                         const lifecycleStatus = act.interaction_type === 'NOTE'
                           ? 'NOTE'
                           : act.status || 'SCHEDULED';
                         return (
-                        <tr key={act.id}>
+                        <tr key={act.id} className={`ui-record-row ${activitySelection.isSelected(act.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={() => handleOpenInteractionEditor(act)} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenInteractionEditor(act); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar atividade ${act.summary}`} disabled={act.status !== 'SCHEDULED'} checked={activitySelection.isSelected(act.id)} onClick={(event) => event.stopPropagation()} onChange={() => activitySelection.toggleSelect(act.id)} /></td>
                           <td>
                             <div className="cell-activity-type">
                               {act.interaction_type === 'CALL' && <Phone size={14} className="icon-call" />}
@@ -2704,7 +2770,23 @@ export const CRM: React.FC = () => {
                               <span>{act.interaction_type}</span>
                             </div>
                           </td>
-                          <td><strong>{act.summary}</strong></td>
+                          <td>
+                            <strong>{act.summary}</strong>
+                            {(act.opportunity_id || act.lead_id) && (
+                              <div style={{ marginTop: '0.25rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                {act.opportunity_id && (
+                                  <RecordLink type="OPPORTUNITY" id={act.opportunity_id} title="Abrir Oportunidade vinculada">
+                                    Oportunidade
+                                  </RecordLink>
+                                )}
+                                {act.lead_id && (
+                                  <RecordLink type="LEAD" id={act.lead_id} title="Abrir Lead vinculado">
+                                    Lead
+                                  </RecordLink>
+                                )}
+                              </div>
+                            )}
+                          </td>
                           <td>{act.details || '-'}</td>
                           <td>
                             <div className="activity-date-cell">
@@ -2724,23 +2806,14 @@ export const CRM: React.FC = () => {
                               {lifecycleStatus === 'NOTE' && 'Nota'}
                             </span>
                           </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <button
-                              type="button"
-                              className="interaction-edit-button"
-                              onClick={() => handleOpenInteractionEditor(act)}
-                              title="Editar nota ou atividade"
-                            >
-                              <Edit3 size={13} />
-                              <span>Editar</span>
-                            </button>
-                          </td>
+                          <td style={{ textAlign: 'center' }}><span className="text-muted-small">Clique no registro</span></td>
                         </tr>
                         );
                       })
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...activityPagination} onPageChange={activityPagination.setPage} onPageSizeChange={activityPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -3136,7 +3209,7 @@ export const CRM: React.FC = () => {
                             <div key={opp.id} className="closed-opp-item">
                               <div className="closed-opp-info">
                                 <strong>{opp.title}</strong>
-                                <span>{opp.customer_name} • {fmtDate(opp.updated_at || opp.created_at)}</span>
+                                <span><RecordLink type="CUSTOMER" id={opp.customer_id}>{opp.customer_name}</RecordLink> • {fmtDate(opp.updated_at || opp.created_at)}</span>
                               </div>
                               <div className="closed-opp-meta">
                                 <span className="closed-amount">{fmtCurrency(opp.estimated_amount)}</span>
@@ -5180,7 +5253,7 @@ export const CRM: React.FC = () => {
                               {act.interaction_type === 'EMAIL' && <Mail size={12} />}
                               {act.interaction_type === 'NOTE' && <FileText size={12} />}
                             </div>
-                            <div className="timeline-card">
+                            <div className="timeline-card ui-record-card" role="button" tabIndex={0} onClick={() => handleOpenInteractionEditor(act)} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenInteractionEditor(act); } }}>
                               <div className="card-top">
                                 <span className="card-title">{act.summary}</span>
                                 <div className="card-meta-actions">
@@ -5194,15 +5267,6 @@ export const CRM: React.FC = () => {
                                           : 'Agendada'}
                                   </span>
                                   <span className="card-time">{fmtDate(act.interaction_date || act.created_at)}</span>
-                                  <button
-                                    type="button"
-                                    className="timeline-edit-button"
-                                    onClick={() => handleOpenInteractionEditor(act)}
-                                    title="Editar registro"
-                                    aria-label={`Editar ${act.interaction_type === 'NOTE' ? 'nota' : 'atividade'}`}
-                                  >
-                                    <Edit3 size={12} />
-                                  </button>
                                 </div>
                               </div>
                               {act.details && <p className="card-details">{act.details}</p>}
@@ -5427,7 +5491,7 @@ export const CRM: React.FC = () => {
             {documentTimelineError}
           </div>
         ) : documentChain ? (
-          <DocumentTimeline chain={documentChain} onNavigate={handleTimelineNavigate} />
+          <DocumentTimeline chain={documentChain} />
         ) : (
           <div className="ui-empty-state" style={{ padding: '2rem', textAlign: 'center' }}>Nenhuma cadeia documental disponível.</div>
         )}

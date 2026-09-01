@@ -296,6 +296,128 @@ def update_product_data(
 # 4. SOLICITAÇÕES DE COMPRA (PurchaseRequest & Approval Workflow)
 # ==============================================================================
 
+def get_purchase_request_document(
+    db: Session,
+    purchase_request: models.PurchaseRequest,
+    organization_id: uuid.UUID,
+):
+    """Resolve o cabeçalho canônico e atualiza a projeção legada da solicitação."""
+    from controlb.modules.documents import service as documents_service
+
+    if not purchase_request.document_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A Solicitação de Compra não possui identidade documental.",
+        )
+    document = documents_service.get_document(
+        db, purchase_request.document_id, organization_id
+    )
+    if (
+        document.document_type != "PURCHASE_REQUEST"
+        or document.native_id != purchase_request.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O cabeçalho documental da Solicitação de Compra é inconsistente.",
+        )
+
+    purchase_request.request_number = document.document_number
+    purchase_request.status = document.current_status.lower()
+    purchase_request.requester_id = document.responsible_id
+    return document
+
+
+def transition_purchase_request_status(
+    db: Session,
+    purchase_request: models.PurchaseRequest,
+    organization_id: uuid.UUID,
+    new_status: str,
+    *,
+    current_user: User | None = None,
+    event_type: str = "STATUS_CHANGED",
+    event_metadata: dict | None = None,
+    idempotency_key: str | None = None,
+    record_if_unchanged: bool = False,
+) -> models.PurchaseRequest:
+    """Única porta para transições, inclusive as iniciadas por cotação ou pedido."""
+    normalized_status = new_status.strip().upper()
+    document = None
+    if purchase_request.document_id:
+        document = get_purchase_request_document(
+            db, purchase_request, organization_id
+        )
+        previous_status = document.current_status
+    else:
+        # Compatibilidade para objetos isolados de testes e bases pré-migração.
+        previous_status = purchase_request.status.strip().upper()
+
+    if normalized_status == previous_status and not record_if_unchanged:
+        return purchase_request
+
+    purchase_request.status = normalized_status.lower()
+    repository.update_purchase_request_status(
+        db,
+        db_request=purchase_request,
+        new_status=purchase_request.status,
+    )
+
+    if document is not None:
+        from controlb.modules.documents import service as documents_service
+
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=document,
+            event_type=event_type,
+            previous_status=previous_status,
+            new_status=normalized_status,
+            event_metadata=event_metadata,
+            idempotency_key=idempotency_key,
+            created_by_id=current_user.id if current_user else None,
+        )
+        purchase_request.status = document.current_status.lower()
+
+    if (
+        purchase_request.replenishment_id
+        and normalized_status in {"CANCELLED", "DELETED"}
+    ):
+        from controlb.modules.documents import service as documents_service
+
+        replenishment = repository.get_inventory_replenishment_by_id(
+            db,
+            purchase_request.replenishment_id,
+            organization_id,
+        )
+        if replenishment:
+            replenishment_document = get_inventory_replenishment_document(
+                db, replenishment, organization_id
+            )
+            if replenishment_document.current_status != "CANCELLED":
+                documents_service.record_event(
+                    db,
+                    organization_id=organization_id,
+                    document=replenishment_document,
+                    event_type=(
+                        "REQUEST_CANCELLED"
+                        if normalized_status == "CANCELLED"
+                        else "REQUEST_DELETED"
+                    ),
+                    previous_status=replenishment_document.current_status,
+                    new_status="CANCELLED",
+                    event_metadata={"purchase_request_id": str(purchase_request.id)},
+                    idempotency_key=(
+                        f"replenishment:{replenishment.id}:request:"
+                        f"{purchase_request.id}:{normalized_status.lower()}"
+                    ),
+                    created_by_id=current_user.id if current_user else None,
+                )
+                replenishment.status = replenishment_document.current_status
+
+    db.commit()
+    db.refresh(purchase_request)
+    return purchase_request
+
+
 def generate_request_number(db: Session, organization_id: uuid.UUID) -> str:
     """Gera número sequencial amigável no formato SC-YYYY-XXXX."""
     current_year = datetime.now(timezone.utc).year
@@ -321,6 +443,30 @@ def create_purchase_request(
             detail="A solicitação de compra deve conter pelo menos um item."
         )
 
+    organization_id = request_data.organization_id or current_user.organization_id
+    request_data.organization_id = organization_id
+    replenishment = None
+    replenishment_document = None
+    if request_data.replenishment_id:
+        replenishment = repository.get_inventory_replenishment_by_id(
+            db,
+            request_data.replenishment_id,
+            organization_id,
+        )
+        if not replenishment:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A reposição de estoque vinculada é inválida.",
+            )
+        replenishment_document = get_inventory_replenishment_document(
+            db, replenishment, organization_id
+        )
+        if replenishment_document.current_status != "OPEN":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A reposição selecionada já foi encaminhada ou concluída.",
+            )
+
     # 1. Valida produtos e calcula total geral
     total_estimated = Decimal("0.00")
     for item in request_data.items:
@@ -338,43 +484,72 @@ def create_purchase_request(
         item_total = Decimal(str(item.quantity)) * Decimal(str(item.estimated_unit_price))
         total_estimated += item_total
 
-    # 2. Gera número sequencial
-    request_number = generate_request_number(db, organization_id=request_data.organization_id)
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
 
-    # 3. Persiste no banco
+    request_id = uuid.uuid4()
+    request_document = documents_service.create_document(
+        db,
+        organization_id=request_data.organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="purchase.request",
+            document_type="PURCHASE_REQUEST",
+            native_id=request_id,
+            title="Solicitação de Compra",
+            current_status="PENDING_APPROVAL",
+            description=request_data.justification,
+            origin_module="PURCHASING",
+            responsible_id=current_user.id,
+        ),
+        current_user=current_user,
+    )
+    documents_service.update_document(
+        db,
+        request_document.id,
+        request_data.organization_id,
+        document_schemas.DocumentUpdate(
+            title=f"Solicitação de Compra {request_document.document_number}"
+        ),
+        current_user=current_user,
+    )
+
+    # 2. Persiste a extensão específica do módulo de Compras.
     created_pr = repository.create_purchase_request(
         db=db,
+        request_id=request_id,
+        document_id=request_document.id,
         requester_id=current_user.id,
-        request_number=request_number,
+        request_number=request_document.document_number,
         total_estimated=total_estimated,
         request_data=request_data
     )
+    request_document.issued_at = created_pr.created_at
 
-    # Persistência e auditoria transversal no DocumentService
-    from controlb.modules.documents import service as documents_service
-    pr_doc = documents_service.ensure_document(
-        db,
-        organization_id=request_data.organization_id,
-        category="purchase.request",
-        document_type="PURCHASE_REQUEST",
-        native_id=created_pr.id,
-        document_number=created_pr.request_number,
-        title=f"Solicitação de Compra {created_pr.request_number}",
-        current_status=created_pr.status,
-        origin_module="PURCHASING",
-        created_by_id=current_user.id,
-        issued_at=created_pr.created_at,
-    )
-    documents_service.record_event(
-        db,
-        organization_id=request_data.organization_id,
-        document=pr_doc,
-        event_type="CREATED",
-        new_status=created_pr.status,
-        created_by_id=current_user.id,
-        idempotency_key=f"purchasing:pr:{created_pr.id}:created",
-    )
-
+    if replenishment is not None and replenishment_document is not None:
+        documents_service.relate_documents(
+            db,
+            organization_id=organization_id,
+            parent_document=replenishment_document,
+            child_document=request_document,
+            relation_type="generated",
+            created_by_id=current_user.id,
+        )
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=replenishment_document,
+            event_type="PURCHASE_REQUEST_CREATED",
+            previous_status=replenishment_document.current_status,
+            new_status="REQUESTED",
+            event_metadata={"purchase_request_id": str(created_pr.id)},
+            idempotency_key=(
+                f"replenishment:{replenishment.id}:request:{created_pr.id}"
+            ),
+            created_by_id=current_user.id,
+        )
+        replenishment.status = replenishment_document.current_status
+    db.commit()
+    db.refresh(created_pr)
     return created_pr
 
 
@@ -384,7 +559,12 @@ def list_purchase_requests(
     status_filter: str | None = None
 ) -> list[models.PurchaseRequest]:
     """Retorna as solicitações de compra da organização com filtro opcional."""
-    return repository.get_all_purchase_requests(db, organization_id=organization_id, status=status_filter)
+    requests = repository.get_all_purchase_requests(
+        db, organization_id=organization_id, status=status_filter
+    )
+    for purchase_request in requests:
+        get_purchase_request_document(db, purchase_request, organization_id)
+    return requests
 
 
 def get_purchase_request_details(
@@ -399,6 +579,7 @@ def get_purchase_request_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Solicitação de compra não encontrada."
         )
+    get_purchase_request_document(db, db_request, organization_id)
     return db_request
 
 
@@ -406,7 +587,8 @@ def update_purchase_request_data(
     db: Session, 
     request_id: uuid.UUID, 
     organization_id: uuid.UUID, 
-    request_data: schemas.PurchaseRequestUpdate
+    request_data: schemas.PurchaseRequestUpdate,
+    current_user: User | None = None,
 ) -> models.PurchaseRequest:
     """Atualiza dados cadastrais da solicitação (apenas se em rascunho ou pendente de aprovação)."""
     db_request = repository.get_purchase_request_by_id(db, request_id=request_id, organization_id=organization_id)
@@ -416,16 +598,38 @@ def update_purchase_request_data(
             detail="Solicitação de compra não encontrada."
         )
     
+    request_document = get_purchase_request_document(db, db_request, organization_id)
     if db_request.status not in ("draft", "pending_approval"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Não é permitido editar uma solicitação no status '{db_request.status}'."
         )
 
-    return repository.update_purchase_request(db, db_request=db_request, request_data=request_data)
+    updated = repository.update_purchase_request(
+        db, db_request=db_request, request_data=request_data
+    )
+    if request_data.justification is not None:
+        from controlb.modules.documents import schemas as document_schemas
+        from controlb.modules.documents import service as documents_service
+
+        documents_service.update_document(
+            db,
+            request_document.id,
+            organization_id,
+            document_schemas.DocumentUpdate(description=updated.justification),
+            current_user=current_user,
+        )
+    db.commit()
+    db.refresh(updated)
+    return updated
 
 
-def delete_purchase_request_record(db: Session, request_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
+def delete_purchase_request_record(
+    db: Session,
+    request_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+) -> dict:
     """
     Exclui permanentemente uma solicitação de compra em qualquer status,
     limpando vínculos de ordens de compra e disparando deleção em cascata
@@ -438,6 +642,12 @@ def delete_purchase_request_record(db: Session, request_id: uuid.UUID, organizat
             detail="Solicitação de compra não encontrada."
         )
 
+    request_document = None
+    if db_request.document_id:
+        request_document = get_purchase_request_document(
+            db, db_request, organization_id
+        )
+
     # 1. Desvincula ordens de compra para evitar conflito de chave estrangeira
     orders = repository.get_purchase_orders_by_request_id(db, request_id=request_id, organization_id=organization_id)
     for o in orders:
@@ -446,11 +656,28 @@ def delete_purchase_request_record(db: Session, request_id: uuid.UUID, organizat
 
     # 2. Remove a solicitação (itens, aprovações e cotação são removidos em cascata)
     req_number = db_request.request_number
+    if request_document is not None:
+        from controlb.modules.documents import service as documents_service
+
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=request_document,
+            event_type="DELETED",
+            previous_status=db_request.status,
+            new_status="DELETED",
+            created_by_id=current_user.id if current_user else None,
+        )
     repository.delete_purchase_request(db, db_request=db_request)
     return {"detail": f"Solicitação {req_number} excluída com sucesso."}
 
 
-def purge_purchase_requests(db: Session, organization_id: uuid.UUID, request_ids: list[uuid.UUID] | None = None) -> dict:
+def purge_purchase_requests(
+    db: Session,
+    organization_id: uuid.UUID,
+    request_ids: list[uuid.UUID] | None = None,
+    current_user: User | None = None,
+) -> dict:
     """
     Rotina de limpeza de desenvolvimento: exclui múltiplas ou todas as solicitações de compra.
     """
@@ -462,6 +689,19 @@ def purge_purchase_requests(db: Session, organization_id: uuid.UUID, request_ids
     count = len(requests)
     
     for r in requests:
+        if r.document_id:
+            from controlb.modules.documents import service as documents_service
+
+            request_document = get_purchase_request_document(db, r, organization_id)
+            documents_service.record_event(
+                db,
+                organization_id=organization_id,
+                document=request_document,
+                event_type="DELETED",
+                previous_status=r.status,
+                new_status="DELETED",
+                created_by_id=current_user.id if current_user else None,
+            )
         orders = repository.get_purchase_orders_by_request_id(db, request_id=r.id, organization_id=organization_id)
         for o in orders:
             o.purchase_request_id = None
@@ -473,7 +713,12 @@ def purge_purchase_requests(db: Session, organization_id: uuid.UUID, request_ids
 
 
 
-def cancel_purchase_request(db: Session, request_id: uuid.UUID, organization_id: uuid.UUID) -> models.PurchaseRequest:
+def cancel_purchase_request(
+    db: Session,
+    request_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+) -> models.PurchaseRequest:
     """
     Cancela uma solicitação de compra e quaisquer cotações/processos ativos associados.
     """
@@ -484,6 +729,8 @@ def cancel_purchase_request(db: Session, request_id: uuid.UUID, organization_id:
             detail="Solicitação de compra não encontrada."
         )
 
+    if db_request.document_id:
+        get_purchase_request_document(db, db_request, organization_id)
     if db_request.status == "cancelled":
         return db_request
 
@@ -498,13 +745,36 @@ def cancel_purchase_request(db: Session, request_id: uuid.UUID, organization_id:
     # Cancela ordens emitidas
     for o in orders:
         if o.status in ["draft", "issued"]:
-            repository.update_purchase_order_status(db, db_order=o, new_status="cancelled")
+            transition_purchase_order_status(
+                db,
+                o,
+                organization_id,
+                "CANCELLED",
+                current_user=current_user,
+                event_type="PURCHASE_REQUEST_CANCELLED",
+                event_metadata={"purchase_request_id": str(db_request.id)},
+            )
 
-    # Cancela processo de cotação se houver
+    # Cancela o processo de cotação pela mesma timeline documental.
     if db_request.quotation_process and db_request.quotation_process.status != "cancelled":
-        repository.update_quotation_process_status(db, db_process=db_request.quotation_process, new_status="cancelled")
+        transition_quotation_process_status(
+            db,
+            db_request.quotation_process,
+            organization_id,
+            "CANCELLED",
+            current_user=current_user,
+            event_type="PURCHASE_REQUEST_CANCELLED",
+            event_metadata={"purchase_request_id": str(db_request.id)},
+        )
 
-    return repository.update_purchase_request_status(db, db_request=db_request, new_status="cancelled")
+    return transition_purchase_request_status(
+        db,
+        db_request,
+        organization_id,
+        "CANCELLED",
+        current_user=current_user,
+        event_type="CANCELLED",
+    )
 
 
 def process_approval_action(
@@ -531,6 +801,10 @@ def process_approval_action(
             detail="Solicitação de compra não encontrada."
         )
 
+    if db_request.document_id:
+        get_purchase_request_document(
+            db, db_request, current_user.organization_id
+        )
     if db_request.status != "pending_approval":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -552,31 +826,16 @@ def process_approval_action(
         comments=action_data.comments
     )
 
-    # Atualiza status da solicitação
+    # Atualiza status e timeline da solicitação na mesma transação.
     new_status = "approved" if action_data.action == "approved" else "rejected"
-    updated_pr = repository.update_purchase_request_status(db, db_request=db_request, new_status=new_status)
-
-    # Registra evento transversal no DocumentService
-    from controlb.modules.documents import service as documents_service
-    pr_doc = documents_service.ensure_document(
+    updated_pr = transition_purchase_request_status(
         db,
-        organization_id=current_user.organization_id,
-        category="purchase.request",
-        document_type="PURCHASE_REQUEST",
-        native_id=db_request.id,
-        document_number=db_request.request_number,
-        current_status=new_status,
-        origin_module="PURCHASING",
-    )
-    documents_service.record_event(
-        db,
-        organization_id=current_user.organization_id,
-        document=pr_doc,
+        db_request,
+        current_user.organization_id,
+        new_status,
+        current_user=current_user,
         event_type="APPROVED" if action_data.action == "approved" else "REJECTED",
-        previous_status="pending_approval",
-        new_status=new_status,
         event_metadata={"comments": action_data.comments} if action_data.comments else None,
-        created_by_id=current_user.id,
     )
 
     return updated_pr
@@ -585,6 +844,316 @@ def process_approval_action(
 # ==============================================================================
 # 5. ORDENS DE COMPRA OFICIAIS (PurchaseOrder)
 # ==============================================================================
+
+
+def get_purchase_order_document(
+    db: Session,
+    purchase_order: models.PurchaseOrder,
+    organization_id: uuid.UUID,
+):
+    """Resolve o cabeçalho canônico e atualiza a projeção nativa do pedido."""
+    from controlb.modules.documents import service as documents_service
+
+    if not purchase_order.document_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A Ordem de Compra não possui identidade documental.",
+        )
+    document = documents_service.get_document(
+        db, purchase_order.document_id, organization_id
+    )
+    if (
+        document.document_type != "PURCHASE_ORDER"
+        or document.native_id != purchase_order.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O cabeçalho documental da Ordem de Compra é inconsistente.",
+        )
+
+    purchase_order.order_number = document.document_number
+    purchase_order.status = document.current_status.lower()
+    purchase_order.buyer_id = document.responsible_id
+    purchase_order.notes = document.description
+    return document
+
+
+def get_inventory_replenishment_document(
+    db: Session,
+    replenishment: models.InventoryReplenishment,
+    organization_id: uuid.UUID,
+):
+    """Resolve e valida a identidade canônica de uma necessidade de reposição."""
+    from controlb.modules.documents import service as documents_service
+
+    document = documents_service.get_document(
+        db, replenishment.document_id, organization_id
+    )
+    if (
+        document.document_type != "REPLENISHMENT"
+        or document.native_id != replenishment.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O cabeçalho documental da reposição é inconsistente.",
+        )
+    replenishment.replenishment_number = document.document_number
+    replenishment.status = document.current_status
+    return document
+
+
+def transition_purchase_order_status(
+    db: Session,
+    purchase_order: models.PurchaseOrder,
+    organization_id: uuid.UUID,
+    new_status: str,
+    *,
+    current_user: User | None = None,
+    event_type: str = "STATUS_CHANGED",
+    event_metadata: dict | None = None,
+    idempotency_key: str | None = None,
+    record_if_unchanged: bool = False,
+) -> models.PurchaseOrder:
+    """Única porta para transições de estado da Ordem de Compra."""
+    normalized_status = new_status.strip().upper()
+    document = None
+    if purchase_order.document_id:
+        document = get_purchase_order_document(
+            db, purchase_order, organization_id
+        )
+        previous_status = document.current_status
+    else:
+        # Compatibilidade para objetos isolados de testes e bases pré-migração.
+        previous_status = purchase_order.status.strip().upper()
+
+    if normalized_status == previous_status and not record_if_unchanged:
+        return purchase_order
+
+    purchase_order.status = normalized_status.lower()
+    repository.update_purchase_order_status(
+        db,
+        db_order=purchase_order,
+        new_status=purchase_order.status,
+    )
+
+    if document is not None:
+        from controlb.modules.documents import service as documents_service
+
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=document,
+            event_type=event_type,
+            previous_status=previous_status,
+            new_status=normalized_status,
+            event_metadata=event_metadata,
+            idempotency_key=idempotency_key,
+            created_by_id=current_user.id if current_user else None,
+        )
+        purchase_order.status = document.current_status.lower()
+
+    if (
+        purchase_order.replenishment_id
+        and normalized_status in {"CANCELLED", "DELETED"}
+    ):
+        from controlb.modules.documents import service as documents_service
+
+        replenishment = repository.get_inventory_replenishment_by_id(
+            db,
+            purchase_order.replenishment_id,
+            organization_id,
+        )
+        if replenishment:
+            replenishment_document = get_inventory_replenishment_document(
+                db, replenishment, organization_id
+            )
+            documents_service.record_event(
+                db,
+                organization_id=organization_id,
+                document=replenishment_document,
+                event_type=(
+                    "ORDER_CANCELLED"
+                    if normalized_status == "CANCELLED"
+                    else "ORDER_DELETED"
+                ),
+                previous_status=replenishment_document.current_status,
+                new_status="CANCELLED",
+                event_metadata={"purchase_order_id": str(purchase_order.id)},
+                idempotency_key=(
+                    f"replenishment:{replenishment.id}:order:{purchase_order.id}:"
+                    f"{normalized_status.lower()}"
+                ),
+                created_by_id=current_user.id if current_user else None,
+            )
+            replenishment.status = replenishment_document.current_status
+
+    db.commit()
+    db.refresh(purchase_order)
+    return purchase_order
+
+
+def persist_purchase_order(
+    db: Session,
+    *,
+    current_user: User,
+    total_amount: Decimal,
+    order_data: schemas.PurchaseOrderCreate,
+) -> models.PurchaseOrder:
+    """Cria cabeçalho, extensão nativa e arestas na mesma unidade de trabalho."""
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    organization_id = order_data.organization_id or current_user.organization_id
+    request = None
+    if order_data.purchase_request_id:
+        request = repository.get_purchase_request_by_id(
+            db,
+            request_id=order_data.purchase_request_id,
+            organization_id=organization_id,
+        )
+        if not request:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A Solicitação de Compra vinculada é inválida.",
+            )
+
+    if request and request.replenishment_id and not order_data.replenishment_id:
+        order_data = order_data.model_copy(
+            update={"replenishment_id": request.replenishment_id}
+        )
+
+    replenishment = None
+    if order_data.replenishment_id:
+        replenishment = repository.get_inventory_replenishment_by_id(
+            db,
+            replenishment_id=order_data.replenishment_id,
+            organization_id=organization_id,
+        )
+        if not replenishment:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A reposição de estoque vinculada é inválida.",
+            )
+
+    supplier_quote = None
+    quotation_process = None
+    if order_data.supplier_quote_id:
+        supplier_quote = repository.get_supplier_quote_by_id(
+            db,
+            quote_id=order_data.supplier_quote_id,
+            organization_id=organization_id,
+        )
+        if not supplier_quote:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A proposta de fornecedor vinculada é inválida.",
+            )
+        quotation_process = supplier_quote.quotation_process
+
+    order_id = uuid.uuid4()
+    order_document = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="purchase.order",
+            document_type="PURCHASE_ORDER",
+            native_id=order_id,
+            title="Ordem de Compra",
+            current_status="ISSUED",
+            description=order_data.notes,
+            origin_module="PURCHASING",
+            responsible_id=order_data.buyer_id or current_user.id,
+            payload={
+                "supplier_id": str(order_data.supplier_id),
+                "purchase_request_id": (
+                    str(order_data.purchase_request_id)
+                    if order_data.purchase_request_id
+                    else None
+                ),
+                "replenishment_id": (
+                    str(order_data.replenishment_id)
+                    if order_data.replenishment_id
+                    else None
+                ),
+                "supplier_quote_id": (
+                    str(order_data.supplier_quote_id)
+                    if order_data.supplier_quote_id
+                    else None
+                ),
+            },
+            issued_at=utcnow(),
+        ),
+        current_user=current_user,
+    )
+    order_document.title = f"Ordem de Compra {order_document.document_number}"
+
+    created_order = repository.create_purchase_order(
+        db=db,
+        order_id=order_id,
+        document_id=order_document.id,
+        order_number=order_document.document_number,
+        total_amount=total_amount,
+        order_data=order_data,
+    )
+    order_document.issued_at = created_order.created_at
+
+    if request and request.document_id:
+        request_document = get_purchase_request_document(
+            db, request, organization_id
+        )
+        documents_service.relate_documents(
+            db,
+            organization_id=organization_id,
+            parent_document=request_document,
+            child_document=order_document,
+            relation_type="generated",
+            created_by_id=current_user.id,
+        )
+
+    if quotation_process and quotation_process.document_id:
+        quotation_document = get_quotation_process_document(
+            db, quotation_process, organization_id
+        )
+        documents_service.relate_documents(
+            db,
+            organization_id=organization_id,
+            parent_document=quotation_document,
+            child_document=order_document,
+            relation_type="generated",
+            created_by_id=current_user.id,
+        )
+
+    if replenishment:
+        replenishment_document = get_inventory_replenishment_document(
+            db, replenishment, organization_id
+        )
+        documents_service.relate_documents(
+            db,
+            organization_id=organization_id,
+            parent_document=replenishment_document,
+            child_document=order_document,
+            relation_type="generated",
+            created_by_id=current_user.id,
+        )
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=replenishment_document,
+            event_type="ORDER_CREATED",
+            previous_status=replenishment_document.current_status,
+            new_status="ORDERED",
+            event_metadata={"purchase_order_id": str(created_order.id)},
+            idempotency_key=(
+                f"replenishment:{replenishment.id}:order:{created_order.id}"
+            ),
+            created_by_id=current_user.id,
+        )
+        replenishment.status = replenishment_document.current_status
+
+    db.commit()
+    db.refresh(created_order)
+    return created_order
+
 
 def generate_order_number(db: Session, organization_id: uuid.UUID) -> str:
     """Gera número sequencial no formato OC-YYYY-XXXX."""
@@ -630,38 +1199,11 @@ def create_purchase_order(
     if total_order < Decimal("0.00"):
         total_order = Decimal("0.00")
 
-    order_number = generate_order_number(db, organization_id=order_data.organization_id)
-
-    db_order = repository.create_purchase_order(
-        db=db,
-        order_number=order_number,
+    db_order = persist_purchase_order(
+        db,
+        current_user=current_user,
         total_amount=total_order,
-        order_data=order_data
-    )
-
-    # Persistência transversal no DocumentService
-    from controlb.modules.documents import service as documents_service
-    po_doc = documents_service.ensure_document(
-        db,
-        organization_id=order_data.organization_id,
-        category="purchase.order",
-        document_type="PURCHASE_ORDER",
-        native_id=db_order.id,
-        document_number=db_order.order_number,
-        title=f"Ordem de Compra {db_order.order_number}",
-        current_status=db_order.status,
-        origin_module="PURCHASING",
-        created_by_id=current_user.id,
-        issued_at=db_order.created_at,
-    )
-    documents_service.record_event(
-        db,
-        organization_id=order_data.organization_id,
-        document=po_doc,
-        event_type="CREATED",
-        new_status=db_order.status,
-        created_by_id=current_user.id,
-        idempotency_key=f"purchasing:po:{db_order.id}:created",
+        order_data=order_data,
     )
 
     if order_data.purchase_request_id:
@@ -671,23 +1213,18 @@ def create_purchase_order(
             organization_id=order_data.organization_id
         )
         if db_request:
-            repository.update_purchase_request_status(db, db_request=db_request, new_status="ordered")
-            pr_doc = documents_service.ensure_document(
+            transition_purchase_request_status(
                 db,
-                organization_id=order_data.organization_id,
-                category="purchase.request",
-                document_type="PURCHASE_REQUEST",
-                native_id=db_request.id,
-                document_number=db_request.request_number,
-                current_status="ordered",
-                origin_module="PURCHASING",
-            )
-            documents_service.relate_documents(
-                db,
-                organization_id=order_data.organization_id,
-                parent_document=pr_doc,
-                child_document=po_doc,
-                relation_type="generated",
+                db_request,
+                order_data.organization_id,
+                "ORDERED",
+                current_user=current_user,
+                event_type="ORDER_CREATED",
+                event_metadata={"purchase_order_id": str(db_order.id)},
+                idempotency_key=(
+                    f"purchase-request:{db_request.id}:order:{db_order.id}"
+                ),
+                record_if_unchanged=True,
             )
 
     return db_order
@@ -743,8 +1280,7 @@ def generate_po_from_request(
     if total_net < Decimal("0.00"):
         total_net = Decimal("0.00")
 
-    # 2. Gera sequencial e payload da PO
-    order_number = generate_order_number(db, organization_id=current_user.organization_id)
+    # 2. Monta a extensão específica; o cabeçalho gerará o sequencial canônico.
     order_create_payload = schemas.PurchaseOrderCreate(
         organization_id=current_user.organization_id,
         buyer_id=current_user.id,
@@ -760,47 +1296,24 @@ def generate_po_from_request(
         items=data.items
     )
 
-    db_order = repository.create_purchase_order(
-        db=db,
-        order_number=order_number,
+    db_order = persist_purchase_order(
+        db,
+        current_user=current_user,
         total_amount=total_net,
-        order_data=order_create_payload
+        order_data=order_create_payload,
     )
 
-    # 3. Atualiza o status da solicitação para 'ordered'
-    repository.update_purchase_request_status(db, db_request=db_request, new_status="ordered")
-
-    # 4. Grafo de rastreabilidade transversal no DocumentService
-    from controlb.modules.documents import service as documents_service
-    po_doc = documents_service.ensure_document(
+    # 3. Atualiza o status e a timeline canônica da solicitação.
+    transition_purchase_request_status(
         db,
-        organization_id=current_user.organization_id,
-        category="purchase.order",
-        document_type="PURCHASE_ORDER",
-        native_id=db_order.id,
-        document_number=db_order.order_number,
-        title=f"Ordem de Compra {db_order.order_number}",
-        current_status=db_order.status,
-        origin_module="PURCHASING",
-        created_by_id=current_user.id,
-        issued_at=db_order.created_at,
-    )
-    pr_doc = documents_service.ensure_document(
-        db,
-        organization_id=current_user.organization_id,
-        category="purchase.request",
-        document_type="PURCHASE_REQUEST",
-        native_id=db_request.id,
-        document_number=db_request.request_number,
-        current_status="ordered",
-        origin_module="PURCHASING",
-    )
-    documents_service.relate_documents(
-        db,
-        organization_id=current_user.organization_id,
-        parent_document=pr_doc,
-        child_document=po_doc,
-        relation_type="generated",
+        db_request,
+        current_user.organization_id,
+        "ORDERED",
+        current_user=current_user,
+        event_type="ORDER_CREATED",
+        event_metadata={"purchase_order_id": str(db_order.id)},
+        idempotency_key=f"purchase-request:{db_request.id}:order:{db_order.id}",
+        record_if_unchanged=True,
     )
 
     return db_order
@@ -820,6 +1333,12 @@ def receive_purchase_order_shipment(
             detail="Ordem de compra não encontrada."
         )
 
+    order_document = None
+    if db_order.document_id:
+        order_document = get_purchase_order_document(
+            db, db_order, current_user.organization_id
+        )
+
     if db_order.status not in ["issued", "partially_received"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -837,22 +1356,152 @@ def receive_purchase_order_shipment(
     )
 
     # Notifica o módulo de Inventário para dar entrada física nos produtos recebidos
-    for item in received_order.items:
-        inventory_service.register_purchase_receipt(
+    if order_document is not None:
+        from controlb.modules.documents import service as documents_service
+        from controlb.modules.finance import schemas as finance_schemas
+        from controlb.modules.finance import service as finance_service
+
+        supplier_name = (
+            received_order.supplier.name if received_order.supplier else "Fornecedor"
+        )
+        effective_received_at = received_order.received_at or datetime.now(timezone.utc)
+        inventory_receipt = inventory_service.record_purchase_order_receipt(
             db=db,
             organization_id=current_user.organization_id,
-            user_id=current_user.id,
-            product_id=item.product_id,
-            quantity=item.quantity,
-            unit_cost=item.unit_price,
-            reference_doc=f"{received_order.order_number} / NF {data.invoice_number.strip()}",
+            current_user=current_user,
+            purchase_order_id=received_order.id,
+            purchase_order_document=order_document,
+            purchase_order_number=received_order.order_number,
+            supplier_name=supplier_name,
+            invoice_number=data.invoice_number.strip(),
+            received_at=effective_received_at,
+            items=list(received_order.items),
             invoice_attachment=data.invoice_attachment,
-            notes=f"Entrada por recebimento de Ordem de Compra. Fornecedor: {received_order.supplier.name if received_order.supplier else ''}"
+            notes=data.notes,
         )
 
-    db.commit()
-    db.refresh(received_order)
-    return received_order
+        receipt_document = documents_service.get_document(
+            db, inventory_receipt.document_id, current_user.organization_id
+        )
+
+        fiscal_document = finance_service.persist_fiscal_document(
+            db,
+            current_user.organization_id,
+            current_user,
+            finance_schemas.FiscalDocumentCreate(
+                direction="INBOUND",
+                document_type=data.invoice_type,
+                document_number=data.invoice_number.strip(),
+                series=data.invoice_series,
+                access_key=data.invoice_access_key,
+                issuer_name=supplier_name,
+                issuer_cnpj_cpf=(
+                    received_order.supplier.cnpj_cpf
+                    if received_order.supplier
+                    else None
+                ),
+                recipient_name=(
+                    str(current_user.organization.name)
+                    if (current_user.organization and hasattr(current_user.organization, "name") and current_user.organization.name)
+                    else "Organização"
+                ),
+                issue_date=(
+                    data.invoice_issue_date
+                    or (received_order.received_at.date() if received_order.received_at else datetime.now(timezone.utc).date())
+                ),
+                total_amount=received_order.total_amount,
+                tax_amount=data.invoice_tax_amount,
+                purchase_order_id=received_order.id,
+                supplier_id=received_order.supplier_id,
+                file_attachment=data.invoice_attachment,
+                notes=data.notes,
+                status="authorized",
+            ),
+            source_document=receipt_document,
+        )
+
+        inventory_receipt.fiscal_document_id = fiscal_document.id
+        for mv in inventory_receipt.movements:
+            mv.fiscal_document_id = fiscal_document.id
+        db.flush()
+
+        if data.generate_payable:
+            instrument_payload = None
+            if data.digitable_line or data.barcode or data.pix_code:
+                instrument_payload = finance_schemas.PaymentInstrumentCreate(
+                    instrument_type="BOLETO" if (data.digitable_line or data.barcode) else "PIX",
+                    barcode=data.barcode,
+                    digitable_line=data.digitable_line,
+                    pix_code=data.pix_code,
+                )
+
+            created_payables = finance_service.create_payable_expense(
+                db,
+                current_user.organization_id,
+                current_user,
+                finance_schemas.PayableCreate(
+                    supplier_id=received_order.supplier_id,
+                    purchase_order_id=received_order.id,
+                    fiscal_document_id=fiscal_document.id,
+                    inventory_receipt_id=inventory_receipt.id,
+                    cost_center_id=received_order.cost_center_id,
+                    financial_category_id=data.financial_category_id,
+                    description=(
+                        f"Compra {received_order.order_number} • "
+                        f"NF {data.invoice_number.strip()}"
+                    ),
+                    favored_name=supplier_name,
+                    original_amount=received_order.total_amount,
+                    issue_date=(
+                        data.invoice_issue_date
+                        or (received_order.received_at.date() if received_order.received_at else datetime.now(timezone.utc).date())
+                    ),
+                    due_date=data.payable_due_date,
+                    expense_nature=data.expense_nature,
+                    obligation_type="GOODS_SUPPLIER",
+                    business_origin="PURCHASE",
+                    payment_method_expected=data.payment_method_expected,
+                    installments_count=data.installments_count,
+                    installment_frequency_days=data.installment_frequency_days,
+                    instrument=instrument_payload,
+                    notes=data.notes,
+                ),
+            )
+
+            if created_payables:
+                first_payable = created_payables[0]
+                for mv in inventory_receipt.movements:
+                    mv.payable_id = first_payable.id
+                db.flush()
+
+    if received_order.document_id:
+        from controlb.modules.documents import schemas as document_schemas
+        from controlb.modules.documents import service as documents_service
+
+        documents_service.update_document(
+            db,
+            received_order.document_id,
+            current_user.organization_id,
+            document_schemas.DocumentUpdate(description=received_order.notes),
+            current_user=current_user,
+        )
+    return transition_purchase_order_status(
+        db,
+        received_order,
+        current_user.organization_id,
+        "RECEIVED",
+        current_user=current_user,
+        event_type="RECEIVED",
+        event_metadata={
+            "invoice_number": data.invoice_number.strip(),
+            "received_at": (
+                received_order.received_at.isoformat()
+                if received_order.received_at
+                else None
+            ),
+        },
+        idempotency_key=f"purchase-order:{received_order.id}:received",
+    )
 
 
 
@@ -863,7 +1512,12 @@ def list_purchase_orders(
     status_filter: str | None = None
 ) -> list[models.PurchaseOrder]:
     """Retorna todas as ordens de compra da organização."""
-    return repository.get_all_purchase_orders(db, organization_id=organization_id, status=status_filter)
+    orders = repository.get_all_purchase_orders(
+        db, organization_id=organization_id, status=status_filter
+    )
+    for purchase_order in orders:
+        get_purchase_order_document(db, purchase_order, organization_id)
+    return orders
 
 
 def get_purchase_order_details(
@@ -878,13 +1532,15 @@ def get_purchase_order_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Ordem de compra não encontrada."
         )
+    get_purchase_order_document(db, db_order, organization_id)
     return db_order
 
 
 def cancel_purchase_order(
     db: Session, 
     order_id: uuid.UUID, 
-    organization_id: uuid.UUID
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
 ) -> models.PurchaseOrder:
     """Cancela de forma controlada uma ordem de compra emitida."""
     db_order = repository.get_purchase_order_by_id(db, order_id=order_id, organization_id=organization_id)
@@ -894,16 +1550,31 @@ def cancel_purchase_order(
             detail="Ordem de compra não encontrada."
         )
 
-    if db_order.status in ["closed", "cancelled"]:
+    if db_order.document_id:
+        get_purchase_order_document(db, db_order, organization_id)
+
+    if db_order.status in ["closed", "cancelled", "received", "partially_received"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Não é possível cancelar uma ordem com status '{db_order.status}'."
         )
 
-    return repository.update_purchase_order_status(db, db_order=db_order, new_status="cancelled")
+    return transition_purchase_order_status(
+        db,
+        db_order,
+        organization_id,
+        "CANCELLED",
+        current_user=current_user,
+        event_type="CANCELLED",
+    )
 
 
-def delete_purchase_order_record(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
+def delete_purchase_order_record(
+    db: Session,
+    order_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+) -> dict:
     """Exclui permanentemente uma ordem de compra e seus itens vinculados."""
     db_order = repository.get_purchase_order_by_id(db, order_id=order_id, organization_id=organization_id)
     if not db_order:
@@ -913,11 +1584,26 @@ def delete_purchase_order_record(db: Session, order_id: uuid.UUID, organization_
         )
 
     num = db_order.order_number
+    if db_order.document_id:
+        transition_purchase_order_status(
+            db,
+            db_order,
+            organization_id,
+            "DELETED",
+            current_user=current_user,
+            event_type="DELETED",
+        )
     repository.delete_purchase_order(db, db_order=db_order)
+    db.commit()
     return {"detail": f"Ordem de compra {num} excluída com sucesso."}
 
 
-def purge_purchase_orders(db: Session, organization_id: uuid.UUID, order_ids: list[uuid.UUID] | None = None) -> dict:
+def purge_purchase_orders(
+    db: Session,
+    organization_id: uuid.UUID,
+    order_ids: list[uuid.UUID] | None = None,
+    current_user: User | None = None,
+) -> dict:
     """Rotina de limpeza de desenvolvimento: exclui ordens de compra de teste."""
     query = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.organization_id == organization_id)
     if order_ids:
@@ -926,12 +1612,26 @@ def purge_purchase_orders(db: Session, organization_id: uuid.UUID, order_ids: li
     orders = query.all()
     count = len(orders)
     for o in orders:
+        if o.document_id:
+            transition_purchase_order_status(
+                db,
+                o,
+                organization_id,
+                "DELETED",
+                current_user=current_user,
+                event_type="DELETED",
+            )
         db.delete(o)
     db.commit()
     return {"detail": f"{count} ordem(ns) de compra excluída(s) com sucesso.", "deleted_count": count}
 
 
-def delete_quotation_record(db: Session, quotation_id: uuid.UUID, organization_id: uuid.UUID) -> dict:
+def delete_quotation_record(
+    db: Session,
+    quotation_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+) -> dict:
     """Exclui permanentemente um processo de cotação e propostas vinculadas."""
     quot = repository.get_quotation_process_by_id(db, quotation_id=quotation_id, organization_id=organization_id)
     if not quot:
@@ -947,11 +1647,26 @@ def delete_quotation_record(db: Session, quotation_id: uuid.UUID, organization_i
             o.supplier_quote_id = None
 
     num = quot.quotation_number
+    if quot.document_id:
+        transition_quotation_process_status(
+            db,
+            quot,
+            organization_id,
+            "DELETED",
+            current_user=current_user,
+            event_type="DELETED",
+        )
     repository.delete_quotation_process(db, quotation=quot)
+    db.commit()
     return {"detail": f"Cotação {num} excluída com sucesso."}
 
 
-def purge_quotations(db: Session, organization_id: uuid.UUID, quotation_ids: list[uuid.UUID] | None = None) -> dict:
+def purge_quotations(
+    db: Session,
+    organization_id: uuid.UUID,
+    quotation_ids: list[uuid.UUID] | None = None,
+    current_user: User | None = None,
+) -> dict:
     """Rotina de limpeza de desenvolvimento: exclui cotações de teste."""
     query = db.query(models.QuotationProcess).filter(models.QuotationProcess.organization_id == organization_id)
     if quotation_ids:
@@ -960,6 +1675,15 @@ def purge_quotations(db: Session, organization_id: uuid.UUID, quotation_ids: lis
     quots = query.all()
     count = len(quots)
     for quot in quots:
+        if quot.document_id:
+            transition_quotation_process_status(
+                db,
+                quot,
+                organization_id,
+                "DELETED",
+                current_user=current_user,
+                event_type="DELETED",
+            )
         for q in quot.quotes:
             orders = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.supplier_quote_id == q.id).all()
             for o in orders:
@@ -972,6 +1696,92 @@ def purge_quotations(db: Session, organization_id: uuid.UUID, quotation_ids: lis
 # ==============================================================================
 # 6. SERVIÇOS DE PROCESSOS DE COTAÇÃO (RFQ) E MAPA COMPARATIVO
 # ==============================================================================
+
+
+def get_quotation_process_document(
+    db: Session,
+    quotation_process: models.QuotationProcess,
+    organization_id: uuid.UUID,
+):
+    """Resolve o cabeçalho canônico e atualiza a projeção nativa da RFQ."""
+    from controlb.modules.documents import service as documents_service
+
+    if not quotation_process.document_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O Processo de Cotação não possui identidade documental.",
+        )
+    document = documents_service.get_document(
+        db, quotation_process.document_id, organization_id
+    )
+    if (
+        document.document_type != "PURCHASE_QUOTATION"
+        or document.native_id != quotation_process.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O cabeçalho documental do Processo de Cotação é inconsistente.",
+        )
+
+    quotation_process.quotation_number = document.document_number
+    quotation_process.status = document.current_status.lower()
+    quotation_process.notes = document.description
+    return document
+
+
+def transition_quotation_process_status(
+    db: Session,
+    quotation_process: models.QuotationProcess,
+    organization_id: uuid.UUID,
+    new_status: str,
+    *,
+    current_user: User | None = None,
+    event_type: str = "STATUS_CHANGED",
+    event_metadata: dict | None = None,
+    idempotency_key: str | None = None,
+    record_if_unchanged: bool = False,
+) -> models.QuotationProcess:
+    """Única porta para transições do processo de cotação."""
+    normalized_status = new_status.strip().upper()
+    document = None
+    if quotation_process.document_id:
+        document = get_quotation_process_document(
+            db, quotation_process, organization_id
+        )
+        previous_status = document.current_status
+    else:
+        # Compatibilidade para objetos isolados de testes e bases pré-migração.
+        previous_status = quotation_process.status.strip().upper()
+
+    if normalized_status == previous_status and not record_if_unchanged:
+        return quotation_process
+
+    quotation_process.status = normalized_status.lower()
+    repository.update_quotation_process_status(
+        db,
+        db_process=quotation_process,
+        new_status=quotation_process.status,
+    )
+
+    if document is not None:
+        from controlb.modules.documents import service as documents_service
+
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=document,
+            event_type=event_type,
+            previous_status=previous_status,
+            new_status=normalized_status,
+            event_metadata=event_metadata,
+            idempotency_key=idempotency_key,
+            created_by_id=current_user.id if current_user else None,
+        )
+        quotation_process.status = document.current_status.lower()
+
+    db.commit()
+    db.refresh(quotation_process)
+    return quotation_process
 
 
 def generate_quotation_number(db: Session, organization_id: uuid.UUID) -> str:
@@ -1006,17 +1816,61 @@ def open_quotation_process(
     # Verifica se já existe processo de cotação para esta requisição
     existing_proc = repository.get_quotation_process_by_request_id(db, request_id=request_id, organization_id=current_user.organization_id)
     if existing_proc:
+        if existing_proc.document_id:
+            get_quotation_process_document(
+                db, existing_proc, current_user.organization_id
+            )
         return existing_proc
 
-    quotation_number = generate_quotation_number(db, organization_id=current_user.organization_id)
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
 
-    return repository.create_quotation_process(
+    request_document = None
+    if db_request.document_id:
+        request_document = get_purchase_request_document(
+            db, db_request, current_user.organization_id
+        )
+
+    process_id = uuid.uuid4()
+    process_document = documents_service.create_document(
+        db,
+        organization_id=current_user.organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="purchase.quotation",
+            document_type="PURCHASE_QUOTATION",
+            native_id=process_id,
+            title="Processo de Cotação",
+            current_status="OPEN",
+            description=notes,
+            origin_module="PURCHASING",
+            responsible_id=current_user.id,
+        ),
+        current_user=current_user,
+    )
+    process_document.title = f"Processo de Cotação {process_document.document_number}"
+
+    created_process = repository.create_quotation_process(
         db=db,
+        process_id=process_id,
+        document_id=process_document.id,
         organization_id=current_user.organization_id,
         purchase_request_id=request_id,
-        quotation_number=quotation_number,
+        quotation_number=process_document.document_number,
         notes=notes
     )
+    if request_document is not None:
+        documents_service.relate_documents(
+            db,
+            organization_id=current_user.organization_id,
+            parent_document=request_document,
+            child_document=process_document,
+            relation_type="generated",
+            created_by_id=current_user.id,
+        )
+
+    db.commit()
+    db.refresh(created_process)
+    return created_process
 
 
 def list_quotation_processes(
@@ -1025,7 +1879,12 @@ def list_quotation_processes(
     status_filter: str | None = None
 ) -> list[models.QuotationProcess]:
     """Lista todos os processos de cotação abertos na organização."""
-    return repository.get_all_quotation_processes(db, organization_id=organization_id, status=status_filter)
+    processes = repository.get_all_quotation_processes(
+        db, organization_id=organization_id, status=status_filter
+    )
+    for quotation_process in processes:
+        get_quotation_process_document(db, quotation_process, organization_id)
+    return processes
 
 
 def get_quotation_process_details(
@@ -1040,6 +1899,7 @@ def get_quotation_process_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Processo de cotação não encontrado."
         )
+    get_quotation_process_document(db, db_process, organization_id)
     return db_process
 
 
@@ -1057,6 +1917,11 @@ def add_supplier_quote_to_process(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Processo de cotação não encontrado."
+        )
+
+    if db_process.document_id:
+        get_quotation_process_document(
+            db, db_process, current_user.organization_id
         )
 
     if db_process.status in ["completed", "cancelled"]:
@@ -1089,9 +1954,20 @@ def add_supplier_quote_to_process(
         quote_data=quote_data
     )
 
-    # Transiciona processo para 'analyzing' se estava 'open'
-    if db_process.status == "open":
-        repository.update_quotation_process_status(db, db_process=db_process, new_status="analyzing")
+    transition_quotation_process_status(
+        db,
+        db_process,
+        current_user.organization_id,
+        "ANALYZING",
+        current_user=current_user,
+        event_type="SUPPLIER_QUOTE_ADDED",
+        event_metadata={
+            "supplier_quote_id": str(quote.id),
+            "supplier_id": str(quote.supplier_id),
+        },
+        idempotency_key=f"quotation:{db_process.id}:supplier-quote:{quote.id}:added",
+        record_if_unchanged=True,
+    )
 
     return quote
 
@@ -1109,6 +1985,11 @@ def get_quotation_comparison_matrix(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Processo de cotação não encontrado."
+        )
+
+    if db_process.document_id:
+        get_quotation_process_document(
+            db, db_process, current_user.organization_id
         )
 
     purchase_request = db_process.purchase_request
@@ -1194,6 +2075,11 @@ def select_winner_and_generate_order(
             detail="Processo de cotação não encontrado."
         )
 
+    if db_process.document_id:
+        get_quotation_process_document(
+            db, db_process, current_user.organization_id
+        )
+
     winning_quote = repository.get_supplier_quote_by_id(db, quote_id=quote_id, organization_id=current_user.organization_id)
     if not winning_quote or winning_quote.quotation_process_id != quotation_id:
         raise HTTPException(
@@ -1216,21 +2102,14 @@ def select_winner_and_generate_order(
         else:
             repository.update_supplier_quote_status(db, db_quote=q, new_status="rejected")
 
-    # Marca processo de cotação como 'completed'
-    repository.update_quotation_process_status(db, db_process=db_process, new_status="completed")
-
-    # Transiciona a solicitação de compra para 'ordered'
+    # A transição da solicitação ocorre após a criação efetiva do pedido.
     db_request = db_process.purchase_request
-    repository.update_purchase_request_status(db, db_request=db_request, new_status="ordered")
 
     # Calcula data de entrega estimada com base no lead time prometido
     delivery_date = None
     if winning_quote.lead_time_days:
         from datetime import timedelta
         delivery_date = datetime.now(timezone.utc) + timedelta(days=winning_quote.lead_time_days)
-
-    # Gera número da PO
-    order_number = generate_order_number(db, organization_id=current_user.organization_id)
 
     # Monta os itens da PO a partir dos itens cotados na proposta vencedora
     po_items: list[schemas.PurchaseOrderItemCreate] = []
@@ -1259,11 +2138,41 @@ def select_winner_and_generate_order(
         items=po_items
     )
 
-    created_order = repository.create_purchase_order(
-        db=db,
-        order_number=order_number,
+    created_order = persist_purchase_order(
+        db,
+        current_user=current_user,
         total_amount=winning_quote.total_amount,
-        order_data=po_data
+        order_data=po_data,
+    )
+
+    transition_quotation_process_status(
+        db,
+        db_process,
+        current_user.organization_id,
+        "COMPLETED",
+        current_user=current_user,
+        event_type="WINNER_SELECTED",
+        event_metadata={
+            "supplier_quote_id": str(winning_quote.id),
+            "purchase_order_id": str(created_order.id),
+        },
+        idempotency_key=f"quotation:{db_process.id}:winner:{winning_quote.id}",
+    )
+
+    transition_purchase_request_status(
+        db,
+        db_request,
+        current_user.organization_id,
+        "ORDERED",
+        current_user=current_user,
+        event_type="QUOTATION_WINNER_SELECTED",
+        event_metadata={
+            "quotation_id": str(db_process.id),
+            "purchase_order_id": str(created_order.id),
+        },
+        idempotency_key=(
+            f"purchase-request:{db_request.id}:quotation:{db_process.id}:winner"
+        ),
     )
 
     return created_order
@@ -1284,6 +2193,11 @@ def cancel_quotation_process(
             detail="Processo de cotação não encontrado."
         )
 
+    if db_process.document_id:
+        get_quotation_process_document(
+            db, db_process, current_user.organization_id
+        )
+
     if db_process.status == "cancelled":
         return db_process
 
@@ -1298,19 +2212,42 @@ def cancel_quotation_process(
     # Cancela ordens de compra pendentes associadas
     for o in orders:
         if o.status in ["draft", "issued"]:
-            repository.update_purchase_order_status(db, db_order=o, new_status="cancelled")
+            transition_purchase_order_status(
+                db,
+                o,
+                current_user.organization_id,
+                "CANCELLED",
+                current_user=current_user,
+                event_type="QUOTATION_CANCELLED",
+                event_metadata={"quotation_id": str(db_process.id)},
+            )
 
     # Atualiza status de todas as propostas para 'rejected'
     for q in db_process.quotes:
         repository.update_supplier_quote_status(db, db_quote=q, new_status="rejected")
 
-    # Atualiza cotação para 'cancelled'
-    repository.update_quotation_process_status(db, db_process=db_process, new_status="cancelled")
+    transition_quotation_process_status(
+        db,
+        db_process,
+        current_user.organization_id,
+        "CANCELLED",
+        current_user=current_user,
+        event_type="CANCELLED",
+        event_metadata={"purchase_request_id": str(db_process.purchase_request_id)},
+    )
 
     # Reverte solicitação para 'approved'
     db_request = db_process.purchase_request
     if db_request and db_request.status == "ordered":
-        repository.update_purchase_request_status(db, db_request=db_request, new_status="approved")
+        transition_purchase_request_status(
+            db,
+            db_request,
+            current_user.organization_id,
+            "APPROVED",
+            current_user=current_user,
+            event_type="QUOTATION_CANCELLED",
+            event_metadata={"quotation_id": str(db_process.id)},
+        )
 
     return db_process
 
@@ -1330,6 +2267,11 @@ def reopen_quotation_process(
             detail="Processo de cotação não encontrado."
         )
 
+    if db_process.document_id:
+        get_quotation_process_document(
+            db, db_process, current_user.organization_id
+        )
+
     # Verifica se há ordens já recebidas
     orders = repository.get_purchase_orders_by_request_id(db, request_id=db_process.purchase_request_id, organization_id=current_user.organization_id)
     if any(o.status in ["received", "partially_received"] for o in orders):
@@ -1341,7 +2283,15 @@ def reopen_quotation_process(
     # Cancela as ordens emitidas não faturadas
     for o in orders:
         if o.status in ["draft", "issued"]:
-            repository.update_purchase_order_status(db, db_order=o, new_status="cancelled")
+            transition_purchase_order_status(
+                db,
+                o,
+                current_user.organization_id,
+                "CANCELLED",
+                current_user=current_user,
+                event_type="QUOTATION_REOPENED",
+                event_metadata={"quotation_id": str(db_process.id)},
+            )
 
     # Retorna todas as propostas para 'pending'
     for q in db_process.quotes:
@@ -1349,12 +2299,28 @@ def reopen_quotation_process(
 
     # Define status da cotação
     new_status = "analyzing" if len(db_process.quotes) > 0 else "open"
-    repository.update_quotation_process_status(db, db_process=db_process, new_status=new_status)
+    transition_quotation_process_status(
+        db,
+        db_process,
+        current_user.organization_id,
+        new_status,
+        current_user=current_user,
+        event_type="REOPENED",
+        event_metadata={"purchase_request_id": str(db_process.purchase_request_id)},
+    )
 
     # Reverte solicitação de compra para 'approved'
     db_request = db_process.purchase_request
     if db_request:
-        repository.update_purchase_request_status(db, db_request=db_request, new_status="approved")
+        transition_purchase_request_status(
+            db,
+            db_request,
+            current_user.organization_id,
+            "APPROVED",
+            current_user=current_user,
+            event_type="QUOTATION_REOPENED",
+            event_metadata={"quotation_id": str(db_process.id)},
+        )
 
     return db_process
 
@@ -1375,6 +2341,11 @@ def delete_supplier_quote(
             detail="Processo de cotação não encontrado."
         )
 
+    if db_process.document_id:
+        get_quotation_process_document(
+            db, db_process, current_user.organization_id
+        )
+
     if db_process.status == "completed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1393,7 +2364,17 @@ def delete_supplier_quote(
     # Se não restar nenhuma proposta, volta status para 'open'
     remaining_quotes = [q for q in db_process.quotes if q.id != quote_id]
     if len(remaining_quotes) == 0 and db_process.status == "analyzing":
-        repository.update_quotation_process_status(db, db_process=db_process, new_status="open")
+        transition_quotation_process_status(
+            db,
+            db_process,
+            current_user.organization_id,
+            "OPEN",
+            current_user=current_user,
+            event_type="LAST_SUPPLIER_QUOTE_REMOVED",
+            event_metadata={"supplier_quote_id": str(quote_id)},
+        )
+    else:
+        db.commit()
 
     return {"detail": "Proposta comercial removida com sucesso."}
 
@@ -1401,6 +2382,12 @@ def delete_supplier_quote(
 # ==============================================================================
 # 9. FLUXO ÁGIL: MOTOR DE SUGESTÕES DE COMPRA & CONTROLE DE INVENTÁRIO
 # ==============================================================================
+
+def list_inventory_replenishments(
+    db: Session, organization_id: uuid.UUID
+) -> list[models.InventoryReplenishment]:
+    return repository.list_inventory_replenishments(db, organization_id)
+
 
 def generate_replenishment_suggestions(
     db: Session,
@@ -1483,6 +2470,139 @@ def generate_replenishment_suggestions(
     )
 
 
+def _persist_inventory_replenishment(
+    db: Session,
+    current_user: User,
+    *,
+    items: list[tuple[uuid.UUID, Decimal, Decimal]],
+    notes: str | None,
+    estimated_total_amount: Decimal | None = None,
+    document_payload: dict | None = None,
+) -> models.InventoryReplenishment:
+    """Materializa a necessidade de estoque antes de escolher o rito de compra."""
+    requested_by_product: dict[uuid.UUID, tuple[Decimal, Decimal]] = {}
+    products_by_id: dict[uuid.UUID, models.Product] = {}
+    for product_id, quantity, unit_price in items:
+        product = repository.get_product_by_id(
+            db, product_id, current_user.organization_id
+        )
+        if not product or not product.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Um dos produtos da reposição não existe ou está inativo.",
+            )
+        if quantity <= 0 or unit_price < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quantidade e preço da reposição são inválidos.",
+            )
+        prior_quantity, prior_total = requested_by_product.get(
+            product_id, (Decimal("0"), Decimal("0"))
+        )
+        requested_by_product[product_id] = (
+            prior_quantity + quantity,
+            prior_total + (quantity * unit_price),
+        )
+        products_by_id[product_id] = product
+
+    if not requested_by_product:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A reposição precisa conter pelo menos um produto.",
+        )
+
+    items_total = sum(
+        (total for _, total in requested_by_product.values()), Decimal("0")
+    )
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    replenishment_id = uuid.uuid4()
+    payload = {
+        "product_count": len(requested_by_product),
+        **(document_payload or {}),
+    }
+    replenishment_document = documents_service.create_document(
+        db,
+        organization_id=current_user.organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="inventory.replenishment",
+            document_type="REPLENISHMENT",
+            native_id=replenishment_id,
+            title="Reposição de Estoque",
+            current_status="OPEN",
+            description=notes,
+            origin_module="INVENTORY",
+            responsible_id=current_user.id,
+            payload=payload,
+            issued_at=utcnow(),
+        ),
+        current_user=current_user,
+    )
+    replenishment_document.title = (
+        f"Reposição {replenishment_document.document_number}"
+    )
+    replenishment = models.InventoryReplenishment(
+        id=replenishment_id,
+        organization_id=current_user.organization_id,
+        document_id=replenishment_document.id,
+        replenishment_number=replenishment_document.document_number,
+        status="OPEN",
+        estimated_total_amount=(
+            estimated_total_amount
+            if estimated_total_amount is not None
+            else items_total
+        ),
+        created_by_id=current_user.id,
+        notes=notes,
+    )
+    for product_id, (quantity, estimated_total) in requested_by_product.items():
+        product = products_by_id[product_id]
+        current_stock = Decimal(str(product.current_stock or 0))
+        replenishment.items.append(
+            models.InventoryReplenishmentItem(
+                organization_id=current_user.organization_id,
+                product_id=product_id,
+                current_stock=current_stock,
+                min_stock=Decimal(str(product.min_stock or 0)),
+                target_stock=current_stock + quantity,
+                requested_quantity=quantity,
+                estimated_unit_price=estimated_total / quantity,
+            )
+        )
+    repository.create_inventory_replenishment(db, replenishment)
+    return replenishment
+
+
+def create_formal_replenishment_request(
+    db: Session,
+    current_user: User,
+    data: schemas.PurchaseRequestCreate,
+) -> models.PurchaseRequest:
+    """Abre reposição e solicitação formal na mesma cadeia documental."""
+    replenishment = _persist_inventory_replenishment(
+        db,
+        current_user,
+        items=[
+            (
+                item.product_id,
+                Decimal(str(item.quantity)),
+                Decimal(str(item.estimated_unit_price)),
+            )
+            for item in data.items
+        ],
+        notes=data.justification,
+        document_payload={"procurement_path": "FORMAL_REQUEST"},
+    )
+    request_data = data.model_copy(
+        update={
+            "organization_id": current_user.organization_id,
+            "replenishment_id": replenishment.id,
+        }
+    )
+    return create_purchase_request(db, current_user, request_data)
+
+
 def create_quick_replenishment_order(
     db: Session,
     current_user: User,
@@ -1505,19 +2625,43 @@ def create_quick_replenishment_order(
             detail="A ordem de reposição precisa conter pelo menos um produto selecionado."
         )
 
-    items_total = sum(Decimal(str(item.quantity)) * Decimal(str(item.unit_price)) for item in data.items)
+    items_total = sum(
+        (
+            Decimal(str(item.quantity)) * Decimal(str(item.unit_price))
+            for item in data.items
+        ),
+        Decimal("0"),
+    )
     freight = Decimal(str(data.freight_amount or 0))
     discount = Decimal(str(data.discount_amount or 0))
     total_order = items_total + freight - discount
     if total_order < Decimal("0.00"):
         total_order = Decimal("0.00")
 
-    order_number = generate_order_number(db, organization_id=current_user.organization_id)
+    replenishment = _persist_inventory_replenishment(
+        db,
+        current_user,
+        items=[
+            (
+                item.product_id,
+                Decimal(str(item.quantity)),
+                Decimal(str(item.unit_price)),
+            )
+            for item in data.items
+        ],
+        notes=data.notes,
+        estimated_total_amount=total_order,
+        document_payload={
+            "procurement_path": "DIRECT_ORDER",
+            "supplier_id": str(data.supplier_id),
+        },
+    )
 
     order_payload = schemas.PurchaseOrderCreate(
         organization_id=current_user.organization_id,
         buyer_id=current_user.id,
         purchase_request_id=None,  # Ordem direta de reposição
+        replenishment_id=replenishment.id,
         supplier_id=data.supplier_id,
         cost_center_id=data.cost_center_id,
         payment_terms=data.payment_terms or supplier.payment_terms or "30 DDL",
@@ -1529,15 +2673,11 @@ def create_quick_replenishment_order(
         items=data.items
     )
 
-    db_order = repository.create_purchase_order(
-        db=db,
-        order_number=order_number,
+    db_order = persist_purchase_order(
+        db,
+        current_user=current_user,
         total_amount=total_order,
-        order_data=order_payload
+        order_data=order_payload,
     )
 
     return db_order
-
-
-
-

@@ -80,8 +80,7 @@ def create_bank_account(db: Session, account: BankAccount) -> BankAccount:
 
 
 def update_bank_account(db: Session, account: BankAccount) -> BankAccount:
-    db.commit()
-    db.refresh(account)
+    db.flush()
     return account
 
 
@@ -119,8 +118,12 @@ def list_fiscal_documents(
 
 def create_fiscal_document(db: Session, doc: FiscalDocument) -> FiscalDocument:
     db.add(doc)
-    db.commit()
-    db.refresh(doc)
+    db.flush()
+    return doc
+
+
+def update_fiscal_document(db: Session, doc: FiscalDocument) -> FiscalDocument:
+    db.flush()
     return doc
 
 
@@ -147,13 +150,19 @@ def list_payables(
     status: str | None = None,
     expense_nature: str | None = None,
     start_due_date: date | None = None,
-    end_due_date: date | None = None
+    end_due_date: date | None = None,
+    obligation_type: str | None = None,
+    business_origin: str | None = None,
 ) -> list[Payable]:
     stmt = select(Payable).where(Payable.organization_id == organization_id)
     if status:
         stmt = stmt.where(Payable.status == status)
     if expense_nature:
         stmt = stmt.where(Payable.expense_nature == expense_nature)
+    if obligation_type:
+        stmt = stmt.where(Payable.obligation_type == obligation_type)
+    if business_origin:
+        stmt = stmt.where(Payable.business_origin == business_origin)
     if start_due_date:
         stmt = stmt.where(Payable.due_date >= start_due_date)
     if end_due_date:
@@ -164,14 +173,12 @@ def list_payables(
 
 def create_payable(db: Session, payable: Payable) -> Payable:
     db.add(payable)
-    db.commit()
-    db.refresh(payable)
+    db.flush()
     return payable
 
 
 def update_payable(db: Session, payable: Payable) -> Payable:
-    db.commit()
-    db.refresh(payable)
+    db.flush()
     return payable
 
 
@@ -182,15 +189,13 @@ def delete_payable(db: Session, payable: Payable) -> None:
 
 def create_payment_instrument(db: Session, instrument: PaymentInstrument) -> PaymentInstrument:
     db.add(instrument)
-    db.commit()
-    db.refresh(instrument)
+    db.flush()
     return instrument
 
 
 def create_payment(db: Session, payment: Payment) -> Payment:
     db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    db.flush()
     return payment
 
 
@@ -223,15 +228,18 @@ def get_bank_transaction_by_id(db: Session, tx_id: uuid.UUID, organization_id: u
 
 def create_bank_transaction(db: Session, tx: BankTransaction) -> BankTransaction:
     db.add(tx)
-    db.commit()
-    db.refresh(tx)
+    db.flush()
+    return tx
+
+
+def update_bank_transaction(db: Session, tx: BankTransaction) -> BankTransaction:
+    db.flush()
     return tx
 
 
 def create_reconciliation(db: Session, rec: Reconciliation) -> Reconciliation:
     db.add(rec)
-    db.commit()
-    db.refresh(rec)
+    db.flush()
     return rec
 
 
@@ -261,14 +269,12 @@ def list_receivables(
 
 def create_receivable(db: Session, receivable: Receivable) -> Receivable:
     db.add(receivable)
-    db.commit()
-    db.refresh(receivable)
+    db.flush()
     return receivable
 
 
 def update_receivable(db: Session, receivable: Receivable) -> Receivable:
-    db.commit()
-    db.refresh(receivable)
+    db.flush()
     return receivable
 
 
@@ -279,8 +285,7 @@ def delete_receivable(db: Session, receivable: Receivable) -> None:
 
 def create_receipt(db: Session, receipt: Receipt) -> Receipt:
     db.add(receipt)
-    db.commit()
-    db.refresh(receipt)
+    db.flush()
     return receipt
 
 
@@ -290,8 +295,7 @@ def create_receipt(db: Session, receipt: Receipt) -> Receipt:
 
 def create_sales_report(db: Session, report: SalesReport) -> SalesReport:
     db.add(report)
-    db.commit()
-    db.refresh(report)
+    db.flush()
     return report
 
 

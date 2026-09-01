@@ -48,6 +48,16 @@ def create_financial_category(
     return service.create_financial_category(db, current_user.organization_id, payload)
 
 
+@router.patch("/finance/categories/{category_id}", response_model=schemas.FinancialCategoryResponse, summary="Editar Categoria Financeira")
+def update_financial_category(
+    category_id: uuid.UUID,
+    payload: schemas.FinancialCategoryUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_financial_category(db, current_user.organization_id, category_id, payload)
+
+
 @router.get("/finance/bank-accounts", response_model=list[schemas.BankAccountResponse], summary="Listar Contas Bancárias & Caixas")
 def list_bank_accounts(
     db: Session = Depends(get_db),
@@ -63,6 +73,16 @@ def create_bank_account(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.create_bank_account(db, current_user.organization_id, payload)
+
+
+@router.patch("/finance/bank-accounts/{account_id}", response_model=schemas.BankAccountResponse, summary="Editar Conta Bancária")
+def update_bank_account(
+    account_id: uuid.UUID,
+    payload: schemas.BankAccountUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_bank_account(db, current_user.organization_id, account_id, payload)
 
 
 # ==============================================================================
@@ -85,7 +105,21 @@ def create_fiscal_document(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.create_fiscal_document(db, current_user.organization_id, payload)
+    return service.create_fiscal_document(
+        db, current_user.organization_id, current_user, payload
+    )
+
+
+@router.patch("/finance/fiscal-documents/{fiscal_document_id}", response_model=schemas.FiscalDocumentResponse, summary="Editar Documento Fiscal")
+def update_fiscal_document(
+    fiscal_document_id: uuid.UUID,
+    payload: schemas.FiscalDocumentUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_fiscal_document(
+        db, current_user.organization_id, fiscal_document_id, current_user, payload
+    )
 
 
 # ==============================================================================
@@ -95,13 +129,24 @@ def create_fiscal_document(
 @router.get("/finance/payables", response_model=list[schemas.PayableResponse], summary="Listar Títulos a Pagar")
 def list_payables(
     status: str | None = Query(None),
-    expense_nature: str | None = Query(None, description="CAPEX ou OPEX"),
+    expense_nature: str | None = Query(None, description="Natureza contábil"),
+    obligation_type: str | None = Query(None, description="Tipo da obrigação"),
+    business_origin: str | None = Query(None, description="Origem de negócio"),
     start_due_date: date | None = Query(None),
     end_due_date: date | None = Query(None),
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.list_payables(db, current_user.organization_id, status, expense_nature, start_due_date, end_due_date)
+    return service.list_payables(
+        db,
+        current_user.organization_id,
+        status=status,
+        expense_nature=expense_nature,
+        start_due_date=start_due_date,
+        end_due_date=end_due_date,
+        obligation_type=obligation_type,
+        business_origin=business_origin,
+    )
 
 
 @router.post("/finance/payables", response_model=list[schemas.PayableResponse], status_code=status.HTTP_201_CREATED, summary="Lançar Despesa Avulsa / Título a Pagar")
@@ -111,6 +156,18 @@ def create_payable(
     current_user = Depends(identity_service.get_current_user)
 ):
     return service.create_payable_expense(db, current_user.organization_id, current_user, payload)
+
+
+@router.patch("/finance/payables/{payable_id}", response_model=schemas.PayableResponse, summary="Editar Conta a Pagar")
+def update_payable(
+    payable_id: uuid.UUID,
+    payload: schemas.PayableUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_payable(
+        db, current_user.organization_id, payable_id, current_user, payload
+    )
 
 
 @router.post("/finance/payables/{payable_id}/payments", response_model=schemas.PaymentResponse, status_code=status.HTTP_201_CREATED, summary="Efetuar Baixa / Pagamento de Conta")
@@ -146,6 +203,64 @@ def create_bank_transaction(
     return service.create_bank_transaction(db, current_user.organization_id, payload)
 
 
+@router.patch("/finance/transactions/{transaction_id}", response_model=schemas.BankTransactionResponse, summary="Editar Movimentação Bancária Manual")
+def update_bank_transaction(
+    transaction_id: uuid.UUID,
+    payload: schemas.BankTransactionUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_bank_transaction(
+        db, current_user.organization_id, transaction_id, payload
+    )
+
+
+@router.post("/finance/transactions/{transaction_id}/fiscal-document", response_model=schemas.BankTransactionResponse, summary="Vincular ou Cadastrar Nota Fiscal na Movimentação Bancária")
+def link_fiscal_document_to_transaction(
+    transaction_id: uuid.UUID,
+    payload: schemas.BankTransactionLinkFiscalRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.link_fiscal_document_to_transaction(
+        db, current_user.organization_id, transaction_id, current_user, payload
+    )
+
+
+@router.delete("/finance/transactions/{transaction_id}/fiscal-document", response_model=schemas.BankTransactionResponse, summary="Desvincular Nota Fiscal da Movimentação Bancária")
+def unlink_fiscal_document_from_transaction(
+    transaction_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.unlink_fiscal_document_from_transaction(
+        db, current_user.organization_id, transaction_id
+    )
+
+
+@router.post("/finance/transactions/{transaction_id}/receipt", response_model=schemas.BankTransactionResponse, summary="Anexar Comprovante de Pagamento na Movimentação Bancária")
+def attach_receipt_to_transaction(
+    transaction_id: uuid.UUID,
+    payload: schemas.BankTransactionAttachReceiptRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.attach_receipt_to_transaction(
+        db, current_user.organization_id, transaction_id, current_user, payload
+    )
+
+
+@router.delete("/finance/transactions/{transaction_id}/receipt", response_model=schemas.BankTransactionResponse, summary="Remover Comprovante da Movimentação Bancária")
+def remove_receipt_from_transaction(
+    transaction_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.remove_receipt_from_transaction(
+        db, current_user.organization_id, transaction_id
+    )
+
+
 @router.post("/finance/reconciliations", response_model=schemas.ReconciliationResponse, status_code=status.HTTP_201_CREATED, summary="Realizar Conciliação Bancária")
 def reconcile_transaction(
     payload: schemas.ReconciliationCreate,
@@ -174,7 +289,21 @@ def create_receivable(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.create_receivable(db, current_user.organization_id, payload)
+    return service.create_receivable(
+        db, current_user.organization_id, payload, current_user=current_user
+    )
+
+
+@router.patch("/finance/receivables/{receivable_id}", response_model=schemas.ReceivableResponse, summary="Editar Conta a Receber")
+def update_receivable(
+    receivable_id: uuid.UUID,
+    payload: schemas.ReceivableUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.update_receivable(
+        db, current_user.organization_id, receivable_id, current_user, payload
+    )
 
 
 @router.post("/finance/receivables/{receivable_id}/receipts", response_model=schemas.ReceiptResponse, status_code=status.HTTP_201_CREATED, summary="Registrar Baixa de Recebimento")

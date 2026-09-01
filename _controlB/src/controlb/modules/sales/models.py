@@ -193,7 +193,7 @@ class SalesOrder(Base):
     
     payment_terms: Mapped[str | None] = mapped_column(String(100), nullable=True)  # ex: "30/60 dias", "À Vista"
     delivery_status: Mapped[str] = mapped_column(String(50), default="PENDING")  # PENDING, DISPATCHED, DELIVERED
-    billing_status: Mapped[str] = mapped_column(String(50), default="PENDING", index=True)  # PENDING, INVOICED
+    billing_status: Mapped[str] = mapped_column(String(50), default="PENDING", index=True)  # PENDING, REQUESTED, PARTIALLY_INVOICED, INVOICED
     status: Mapped[str] = mapped_column(String(50), default="CONFIRMED", index=True)  # DRAFT, CONFIRMED, COMPLETED, CANCELLED
     credit_status: Mapped[str] = mapped_column(
         String(30), default="NOT_REQUIRED", nullable=False, index=True
@@ -409,9 +409,19 @@ class POSSale(Base):
     Tabela 'pos_sale' - Venda instantânea realizada no PDV Balcão.
     """
     __tablename__ = "pos_sale"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_pos_sale_document_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("document_id", name="uq_pos_sale_document"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     pos_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pos_session.id", ondelete="SET NULL"), nullable=True)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("customer.id", ondelete="SET NULL"), nullable=True)
     
@@ -429,6 +439,7 @@ class POSSale(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     # Relacionamentos
+    document: Mapped["BusinessDocument | None"] = relationship(lazy="select")
     session: Mapped["POSSession | None"] = relationship(back_populates="sales")
     items: Mapped[list["POSSaleItem"]] = relationship(back_populates="sale", cascade="all, delete-orphan", lazy="selectin")
 
@@ -556,9 +567,19 @@ class SalesReturn(Base):
     Tabela 'sales_return' - Gestão de devoluções e trocas com estorno opcional ao estoque.
     """
     __tablename__ = "sales_return"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "organization_id"],
+            ["business_document.id", "business_document.organization_id"],
+            name="fk_sales_return_document_org",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("document_id", name="uq_sales_return_document"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     
     sales_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sales_order.id", ondelete="SET NULL"), nullable=True)
     pos_sale_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pos_sale.id", ondelete="SET NULL"), nullable=True)
@@ -576,6 +597,7 @@ class SalesReturn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     # Relacionamentos
+    document: Mapped["BusinessDocument | None"] = relationship(lazy="select")
     items: Mapped[list["SalesReturnItem"]] = relationship(back_populates="sales_return", cascade="all, delete-orphan", lazy="selectin")
 
 

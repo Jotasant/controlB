@@ -60,11 +60,12 @@ def test_generate_po_from_approved_request_success():
 
     mock_created_po = models.PurchaseOrder(
         id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
         organization_id=org_id,
         buyer_id=user_id,
         purchase_request_id=req_id,
         supplier_id=sup_id,
-        order_number="OC-2026-0001",
+        order_number="PC-2026-0001",
         status="issued",
         total_amount=Decimal("480.00")
     )
@@ -73,7 +74,14 @@ def test_generate_po_from_approved_request_success():
          patch("controlb.modules.purchasing.repository.get_supplier_by_id", return_value=mock_supplier), \
          patch("controlb.modules.purchasing.repository.count_purchase_orders_in_year", return_value=0), \
          patch("controlb.modules.purchasing.repository.create_purchase_order", return_value=mock_created_po) as mock_create_repo, \
-         patch("controlb.modules.purchasing.repository.update_purchase_request_status") as mock_update_req_status:
+         patch("controlb.modules.purchasing.repository.update_purchase_request_status") as mock_update_req_status, \
+         patch(
+             "controlb.modules.documents.service.create_document",
+             return_value=MagicMock(
+                 id=mock_created_po.document_id,
+                 document_number="PC-2026-0001",
+             ),
+         ):
 
         po = generate_po_from_request(
             db=db_mock,
@@ -172,6 +180,14 @@ def test_receive_purchase_order_shipment_success():
         )
 
 
+def test_receive_purchase_order_requires_due_date_for_payable():
+    with pytest.raises(ValueError, match="primeiro vencimento"):
+        schemas.PurchaseOrderReceive(
+            invoice_number="NF-e 123456",
+            generate_payable=True,
+        )
+
+
 def test_create_purchase_request_success():
     """Valida a emissão de solicitação de compra sem necessidade de organization_id no body."""
     from controlb.modules.purchasing.service import create_purchase_request
@@ -216,9 +232,15 @@ def test_create_purchase_request_success():
         total_estimated_amount=Decimal("90.00"),
         justification=payload.justification
     )
+    mock_document = MagicMock(
+        id=uuid.uuid4(),
+        document_number="SC-2026-0001",
+        current_status="PENDING_APPROVAL",
+    )
 
     with patch("controlb.modules.purchasing.service.repository.get_product_by_id", return_value=mock_prod), \
-         patch("controlb.modules.purchasing.service.repository.count_purchase_requests_in_year", return_value=0), \
+         patch("controlb.modules.documents.service.create_document", return_value=mock_document) as mock_create_document, \
+         patch("controlb.modules.documents.service.update_document", return_value=mock_document), \
          patch("controlb.modules.purchasing.service.repository.create_purchase_request", return_value=mock_created_pr) as mock_create_repo:
 
         result = create_purchase_request(
@@ -230,5 +252,6 @@ def test_create_purchase_request_success():
         assert result.status == "pending_approval"
         assert result.request_number == "SC-2026-0001"
         assert result.total_estimated_amount == Decimal("90.00")
+        assert mock_create_document.call_count == 1
         mock_create_repo.assert_called_once()
-
+        assert mock_create_repo.call_args.kwargs["document_id"] == mock_document.id

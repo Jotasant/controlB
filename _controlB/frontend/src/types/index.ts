@@ -12,12 +12,37 @@
 // Cadeia documental transversal (CRM, Vendas, Estoque, Fiscal e Financeiro).
 export interface BusinessDocumentNode {
   id: string;
+  category: string;
   document_type: string;
   native_id: string;
   document_number: string;
+  title: string;
   current_status: string;
+  priority: string;
+  origin_module: string;
   issued_at?: string | null;
   created_at: string;
+}
+
+export interface BusinessDocument extends BusinessDocumentNode {
+  organization_id: string;
+  description?: string | null;
+  tags: string[];
+  responsible_id?: string | null;
+  payload: Record<string, unknown>;
+  completed_at?: string | null;
+  created_by_id?: string | null;
+  updated_at: string;
+}
+
+export interface BusinessDocumentFilters {
+  category?: string;
+  origin_module?: string;
+  current_status?: string;
+  search?: string;
+  responsible_id?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface BusinessDocumentRelation {
@@ -219,38 +244,8 @@ export interface Product {
   updated_at: string;
 }
 
-export interface InventoryImportItemDetail {
-  code: string;
-  name: string;
-  barcode?: string | null;
-  ncm?: string | null;
-  previous_stock: number;
-  new_stock: number;
-  delta_stock: number;
-  action_type: 'created' | 'sale_detected' | 'entry_detected' | 'unchanged';
-  cost_price: number;
-  sale_price: number;
-}
-
-export interface InventoryImportSummaryResponse {
-  total_products_read: number;
-  created_products_count: number;
-  updated_products_count: number;
-  created_categories_count: number;
-  sales_identified_count: number;
-  total_sales_quantity: number;
-  entries_identified_count: number;
-  total_entries_quantity: number;
-  total_cost_value: number;
-  total_sale_value: number;
-  inventory_date?: string | null;
-  message: string;
-  sample_items: InventoryImportItemDetail[];
-}
-
 export type ToolsPharmaImportItemDetail = InventoryImportItemDetail;
 export type ToolsPharmaImportSummaryResponse = InventoryImportSummaryResponse;
-
 
 // ==============================================================================
 // 3. PURCHASING - SOLICITAÇÃO DE COMPRA & APROVAÇÃO
@@ -281,6 +276,8 @@ export interface ApprovalEvent {
 export interface PurchaseRequest {
   id: string;
   organization_id: string;
+  document_id: string;
+  replenishment_id: string | null;
   requester_id: string;
   cost_center_id: string | null;
   request_number: string;
@@ -314,7 +311,9 @@ export interface PurchaseOrderItem {
 export interface PurchaseOrder {
   id: string;
   organization_id: string;
+  document_id: string;
   purchase_request_id: string | null;
+  replenishment_id: string | null;
   supplier_id: string;
   buyer_id: string;
   cost_center_id: string | null;
@@ -357,8 +356,23 @@ export interface GeneratePOFromRequestPayload {
 
 export interface PurchaseOrderReceivePayload {
   invoice_number: string;
+  invoice_type?: 'NFE' | 'NFSE' | 'NFCE' | 'CTE' | 'OUTRO';
+  invoice_series?: string | null;
+  invoice_access_key?: string | null;
+  invoice_issue_date?: string | null;
+  invoice_tax_amount?: number;
   invoice_attachment?: string | null;
   received_at?: string | null;
+  generate_payable?: boolean;
+  payable_due_date?: string | null;
+  installments_count?: number;
+  installment_frequency_days?: number;
+  expense_nature?: 'OPEX' | 'CAPEX';
+  payment_method_expected?: string | null;
+  financial_category_id?: string | null;
+  digitable_line?: string | null;
+  barcode?: string | null;
+  pix_code?: string | null;
   notes?: string | null;
 }
 
@@ -503,9 +517,38 @@ export interface QuickReplenishmentOrderPayload {
   }[];
 }
 
+export interface InventoryReplenishmentItem {
+  id: string;
+  organization_id: string;
+  replenishment_id: string;
+  product_id: string;
+  current_stock: number;
+  min_stock: number;
+  target_stock: number;
+  requested_quantity: number;
+  estimated_unit_price: number;
+  created_at: string;
+  product?: Product | null;
+}
+
+export interface InventoryReplenishment {
+  id: string;
+  organization_id: string;
+  document_id: string;
+  replenishment_number: string;
+  status: 'OPEN' | 'REQUESTED' | 'ORDERED' | 'CANCELLED';
+  estimated_total_amount: number;
+  created_by_id?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  items: InventoryReplenishmentItem[];
+}
+
 export interface StockAdjustmentPayload {
   product_id: string;
   adjustment_type: 'invoice_entry' | 'manual_loss' | 'reconciliation' | 'set_balance' | 'add_stock' | 'remove_stock';
+  outbound_reason?: 'loss_damage' | 'internal_consumption' | 'supplier_return' | 'inventory_adjustment' | null;
   quantity: number;
   unit_cost?: number;
   invoice_number?: string | null;
@@ -516,13 +559,23 @@ export interface StockAdjustmentPayload {
   reason?: string | null;
   notes?: string | null;
   auditor_name?: string | null;
+  fiscal_document_id?: string | null;
 }
 
 
 export interface StockMovement {
   id: string;
   organization_id: string;
+  document_id: string;
   product_id: string;
+  receipt_id?: string | null;
+  delivery_id?: string | null;
+  transfer_id?: string | null;
+  fiscal_document_id?: string | null;
+  payable_id?: string | null;
+  location_id?: string | null;
+  source_location_id?: string | null;
+  destination_location_id?: string | null;
   product_name?: string | null;
   sku?: string | null;
   product?: Product | null;
@@ -531,10 +584,65 @@ export interface StockMovement {
   quantity: number;
   unit_cost: number;
   balance_after: number;
+  location_balance_after?: number | null;
   reference_doc?: string | null;
   invoice_attachment?: string | null;
   notes?: string | null;
   created_at: string;
+}
+
+export interface InventoryLocation {
+  id: string;
+  organization_id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  is_default: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InventoryBalance {
+  id: string;
+  organization_id: string;
+  product_id: string;
+  location_id: string;
+  quantity: number;
+  updated_at: string;
+}
+
+export interface InventoryTransferItem {
+  id: string;
+  organization_id: string;
+  transfer_id: string;
+  product_id: string;
+  quantity: number;
+  created_at: string;
+  product?: Product | null;
+}
+
+export interface InventoryTransfer {
+  id: string;
+  organization_id: string;
+  document_id: string;
+  transfer_number: string;
+  source_location_id: string;
+  destination_location_id: string;
+  status: 'COMPLETED' | 'CANCELLED';
+  completed_by_id?: string | null;
+  completed_at: string;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  items: InventoryTransferItem[];
+}
+
+export interface InventoryTransferPayload {
+  source_location_id: string;
+  destination_location_id: string;
+  notes?: string | null;
+  items: Array<{ product_id: string; quantity: number }>;
 }
 
 export interface StockReservationItem {
@@ -553,14 +661,46 @@ export interface StockReservation {
   sales_order_id: string;
   document_id: string;
   reservation_number: string;
-  status: 'RESERVED' | 'RELEASED';
+  status: 'RESERVED' | 'RELEASED' | 'CONSUMED';
   status_version: number;
   created_by_id?: string | null;
   released_by_id?: string | null;
   released_at?: string | null;
+  consumed_by_id?: string | null;
+  consumed_at?: string | null;
   created_at: string;
   updated_at: string;
   items: StockReservationItem[];
+}
+
+export interface InventoryDeliveryItem {
+  id: string;
+  organization_id: string;
+  delivery_id: string;
+  product_id: string;
+  quantity: number;
+  created_at: string;
+  product?: Product | null;
+}
+
+export interface InventoryDelivery {
+  id: string;
+  organization_id: string;
+  sales_order_id: string;
+  reservation_id?: string | null;
+  document_id: string;
+  fiscal_document_id?: string | null;
+  delivery_number: string;
+  status: 'DISPATCHED' | 'DELIVERED' | 'CANCELLED';
+  stock_posted: boolean;
+  dispatched_at: string;
+  delivered_at?: string | null;
+  created_by_id?: string | null;
+  delivered_by_id?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  items: InventoryDeliveryItem[];
 }
 
 
@@ -598,6 +738,7 @@ export interface BankAccount {
 export interface FiscalDocument {
   id: string;
   organization_id: string;
+  document_id: string;
   direction: 'INBOUND' | 'OUTBOUND';
   document_type: 'NFE' | 'NFSE' | 'NFCE' | 'CTE' | 'OUTRO';
   document_number: string;
@@ -611,6 +752,8 @@ export interface FiscalDocument {
   total_amount: number;
   tax_amount: number;
   purchase_order_id?: string | null;
+  sales_order_id?: string | null;
+  customer_id?: string | null;
   supplier_id?: string | null;
   file_attachment?: string | null;
   notes?: string | null;
@@ -661,9 +804,12 @@ export interface Payment {
 export interface Payable {
   id: string;
   organization_id: string;
+  document_id: string;
+  payable_number: string;
   supplier_id?: string | null;
   purchase_order_id?: string | null;
   fiscal_document_id?: string | null;
+  inventory_receipt_id?: string | null;
   cost_center_id?: string | null;
   financial_category_id?: string | null;
   description: string;
@@ -672,7 +818,9 @@ export interface Payable {
   outstanding_amount: number;
   issue_date: string;
   due_date: string;
-  expense_nature: 'CAPEX' | 'OPEX';
+  expense_nature: 'OPEX' | 'CAPEX' | 'FINANCIAL' | 'TAX' | 'PAYROLL' | 'TRANSFER' | 'NOT_APPLICABLE';
+  obligation_type: 'GOODS_SUPPLIER' | 'SERVICE_PROVIDER' | 'TAX' | 'PAYROLL' | 'RENT_LEASE' | 'FINANCING' | 'REIMBURSEMENT' | 'INVESTMENT' | 'OTHER';
+  business_origin: 'PURCHASE' | 'REPLENISHMENT' | 'INVESTMENT' | 'CONTRACT' | 'FISCAL_DOCUMENT' | 'MANUAL' | 'OTHER';
   payment_method_expected?: string | null;
   installment_number: number;
   total_installments: number;
@@ -697,8 +845,14 @@ export interface BankTransaction {
   external_id?: string | null;
   document_number?: string | null;
   balance_after?: number | null;
+  fiscal_document_id?: string | null;
+  payment_attachment_id?: string | null;
+  receipt_url?: string | null;
+  receipt_filename?: string | null;
   status: 'pending' | 'reconciled' | 'ignored';
   created_at: string;
+  fiscal_document?: FiscalDocument | null;
+  payment_attachment?: PaymentAttachment | null;
   reconciliation?: Reconciliation | null;
 }
 
@@ -716,6 +870,11 @@ export interface Reconciliation {
 export interface Receivable {
   id: string;
   organization_id: string;
+  document_id: string;
+  receivable_number: string;
+  invoice_installment_id?: string | null;
+  sales_order_id?: string | null;
+  customer_id?: string | null;
   customer_name: string;
   customer_document?: string | null;
   fiscal_document_id?: string | null;
@@ -836,6 +995,7 @@ export interface Opportunity {
   probability_percent: number;
   expected_closing_date?: string | null;
   stage: string;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH';
   loss_reason?: string | null;
   assigned_to_id?: string | null;
   created_at: string;
@@ -993,7 +1153,7 @@ export interface SalesOrder {
   net_amount: number;
   payment_terms?: string | null;
   delivery_status: 'PENDING' | 'RESERVED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELLED';
-  billing_status: 'PENDING' | 'INVOICED';
+  billing_status: 'PENDING' | 'REQUESTED' | 'PARTIALLY_INVOICED' | 'INVOICED';
   status: 'DRAFT' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
   credit_status: 'NOT_REQUIRED' | 'APPROVED' | 'PENDING' | 'REJECTED';
   credit_limit_snapshot: number;
@@ -1047,15 +1207,15 @@ export interface CommercialApprovalRequest extends CommercialApprovalSummary {
   organization_id: string;
   sales_quote_id?: string | null;
   sales_order_id?: string | null;
-  quote?: Pick<SalesQuote, 'id' | 'quote_number' | 'customer_name' | 'net_amount' | 'commercial_approval_status'> | null;
-  order?: Pick<SalesOrder, 'id' | 'order_number' | 'customer_name' | 'net_amount' | 'commercial_approval_status'> | null;
+  quote?: Pick<SalesQuote, 'id' | 'quote_number' | 'customer_id' | 'customer_name' | 'net_amount' | 'commercial_approval_status'> | null;
+  order?: Pick<SalesOrder, 'id' | 'order_number' | 'customer_id' | 'customer_name' | 'net_amount' | 'commercial_approval_status'> | null;
 }
 
 export interface CreditApprovalRequest extends CreditApprovalSummary {
   organization_id: string;
   sales_order_id: string;
   customer_id: string;
-  order: Pick<SalesOrder, 'id' | 'order_number' | 'customer_name' | 'net_amount' | 'credit_status'>;
+  order: Pick<SalesOrder, 'id' | 'order_number' | 'customer_id' | 'customer_name' | 'net_amount' | 'credit_status'>;
 }
 
 export interface CustomerCreditAnalysis {
@@ -1084,6 +1244,7 @@ export interface POSSaleItem {
 export interface POSSale {
   id: string;
   organization_id: string;
+  document_id: string;
   pos_session_id?: string | null;
   customer_id?: string | null;
   customer_name: string;
@@ -1180,6 +1341,7 @@ export interface SalesReturnItem {
 export interface SalesReturn {
   id: string;
   organization_id: string;
+  document_id: string;
   sales_order_id?: string | null;
   pos_sale_id?: string | null;
   customer_id?: string | null;
@@ -1229,14 +1391,30 @@ export interface InvoiceInstallment {
   total_installments: number;
   amount: number;
   due_date: string;
-  status: 'PENDING' | 'PAID' | 'OVERDUE';
+  status: 'PENDING' | 'PARTIALLY_RECEIVED' | 'PAID' | 'OVERDUE' | 'CANCELLED';
+}
+
+export interface InvoiceItem {
+  id: string;
+  invoice_id: string;
+  sales_order_item_id: string;
+  product_id: string;
+  description: string;
+  product_sku?: string | null;
+  quantity: number;
+  unit_price: number;
+  discount_amount: number;
+  total_amount: number;
 }
 
 export interface Invoice {
   id: string;
   organization_id: string;
+  document_id: string;
+  fiscal_document_id?: string | null;
   invoice_number: string;
   sales_order_id?: string | null;
+  customer_id?: string | null;
   customer_name: string;
   customer_document?: string | null;
   total_amount: number;
@@ -1244,9 +1422,124 @@ export interface Invoice {
   net_amount: number;
   issue_date: string;
   due_date: string;
-  status: 'DRAFT' | 'ISSUED' | 'CANCELLED';
+  status: 'DRAFT' | 'ISSUED' | 'PARTIALLY_RECEIVED' | 'OVERDUE' | 'PAID' | 'CANCELLED';
   notes?: string | null;
   created_at: string;
   updated_at: string;
   installments: InvoiceInstallment[];
+  items: InvoiceItem[];
+}
+
+// ==============================================================================
+// 12. AUDITORIA DE IMPORTAÇÕES DE ESTOQUE & CAPITAL ESTAGNADO
+// ==============================================================================
+
+export interface InventoryImportItemDetail {
+  id?: string | null;
+  code: string;
+  name: string;
+  barcode?: string | null;
+  sku?: string | null;
+  ncm?: string | null;
+  unit_of_measure: string;
+  previous_stock: number;
+  new_stock: number;
+  delta_stock: number;
+  action_type: 'created' | 'sale_detected' | 'entry_detected' | 'stagnant_unchanged' | 'zero_stock_unchanged' | string;
+  previous_cost_price?: number | null;
+  new_cost_price: number;
+  cost_variation_amount: number | null;
+  cost_variation_percent?: number | null;
+  previous_sale_price?: number | null;
+  new_sale_price: number;
+  sale_variation_amount: number | null;
+  sale_variation_percent?: number | null;
+  stagnant_value: number;
+  estimated_sales_revenue: number;
+}
+
+export interface InventoryImportSummaryResponse {
+  batch_id?: string | null;
+  batch_number?: string | null;
+  total_products_read: number;
+  created_products_count: number;
+  updated_products_count: number;
+  created_categories_count: number;
+  sales_identified_count: number;
+  total_sales_quantity: number;
+  total_sales_estimated_revenue: number;
+  entries_identified_count: number;
+  total_entries_quantity: number;
+  total_entries_cost: number;
+  cost_increases_count: number;
+  cost_decreases_count: number;
+  stagnant_products_count: number;
+  total_stagnant_capital: number;
+  total_cost_value: number;
+  total_sale_value: number;
+  inventory_date?: string | null;
+  message: string;
+  sample_items: InventoryImportItemDetail[];
+}
+
+export interface InventoryImportBatchListItem {
+  id: string;
+  organization_id: string;
+  document_id?: string | null;
+  batch_number: string;
+  filename?: string | null;
+  inventory_date?: string | null;
+  total_products_read: number;
+  created_products_count: number;
+  updated_products_count: number;
+  sales_identified_count: number;
+  total_sales_quantity: number;
+  total_sales_estimated_revenue: number;
+  entries_identified_count: number;
+  total_entries_quantity: number;
+  cost_increases_count: number;
+  cost_decreases_count: number;
+  stagnant_products_count: number;
+  total_stagnant_capital: number;
+  total_inventory_cost: number;
+  total_inventory_sale: number;
+  created_at: string;
+}
+
+export interface InventoryImportBatch extends InventoryImportBatchListItem {
+  created_categories_count: number;
+  total_entries_cost: number;
+  imported_by_id?: string | null;
+  notes?: string | null;
+  items: InventoryImportItemDetail[];
+}
+
+export interface StagnantProductItem {
+  product_id: string;
+  code?: string | null;
+  sku?: string | null;
+  name: string;
+  category_name?: string | null;
+  current_stock: number;
+  unit_of_measure: string;
+  cost_price: number;
+  sale_price: number;
+  stagnant_capital: number;
+  last_movement_date?: string | null;
+  days_without_sale?: number | null;
+}
+
+export interface StagnantCategorySummary {
+  category_name: string;
+  products_count: number;
+  total_units: number;
+  total_capital: number;
+}
+
+export interface StagnantInventoryReport {
+  total_stagnant_products: number;
+  total_stagnant_units: number;
+  total_stagnant_capital: number;
+  stagnant_by_category: StagnantCategorySummary[];
+  top_stagnant_products: StagnantProductItem[];
 }

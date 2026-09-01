@@ -5,7 +5,7 @@ tests/unit/test_purchasing_quotation_flow.py - Testes Unitários do Fluxo de Cot
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
@@ -47,19 +47,28 @@ def test_open_quotation_process_from_approved_request(mock_db, mock_user):
         id=uuid.uuid4(),
         organization_id=mock_user.organization_id,
         purchase_request_id=request_id,
-        quotation_number="COT-2026-0001",
+        document_id=uuid.uuid4(),
+        quotation_number="RFQ-2026-0001",
         status="open"
     )
     service.repository.create_quotation_process = MagicMock(return_value=mock_process)
-    
-    result = service.open_quotation_process(
-        db=mock_db,
-        current_user=mock_user,
-        request_id=request_id,
-        notes="Cotar com pelo menos 3 fornecedores"
+
+    mock_document = MagicMock(
+        id=mock_process.document_id,
+        document_number="RFQ-2026-0001",
     )
-    
-    assert result.quotation_number == "COT-2026-0001"
+    with patch(
+        "controlb.modules.documents.service.create_document",
+        return_value=mock_document,
+    ):
+        result = service.open_quotation_process(
+            db=mock_db,
+            current_user=mock_user,
+            request_id=request_id,
+            notes="Cotar com pelo menos 3 fornecedores"
+        )
+
+    assert result.quotation_number == "RFQ-2026-0001"
     assert result.status == "open"
     service.repository.create_quotation_process.assert_called_once()
 
@@ -284,6 +293,7 @@ def test_select_winner_and_generate_purchase_order(mock_db, mock_user):
     )
     
     service.repository.get_quotation_process_by_id = MagicMock(return_value=mock_process)
+    service.repository.get_purchase_request_by_id = MagicMock(return_value=mock_request)
     service.repository.get_supplier_quote_by_id = MagicMock(return_value=winner_quote)
     service.repository.update_supplier_quote_status = MagicMock()
     service.repository.update_quotation_process_status = MagicMock()
@@ -292,11 +302,12 @@ def test_select_winner_and_generate_purchase_order(mock_db, mock_user):
     
     mock_created_order = models.PurchaseOrder(
         id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
         organization_id=mock_user.organization_id,
         purchase_request_id=mock_request.id,
         supplier_id=supplier_id,
         buyer_id=mock_user.id,
-        order_number="OC-2026-0001",
+        order_number="PC-2026-0001",
         status="issued",
         payment_terms="30 DDL",
         total_amount=Decimal("4950.00"),
@@ -306,15 +317,22 @@ def test_select_winner_and_generate_purchase_order(mock_db, mock_user):
     )
     service.repository.create_purchase_order = MagicMock(return_value=mock_created_order)
     
-    po = service.select_winner_and_generate_order(
-        db=mock_db,
-        current_user=mock_user,
-        quotation_id=quotation_id,
-        quote_id=quote_winner_id,
-        notes="Fornecedor selecionado por melhor prazo e preço"
-    )
+    with patch(
+        "controlb.modules.documents.service.create_document",
+        return_value=MagicMock(
+            id=mock_created_order.document_id,
+            document_number="PC-2026-0001",
+        ),
+    ):
+        po = service.select_winner_and_generate_order(
+            db=mock_db,
+            current_user=mock_user,
+            quotation_id=quotation_id,
+            quote_id=quote_winner_id,
+            notes="Fornecedor selecionado por melhor prazo e preço"
+        )
     
-    assert po.order_number == "OC-2026-0001"
+    assert po.order_number == "PC-2026-0001"
     assert po.total_amount == Decimal("4950.00")
     service.repository.update_quotation_process_status.assert_called_with(mock_db, db_process=mock_process, new_status="completed")
     service.repository.update_purchase_request_status.assert_called_with(mock_db, db_request=mock_request, new_status="ordered")
@@ -322,7 +340,7 @@ def test_select_winner_and_generate_purchase_order(mock_db, mock_user):
     # Valida argumentos passados para create_purchase_order
     service.repository.create_purchase_order.assert_called_once()
     _, kwargs = service.repository.create_purchase_order.call_args
-    assert kwargs["order_number"] == "OC-2026-0001"
+    assert kwargs["order_number"] == "PC-2026-0001"
     assert kwargs["total_amount"] == Decimal("4950.00")
     assert kwargs["order_data"].supplier_quote_id == quote_winner_id
 
@@ -450,5 +468,3 @@ def test_cancel_quotation_process(mock_db, mock_user):
     
     service.repository.update_quotation_process_status.assert_called_with(mock_db, db_process=mock_process, new_status="cancelled")
     service.repository.update_purchase_request_status.assert_called_with(mock_db, db_request=mock_request, new_status="approved")
-
-

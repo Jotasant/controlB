@@ -13,10 +13,11 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ShoppingCart, FileText, Truck, Package, Target, ChevronRight,
   Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail, Phone,
-  Loader2, AlertCircle, Trash2, ShieldCheck, Box, Check, BarChart2, Award, Edit,
+  Loader2, AlertCircle, Trash2, ShieldCheck, Box, Check, BarChart2, Award,
   Tags, Users, Sparkles, Building, X, DollarSign, Zap, SlidersHorizontal,
   CheckSquare, Square, ArrowUpRight, ArrowDownRight, AlertTriangle,
   UploadCloud, Paperclip, ArrowUpDown, ArrowUp, ArrowDown
@@ -33,20 +34,26 @@ import { formatCurrency, formatQuantity, formatPriceInput, formatQuantityInput }
 
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
+import { BulkActionsBar } from '@/components/BulkActionsBar';
+import { ListPagination } from '@/components/ListPagination';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { useListPagination } from '@/hooks/useListPagination';
+import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
 import './Purchasing.scss';
 
+const ALLOWED_PURCHASING_MENUS = [
+  'solicitacoes',
+  'sugestoes',
+  'cotacoes',
+  'ordens',
+  'fornecedores',
+  'produtos',
+  'categorias',
+  'centros-custo',
+  'movimentacoes'
+] as const;
 
-
-type PurchasingMenuOption =
-  | 'solicitacoes'
-  | 'sugestoes'
-  | 'cotacoes'
-  | 'ordens'
-  | 'fornecedores'
-  | 'produtos'
-  | 'categorias'
-  | 'centros-custo'
-  | 'movimentacoes';
+type PurchasingMenuOption = typeof ALLOWED_PURCHASING_MENUS[number];
 
 const PRESET_SEGMENTS = [
   'Medicamentos Éticos',
@@ -60,7 +67,9 @@ const PRESET_SEGMENTS = [
 ];
 
 export const Purchasing: React.FC = () => {
-  const [activeMenu, setActiveMenu] = useState<PurchasingMenuOption>('solicitacoes');
+  const [searchParams] = useSearchParams();
+  const initialMenu = isRequestedView(searchParams, ALLOWED_PURCHASING_MENUS, 'solicitacoes');
+  const [activeMenu, setActiveMenu] = useState<PurchasingMenuOption>(initialMenu);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchField, setSearchField] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -103,6 +112,13 @@ export const Purchasing: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
+  const requestSelection = useBulkSelection<PurchaseRequest>();
+  const quotationSelection = useBulkSelection<QuotationProcess>();
+  const orderSelection = useBulkSelection<PurchaseOrder>();
+  const supplierSelection = useBulkSelection<Supplier>();
+  const productSelection = useBulkSelection<Product>();
+  const categorySelection = useBulkSelection<ProductCategory>();
+  const costCenterSelection = useBulkSelection<CostCenter>();
 
   // --- FLUXO ÁGIL: REPOSIÇÃO & INVENTÁRIO ---
   const [suggestionsSummary, setSuggestionsSummary] = useState<PurchaseSuggestionsSummary | null>(null);
@@ -111,6 +127,7 @@ export const Purchasing: React.FC = () => {
 
   // Modal de Emissão Rápida de PO a partir de Sugestões
   const [isQuickOrderModalOpen, setIsQuickOrderModalOpen] = useState(false);
+  const [replenishmentFlow, setReplenishmentFlow] = useState<'request' | 'order'>('order');
   const [quickOrderSupplierId, setQuickOrderSupplierId] = useState('');
   const [quickOrderCostCenterId, setQuickOrderCostCenterId] = useState('');
   const [quickOrderPaymentTerms, setQuickOrderPaymentTerms] = useState('30 DDL');
@@ -289,6 +306,20 @@ export const Purchasing: React.FC = () => {
   const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
   const [selectedOrderForReceive, setSelectedOrderForReceive] = useState<PurchaseOrder | null>(null);
   const [receiveInvoiceNumber, setReceiveInvoiceNumber] = useState('');
+  const [receiveInvoiceType, setReceiveInvoiceType] = useState<'NFE' | 'NFSE' | 'NFCE' | 'CTE' | 'OUTRO'>('NFE');
+  const [receiveInvoiceSeries, setReceiveInvoiceSeries] = useState('');
+  const [receiveInvoiceAccessKey, setReceiveInvoiceAccessKey] = useState('');
+  const [receiveInvoiceIssueDate, setReceiveInvoiceIssueDate] = useState('');
+  const [receiveGeneratePayable, setReceiveGeneratePayable] = useState(false);
+  const [receivePayableDueDate, setReceivePayableDueDate] = useState('');
+  const [receiveInstallments, setReceiveInstallments] = useState('1');
+  const [receiveInstallmentFrequency, setReceiveInstallmentFrequency] = useState('30');
+  const [receiveExpenseNature, setReceiveExpenseNature] = useState<'OPEX' | 'CAPEX'>('OPEX');
+  const [receivePaymentMethod, setReceivePaymentMethod] = useState('BOLETO');
+  const [receiveDigitableLine, setReceiveDigitableLine] = useState('');
+  const [receiveBarcode, setReceiveBarcode] = useState('');
+  const [receivePixCode, setReceivePixCode] = useState('');
+  const [receiveTaxAmount, setReceiveTaxAmount] = useState('');
   const [receiveInvoiceAttachment, setReceiveInvoiceAttachment] = useState<string | null>(null);
   const [receiveInvoiceAttachmentName, setReceiveInvoiceAttachmentName] = useState<string | null>(null);
   const [receiveNotes, setReceiveNotes] = useState('');
@@ -953,6 +984,52 @@ export const Purchasing: React.FC = () => {
     });
   };
 
+  useRecordDeepLink({
+    types: ['SUPPLIER'],
+    records: suppliers,
+    onOpen: (sup) => {
+      setActiveMenu('fornecedores');
+      handleEditSupplier(sup);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['PRODUCT'],
+    records: products,
+    onOpen: (prod) => {
+      setActiveMenu('produtos');
+      handleEditProduct(prod);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['PURCHASE_REQUEST'],
+    records: requests,
+    onOpen: (req) => {
+      setActiveMenu('solicitacoes');
+      handleEditRequest(req);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['PURCHASE_QUOTATION'],
+    records: quotations,
+    onOpen: (quot) => {
+      setActiveMenu('cotacoes');
+      void handleOpenComparisonModal(quot);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['PURCHASE_ORDER'],
+    records: orders,
+    onOpen: (order) => {
+      setActiveMenu('ordens');
+      setSelectedOrderForView(order);
+      setIsViewOrderModalOpen(true);
+    },
+  });
+
 
 
 
@@ -1233,6 +1310,20 @@ export const Purchasing: React.FC = () => {
   const handleOpenReceiveModal = (order: PurchaseOrder) => {
     setSelectedOrderForReceive(order);
     setReceiveInvoiceNumber('');
+    setReceiveInvoiceType('NFE');
+    setReceiveInvoiceSeries('');
+    setReceiveInvoiceAccessKey('');
+    setReceiveInvoiceIssueDate(new Date().toISOString().slice(0, 10));
+    setReceiveTaxAmount('');
+    setReceiveGeneratePayable(true);
+    setReceivePayableDueDate(order.expected_delivery_date || new Date().toISOString().slice(0, 10));
+    setReceiveInstallments('1');
+    setReceiveInstallmentFrequency('30');
+    setReceiveExpenseNature('OPEX');
+    setReceivePaymentMethod('BOLETO');
+    setReceiveDigitableLine('');
+    setReceiveBarcode('');
+    setReceivePixCode('');
     setReceiveInvoiceAttachment(null);
     setReceiveInvoiceAttachmentName(null);
     setReceiveNotes('');
@@ -1265,13 +1356,31 @@ export const Purchasing: React.FC = () => {
       setModalError("O número da Nota Fiscal / DANFE é obrigatório.");
       return;
     }
+    if (receiveGeneratePayable && !receivePayableDueDate) {
+      setModalError("Informe o primeiro vencimento para gerar a conta a pagar.");
+      return;
+    }
 
     setIsSaving(true);
     setModalError(null);
     try {
       await purchasingService.receivePurchaseOrder(selectedOrderForReceive.id, {
         invoice_number: receiveInvoiceNumber.trim(),
+        invoice_type: receiveInvoiceType,
+        invoice_series: receiveInvoiceSeries.trim() || undefined,
+        invoice_access_key: receiveInvoiceAccessKey.trim() || undefined,
+        invoice_issue_date: receiveInvoiceIssueDate || undefined,
+        invoice_tax_amount: receiveTaxAmount ? Number(receiveTaxAmount) : undefined,
         invoice_attachment: receiveInvoiceAttachment || undefined,
+        generate_payable: receiveGeneratePayable,
+        payable_due_date: receiveGeneratePayable ? receivePayableDueDate : undefined,
+        installments_count: Math.max(1, Number(receiveInstallments) || 1),
+        installment_frequency_days: Math.max(1, Number(receiveInstallmentFrequency) || 30),
+        expense_nature: receiveExpenseNature,
+        payment_method_expected: receivePaymentMethod,
+        digitable_line: receiveDigitableLine.trim() || undefined,
+        barcode: receiveBarcode.trim() || undefined,
+        pix_code: receivePixCode.trim() || undefined,
         notes: receiveNotes.trim() || undefined
       });
       await loadAllPurchasingData();
@@ -1295,17 +1404,18 @@ export const Purchasing: React.FC = () => {
     }
   };
 
-  const handleOpenQuickOrderModal = () => {
+  const handleOpenQuickOrderModal = (flow: 'request' | 'order') => {
     if (!suggestionsSummary) return;
     const selectedItems = suggestionsSummary.items.filter(it =>
       selectedSuggestionProductIds.includes(it.product_id)
     );
 
     if (selectedItems.length === 0) {
-      alert("Selecione ao menos um produto da sugestão de reposição para emitir o pedido.");
+      alert("Selecione ao menos um produto da sugestão de reposição para avançar.");
       return;
     }
 
+    setReplenishmentFlow(flow);
     setQuickOrderSupplierId(suppliers[0]?.id || '');
     setQuickOrderCostCenterId(costCenters[0]?.id || '');
     setQuickOrderPaymentTerms(suppliers[0]?.payment_terms || '30 DDL');
@@ -1313,7 +1423,11 @@ export const Purchasing: React.FC = () => {
     setQuickOrderFreightAmount('0');
     setQuickOrderDiscountAmount('0');
     setQuickOrderDeliveryDate('');
-    setQuickOrderNotes('Reposição ágil de estoque de giro (Assistente de Compras)');
+    setQuickOrderNotes(
+      flow === 'request'
+        ? 'Reposição formal de estoque de giro (Assistente de Compras)'
+        : 'Reposição ágil de estoque de giro (Assistente de Compras)'
+    );
 
     setQuickOrderItems(selectedItems.map(it => ({
       product_id: it.product_id,
@@ -1329,6 +1443,7 @@ export const Purchasing: React.FC = () => {
   };
 
   const handleEmitSingleItemQuickOrder = (item: any) => {
+    setReplenishmentFlow('order');
     setSelectedSuggestionProductIds([item.product_id]);
     setQuickOrderSupplierId(suppliers[0]?.id || '');
     setQuickOrderCostCenterId(costCenters[0]?.id || '');
@@ -1355,39 +1470,59 @@ export const Purchasing: React.FC = () => {
 
   const handleEmitQuickOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickOrderSupplierId) {
+    if (replenishmentFlow === 'order' && !quickOrderSupplierId) {
       setModalError("Selecione o fornecedor para onde a ordem será emitida.");
       return;
     }
     if (quickOrderItems.length === 0) {
-      setModalError("A ordem precisa conter pelo menos um item.");
+      setModalError("A reposição precisa conter pelo menos um item.");
       return;
     }
 
     try {
       setIsSaving(true);
-      await purchasingService.createQuickReplenishmentOrder({
-        supplier_id: quickOrderSupplierId,
-        cost_center_id: quickOrderCostCenterId || undefined,
-        payment_terms: quickOrderPaymentTerms || undefined,
-        freight_type: quickOrderFreightType || 'CIF',
-        freight_amount: parseFloat(quickOrderFreightAmount) || 0,
-        discount_amount: parseFloat(quickOrderDiscountAmount) || 0,
-        expected_delivery_date: quickOrderDeliveryDate ? new Date(quickOrderDeliveryDate).toISOString() : undefined,
-        notes: quickOrderNotes || undefined,
-        items: quickOrderItems.map(it => ({
-          product_id: it.product_id,
-          quantity: it.quantity,
-          unit_price: it.unit_price
-        }))
-      });
+      if (replenishmentFlow === 'request') {
+        await purchasingService.createFormalReplenishmentRequest({
+          justification: quickOrderNotes || 'Reposição formal de estoque',
+          cost_center_id: quickOrderCostCenterId || undefined,
+          required_date: quickOrderDeliveryDate
+            ? new Date(quickOrderDeliveryDate).toISOString()
+            : undefined,
+          items: quickOrderItems.map(it => ({
+            product_id: it.product_id,
+            quantity: it.quantity,
+            estimated_unit_price: it.unit_price
+          }))
+        });
+      } else {
+        await purchasingService.createQuickReplenishmentOrder({
+          supplier_id: quickOrderSupplierId,
+          cost_center_id: quickOrderCostCenterId || undefined,
+          payment_terms: quickOrderPaymentTerms || undefined,
+          freight_type: quickOrderFreightType || 'CIF',
+          freight_amount: parseFloat(quickOrderFreightAmount) || 0,
+          discount_amount: parseFloat(quickOrderDiscountAmount) || 0,
+          expected_delivery_date: quickOrderDeliveryDate ? new Date(quickOrderDeliveryDate).toISOString() : undefined,
+          notes: quickOrderNotes || undefined,
+          items: quickOrderItems.map(it => ({
+            product_id: it.product_id,
+            quantity: it.quantity,
+            unit_price: it.unit_price
+          }))
+        });
+      }
 
       await loadAllPurchasingData();
       setIsQuickOrderModalOpen(false);
       setSelectedSuggestionProductIds([]);
-      setActiveMenu('ordens');
+      setActiveMenu(replenishmentFlow === 'request' ? 'solicitacoes' : 'ordens');
     } catch (err: any) {
-      setModalError(formatApiError(err, "Erro ao emitir ordem de compra direta."));
+      setModalError(formatApiError(
+        err,
+        replenishmentFlow === 'request'
+          ? "Erro ao criar solicitação formal de reposição."
+          : "Erro ao emitir ordem de compra direta."
+      ));
     } finally {
       setIsSaving(false);
     }
@@ -1833,6 +1968,30 @@ export const Purchasing: React.FC = () => {
     if (valA > valB) return movSortDir === 'asc' ? 1 : -1;
     return 0;
   });
+  const suggestionPagination = useListPagination(filteredSuggestions);
+  const requestPagination = useListPagination(filteredRequests);
+  const quotationPagination = useListPagination(filteredQuotations);
+  const orderPagination = useListPagination(filteredOrders);
+  const supplierPagination = useListPagination(filteredSuppliers);
+  const productPagination = useListPagination(filteredProducts);
+  const categoryPagination = useListPagination(filteredCategories);
+  const costCenterPagination = useListPagination(filteredCostCenters);
+  const movementPagination = useListPagination(filteredMovements);
+
+  const runPurchasingBulkAction = async (
+    ids: string[],
+    label: string,
+    action: (id: string) => Promise<unknown>,
+    clearSelection: () => void,
+  ) => {
+    if (ids.length === 0 || !window.confirm(`${label} ${ids.length} registro(s) selecionado(s)?`)) return;
+    const results = await Promise.allSettled(ids.map(action));
+    const succeeded = results.filter(result => result.status === 'fulfilled').length;
+    const failed = results.length - succeeded;
+    clearSelection();
+    await loadAllPurchasingData(true);
+    window.alert(failed ? `${succeeded} registro(s) processado(s); ${failed} possuem vínculos ou restrições.` : `${succeeded} registro(s) processado(s).`);
+  };
 
   // Totalizadores
   const totalQuoteSum = quoteItems.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
@@ -1970,7 +2129,7 @@ export const Purchasing: React.FC = () => {
               {activeMenu === 'sugestoes' && (
                 <button
                   className="btn-primary highlight-btn"
-                  onClick={handleOpenQuickOrderModal}
+                  onClick={() => handleOpenQuickOrderModal('order')}
                   disabled={selectedSuggestionProductIds.length === 0}
                 >
                   <Zap size={16} />
@@ -2290,15 +2449,26 @@ export const Purchasing: React.FC = () => {
                     </button>
                   </div>
 
-                  <button
-                    type="button"
-                    className="btn-emit-quick-order"
-                    onClick={handleOpenQuickOrderModal}
-                    disabled={selectedSuggestionProductIds.length === 0}
-                  >
-                    <Zap size={16} />
-                    <span>⚡ Gerar Pedido com Itens Selecionados ({selectedSuggestionProductIds.length})</span>
-                  </button>
+                  <div className="replenishment-flow-actions">
+                    <button
+                      type="button"
+                      className="btn-formal-replenishment"
+                      onClick={() => handleOpenQuickOrderModal('request')}
+                      disabled={selectedSuggestionProductIds.length === 0}
+                    >
+                      <FileText size={16} />
+                      <span>Criar Solicitação Formal ({selectedSuggestionProductIds.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-emit-quick-order"
+                      onClick={() => handleOpenQuickOrderModal('order')}
+                      disabled={selectedSuggestionProductIds.length === 0}
+                    >
+                      <Zap size={16} />
+                      <span>Gerar Pedido Direto ({selectedSuggestionProductIds.length})</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Tabela de Sugestões de Reposição */}
@@ -2374,7 +2544,7 @@ export const Purchasing: React.FC = () => {
                           </td>
                         </tr>
                       ) : (
-                        filteredSuggestions.map(item => {
+                        suggestionPagination.pageItems.map(item => {
                           const isSelected = selectedSuggestionProductIds.includes(item.product_id);
                           const currentQty = customSuggestionQtys[item.product_id] !== undefined
                             ? customSuggestionQtys[item.product_id]
@@ -2396,7 +2566,9 @@ export const Purchasing: React.FC = () => {
                                     <Package size={15} />
                                   </div>
                                   <div>
-                                    <strong>{item.product_name}</strong>
+                                    <RecordLink type="PRODUCT" id={item.product_id}>
+                                      <strong>{item.product_name}</strong>
+                                    </RecordLink>
                                     <span className="sub-label">SKU: {item.sku}</span>
                                     {item.storage_location && (
                                       <span className="storage-sub-label">📍 {item.storage_location}</span>
@@ -2464,6 +2636,7 @@ export const Purchasing: React.FC = () => {
                       )}
                     </tbody>
                   </table>
+                  <ListPagination {...suggestionPagination} onPageChange={suggestionPagination.setPage} onPageSizeChange={suggestionPagination.setPageSize} />
                 </div>
               </div>
             )}
@@ -2471,9 +2644,11 @@ export const Purchasing: React.FC = () => {
             {/* 1. SOLICITAÇÕES DE COMPRA */}
             {activeMenu === 'solicitacoes' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={requestSelection.selectedCount} resourceName={{ singular: 'solicitação', plural: 'solicitações' }} onClear={requestSelection.clearSelection} onDelete={() => void runPurchasingBulkAction(requestSelection.selectedIdList, 'Excluir', purchasingService.deletePurchaseRequest, requestSelection.clearSelection)} deleteLabel="Excluir selecionadas" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar solicitações desta página" checked={requestSelection.isAllSelected(requestPagination.pageItems)} onChange={() => requestSelection.toggleSelectAll(requestPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleReqSort('number')}>
                         <div className="th-content">
                           <span>Número</span>
@@ -2509,10 +2684,11 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredRequests.length === 0 ? (
-                      <tr><td colSpan={6} className="state-empty">Nenhuma solicitação de compra encontrada com os filtros selecionados.</td></tr>
+                      <tr><td colSpan={7} className="state-empty">Nenhuma solicitação de compra encontrada com os filtros selecionados.</td></tr>
                     ) : (
-                      filteredRequests.map(req => (
-                        <tr key={req.id}>
+                      requestPagination.pageItems.map(req => (
+                        <tr key={req.id} className={`${(req.status === 'draft' || req.status === 'pending_approval') ? 'ui-record-row' : ''} ${requestSelection.isSelected(req.id) ? 'ui-record-row--selected' : ''}`} role={(req.status === 'draft' || req.status === 'pending_approval') ? 'button' : undefined} tabIndex={(req.status === 'draft' || req.status === 'pending_approval') ? 0 : undefined} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input') && (req.status === 'draft' || req.status === 'pending_approval')) handleEditRequest(req); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && (req.status === 'draft' || req.status === 'pending_approval')) { event.preventDefault(); handleEditRequest(req); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar solicitação ${req.request_number}`} checked={requestSelection.isSelected(req.id)} onClick={(event) => event.stopPropagation()} onChange={() => requestSelection.toggleSelect(req.id)} /></td>
                           <td>
                             <div className="cell-with-icon">
                               <div className="icon-badge brand-bg"><FileText size={15} /></div>
@@ -2555,16 +2731,6 @@ export const Purchasing: React.FC = () => {
                                   <span>Cancelar</span>
                                 </button>
                               )}
-                              {(req.status === 'draft' || req.status === 'pending_approval') && (
-                                <button
-                                  className="btn-action-icon edit"
-                                  title="Editar Solicitação"
-                                  onClick={() => handleEditRequest(req)}
-                                >
-                                  <Edit size={14} />
-                                </button>
-                              )}
-
                               <button
                                 className="btn-action-icon delete"
                                 title="Excluir Solicitação Permanentemente"
@@ -2580,15 +2746,18 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...requestPagination} onPageChange={requestPagination.setPage} onPageSizeChange={requestPagination.setPageSize} />
               </div>
             )}
 
             {/* 2. COTAÇÕES (RFQ) & MAPA COMPARATIVO */}
             {activeMenu === 'cotacoes' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={quotationSelection.selectedCount} resourceName={{ singular: 'cotação', plural: 'cotações' }} onClear={quotationSelection.clearSelection} onDelete={() => void runPurchasingBulkAction(quotationSelection.selectedIdList, 'Excluir', purchasingService.deleteQuotation, quotationSelection.clearSelection)} deleteLabel="Excluir selecionadas" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar cotações desta página" checked={quotationSelection.isAllSelected(quotationPagination.pageItems)} onChange={() => quotationSelection.toggleSelectAll(quotationPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleQuotSort('number')}>
                         <div className="th-content">
                           <span>Cotação</span>
@@ -2624,10 +2793,11 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredQuotations.length === 0 ? (
-                      <tr><td colSpan={6} className="state-empty">Nenhum processo de cotação encontrado com os filtros selecionados.</td></tr>
+                      <tr><td colSpan={7} className="state-empty">Nenhum processo de cotação encontrado com os filtros selecionados.</td></tr>
                     ) : (
-                      filteredQuotations.map(quot => (
-                        <tr key={quot.id}>
+                      quotationPagination.pageItems.map(quot => (
+                        <tr key={quot.id} className={quotationSelection.isSelected(quot.id) ? 'ui-record-row--selected' : ''}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar cotação ${quot.quotation_number}`} checked={quotationSelection.isSelected(quot.id)} onChange={() => quotationSelection.toggleSelect(quot.id)} /></td>
                           <td>
                             <div className="cell-with-icon">
                               <div className="icon-badge orange-bg"><BarChart2 size={15} /></div>
@@ -2638,7 +2808,13 @@ export const Purchasing: React.FC = () => {
                             </div>
                           </td>
                           <td>
-                            <span className="code-tag">{quot.purchase_request?.request_number || '-'}</span>
+                            {quot.purchase_request_id ? (
+                              <RecordLink type="PURCHASE_REQUEST" id={quot.purchase_request_id}>
+                                <span className="code-tag">{quot.purchase_request?.request_number || `PR #${quot.purchase_request_id.slice(0, 8)}`}</span>
+                              </RecordLink>
+                            ) : (
+                              <span className="code-tag">{quot.purchase_request?.request_number || '-'}</span>
+                            )}
                           </td>
                           <td>
                             <strong>{quot.quotes.length} {quot.quotes.length === 1 ? 'proposta' : 'propostas'}</strong>
@@ -2706,15 +2882,18 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...quotationPagination} onPageChange={quotationPagination.setPage} onPageSizeChange={quotationPagination.setPageSize} />
               </div>
             )}
 
             {/* 3. ORDENS DE COMPRA (PO) */}
             {activeMenu === 'ordens' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={orderSelection.selectedCount} resourceName={{ singular: 'ordem', plural: 'ordens' }} onClear={orderSelection.clearSelection} onDelete={() => void runPurchasingBulkAction(orderSelection.selectedIdList, 'Excluir', purchasingService.deletePurchaseOrder, orderSelection.clearSelection)} deleteLabel="Excluir selecionadas" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar ordens desta página" checked={orderSelection.isAllSelected(orderPagination.pageItems)} onChange={() => orderSelection.toggleSelectAll(orderPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleOrderSort('number')}>
                         <div className="th-content">
                           <span>Ordem de Compra</span>
@@ -2756,25 +2935,34 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredOrders.length === 0 ? (
-                      <tr><td colSpan={7} className="state-empty">Nenhuma ordem de compra encontrada com os filtros selecionados.</td></tr>
+                      <tr><td colSpan={8} className="state-empty">Nenhuma ordem de compra encontrada com os filtros selecionados.</td></tr>
                     ) : (
-                      filteredOrders.map(ord => (
-                        <tr key={ord.id}>
+                      orderPagination.pageItems.map(ord => (
+                        <tr key={ord.id} className={`ui-record-row ${orderSelection.isSelected(ord.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={() => { setSelectedOrderForView(ord); setIsViewOrderModalOpen(true); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOrderForView(ord); setIsViewOrderModalOpen(true); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar ordem ${ord.order_number}`} checked={orderSelection.isSelected(ord.id)} onClick={(event) => event.stopPropagation()} onChange={() => orderSelection.toggleSelect(ord.id)} /></td>
                           <td>
                             <div className="cell-with-icon">
                               <div className="icon-badge blue-bg"><Truck size={15} /></div>
                               <div>
-                                <strong>{ord.order_number}</strong>
+                                <RecordLink type="PURCHASE_ORDER" id={ord.id}><strong>{ord.order_number}</strong></RecordLink>
                                 <span className="sub-label">{new Date(ord.created_at).toLocaleDateString('pt-BR')}</span>
                               </div>
                             </div>
                           </td>
                           <td>
-                            <strong>{ord.supplier?.name || '-'}</strong>
+                            <RecordLink type="SUPPLIER" id={ord.supplier_id}>
+                              <strong>{ord.supplier?.name || '-'}</strong>
+                            </RecordLink>
                             <span className="sub-label">{ord.supplier?.cnpj_cpf || ''}</span>
                           </td>
                           <td>
-                            <span className="code-tag">{ord.purchase_request?.request_number || 'Direta'}</span>
+                            {ord.purchase_request_id ? (
+                              <RecordLink type="PURCHASE_REQUEST" id={ord.purchase_request_id}>
+                                <span className="code-tag">{ord.purchase_request?.request_number || `PR #${ord.purchase_request_id.slice(0, 8)}`}</span>
+                              </RecordLink>
+                            ) : (
+                              <span className="code-tag">{ord.purchase_request?.request_number || 'Direta'}</span>
+                            )}
                           </td>
                           <td><strong>{formatCurrency(ord.total_amount)}</strong></td>
                           <td>
@@ -2808,7 +2996,7 @@ export const Purchasing: React.FC = () => {
                             )}
                           </td>
                           <td>
-                            <div className="row-actions">
+                            <div className="row-actions" onClick={(event) => event.stopPropagation()}>
                               {ord.status === 'issued' && (
                                 <>
                                   <button className="btn-receive-action" onClick={() => handleOpenReceiveModal(ord)}>
@@ -2846,15 +3034,18 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...orderPagination} onPageChange={orderPagination.setPage} onPageSizeChange={orderPagination.setPageSize} />
               </div>
             )}
 
             {/* 4. FORNECEDORES HOMOLOGADOS */}
             {activeMenu === 'fornecedores' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={supplierSelection.selectedCount} resourceName={{ singular: 'fornecedor', plural: 'fornecedores' }} onClear={supplierSelection.clearSelection} onDelete={() => void runPurchasingBulkAction(supplierSelection.selectedIdList, 'Excluir', purchasingService.deleteSupplier, supplierSelection.clearSelection)} deleteLabel="Excluir selecionados" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar fornecedores desta página" checked={supplierSelection.isAllSelected(supplierPagination.pageItems)} onChange={() => supplierSelection.toggleSelectAll(supplierPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleSupSort('name')}>
                         <div className="th-content">
                           <span>Fornecedor / Razão Social</span>
@@ -2886,13 +3077,14 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredSuppliers.length === 0 ? (
-                      <tr><td colSpan={7} className="state-empty">Nenhum fornecedor encontrado com os filtros selecionados.</td></tr>
+                      <tr><td colSpan={8} className="state-empty">Nenhum fornecedor encontrado com os filtros selecionados.</td></tr>
                     ) : (
-                      filteredSuppliers.map(sup => {
+                      supplierPagination.pageItems.map(sup => {
                         const segmentList = sup.segments ? sup.segments.split(',').map(s => s.trim()).filter(Boolean) : [];
 
                         return (
-                          <tr key={sup.id}>
+                          <tr key={sup.id} className={`ui-record-row ${supplierSelection.isSelected(sup.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input')) handleEditSupplier(sup); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleEditSupplier(sup); } }}>
+                            <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar fornecedor ${sup.name}`} checked={supplierSelection.isSelected(sup.id)} onClick={(event) => event.stopPropagation()} onChange={() => supplierSelection.toggleSelect(sup.id)} /></td>
                             <td>
                               <div className="cell-with-icon">
                                 <div className="icon-badge orange-bg"><Users size={15} /></div>
@@ -2941,13 +3133,6 @@ export const Purchasing: React.FC = () => {
                             <td style={{ textAlign: 'right' }}>
                               <div className="row-actions">
                                 <button
-                                  className="btn-action-icon edit"
-                                  title="Editar Fornecedor"
-                                  onClick={() => handleEditSupplier(sup)}
-                                >
-                                  <Edit size={14} />
-                                </button>
-                                <button
                                   className="btn-action-icon delete"
                                   title="Excluir Fornecedor"
                                   onClick={() => handleDeleteSupplier(sup)}
@@ -2962,15 +3147,18 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...supplierPagination} onPageChange={supplierPagination.setPage} onPageSizeChange={supplierPagination.setPageSize} />
               </div>
             )}
 
             {/* 5. PRODUTOS & INSUMOS */}
             {activeMenu === 'produtos' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={productSelection.selectedCount} resourceName={{ singular: 'produto', plural: 'produtos' }} onClear={productSelection.clearSelection} onDelete={() => void runPurchasingBulkAction(productSelection.selectedIdList, 'Excluir', inventoryService.deleteProduct, productSelection.clearSelection)} deleteLabel="Excluir selecionados" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar produtos desta página" checked={productSelection.isAllSelected(productPagination.pageItems)} onChange={() => productSelection.toggleSelectAll(productPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleProdSort('name')}>
                         <div className="th-content">
                           <span>SKU / Produto</span>
@@ -3008,10 +3196,11 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredProducts.length === 0 ? (
-                      <tr><td colSpan={8} className="state-empty">Nenhum produto cadastrado ou correspondente aos filtros.</td></tr>
+                      <tr><td colSpan={9} className="state-empty">Nenhum produto cadastrado ou correspondente aos filtros.</td></tr>
                     ) : (
-                      filteredProducts.map(prod => (
-                        <tr key={prod.id}>
+                      productPagination.pageItems.map(prod => (
+                        <tr key={prod.id} className={`ui-record-row ${productSelection.isSelected(prod.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input')) handleEditProduct(prod); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleEditProduct(prod); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar produto ${prod.name}`} checked={productSelection.isSelected(prod.id)} onClick={(event) => event.stopPropagation()} onChange={() => productSelection.toggleSelect(prod.id)} /></td>
                           <td>
                             <div className="cell-with-icon">
                               <div className="icon-badge brand-bg"><Package size={15} /></div>
@@ -3050,13 +3239,6 @@ export const Purchasing: React.FC = () => {
                           <td style={{ textAlign: 'right' }}>
                             <div className="row-actions">
                               <button
-                                className="btn-action-icon edit"
-                                title="Editar Produto / Insumo"
-                                onClick={() => handleEditProduct(prod)}
-                              >
-                                <Edit size={14} />
-                              </button>
-                              <button
                                 className="btn-action-icon delete"
                                 title="Excluir Produto / Insumo"
                                 onClick={() => handleDeleteProduct(prod)}
@@ -3070,15 +3252,18 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...productPagination} onPageChange={productPagination.setPage} onPageSizeChange={productPagination.setPageSize} />
               </div>
             )}
 
             {/* 6. CATEGORIAS DE PRODUTOS */}
             {activeMenu === 'categorias' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={categorySelection.selectedCount} resourceName={{ singular: 'categoria', plural: 'categorias' }} onClear={categorySelection.clearSelection} onDelete={() => void runPurchasingBulkAction(categorySelection.selectedIdList, 'Excluir', inventoryService.deleteCategory, categorySelection.clearSelection)} deleteLabel="Excluir selecionadas" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar categorias desta página" checked={categorySelection.isAllSelected(categoryPagination.pageItems)} onChange={() => categorySelection.toggleSelectAll(categoryPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleCatSort('code')}>
                         <div className="th-content">
                           <span>Código / Prefixo SKU</span>
@@ -3099,13 +3284,14 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredCategories.length === 0 ? (
-                      <tr><td colSpan={6} className="state-empty">Nenhuma categoria encontrada com os filtros selecionados.</td></tr>
+                      <tr><td colSpan={7} className="state-empty">Nenhuma categoria encontrada com os filtros selecionados.</td></tr>
                     ) : (
-                      filteredCategories.map(cat => {
+                      categoryPagination.pageItems.map(cat => {
                         const linkedCount = products.filter(p => p.category_id === cat.id).length;
 
                         return (
-                          <tr key={cat.id}>
+                          <tr key={cat.id} className={`ui-record-row ${categorySelection.isSelected(cat.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input')) handleEditCategory(cat); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleEditCategory(cat); } }}>
+                            <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar categoria ${cat.name}`} checked={categorySelection.isSelected(cat.id)} onClick={(event) => event.stopPropagation()} onChange={() => categorySelection.toggleSelect(cat.id)} /></td>
                             <td>
                               <span className="code-tag highlight">{cat.code || 'GEN'}</span>
                             </td>
@@ -3129,13 +3315,6 @@ export const Purchasing: React.FC = () => {
                             <td style={{ textAlign: 'right' }}>
                               <div className="row-actions">
                                 <button
-                                  className="btn-action-icon edit"
-                                  title="Editar Categoria"
-                                  onClick={() => handleEditCategory(cat)}
-                                >
-                                  <Edit size={14} />
-                                </button>
-                                <button
                                   className="btn-action-icon delete"
                                   title="Excluir Categoria"
                                   onClick={() => handleDeleteCategory(cat)}
@@ -3150,15 +3329,18 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...categoryPagination} onPageChange={categoryPagination.setPage} onPageSizeChange={categoryPagination.setPageSize} />
               </div>
             )}
 
             {/* 6. CENTROS DE CUSTO */}
             {activeMenu === 'centros-custo' && (
               <div className="table-responsive">
+                <BulkActionsBar selectedCount={costCenterSelection.selectedCount} resourceName={{ singular: 'centro', plural: 'centros' }} onClear={costCenterSelection.clearSelection} onDelete={() => void runPurchasingBulkAction(costCenterSelection.selectedIdList, 'Excluir', purchasingService.deleteCostCenter, costCenterSelection.clearSelection)} deleteLabel="Excluir selecionados" />
                 <table className="enterprise-table">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar centros de custo desta página" checked={costCenterSelection.isAllSelected(costCenterPagination.pageItems)} onChange={() => costCenterSelection.toggleSelectAll(costCenterPagination.pageItems)} /></th>
                       <th className="th-sortable" onClick={() => handleCostSort('code')}>
                         <div className="th-content">
                           <span>Código</span>
@@ -3178,23 +3360,17 @@ export const Purchasing: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredCostCenters.length === 0 ? (
-                      <tr><td colSpan={5} className="state-empty">Nenhum centro de custo cadastrado ou correspondente aos filtros.</td></tr>
+                      <tr><td colSpan={6} className="state-empty">Nenhum centro de custo cadastrado ou correspondente aos filtros.</td></tr>
                     ) : (
-                      filteredCostCenters.map(cc => (
-                        <tr key={cc.id}>
+                      costCenterPagination.pageItems.map(cc => (
+                        <tr key={cc.id} className={`ui-record-row ${costCenterSelection.isSelected(cc.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input')) handleEditCostCenter(cc); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleEditCostCenter(cc); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar centro de custo ${cc.name}`} checked={costCenterSelection.isSelected(cc.id)} onClick={(event) => event.stopPropagation()} onChange={() => costCenterSelection.toggleSelect(cc.id)} /></td>
                           <td><span className="code-tag">{cc.code}</span></td>
                           <td><strong>{cc.name}</strong></td>
                           <td>{cc.description || '-'}</td>
                           <td><span className="badge-pill active">Ativo</span></td>
                           <td style={{ textAlign: 'right' }}>
                             <div className="row-actions">
-                              <button
-                                className="btn-action-icon edit"
-                                title="Editar Centro de Custo"
-                                onClick={() => handleEditCostCenter(cc)}
-                              >
-                                <Edit size={14} />
-                              </button>
                               <button
                                 className="btn-action-icon delete"
                                 title="Excluir Centro de Custo"
@@ -3209,6 +3385,7 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...costCenterPagination} onPageChange={costCenterPagination.setPage} onPageSizeChange={costCenterPagination.setPageSize} />
               </div>
             )}
 
@@ -3262,7 +3439,7 @@ export const Purchasing: React.FC = () => {
                     {filteredMovements.length === 0 ? (
                       <tr><td colSpan={8} className="state-empty">Nenhuma movimentação de estoque registrada. Ao receber ordens de compra ou realizar ajustes, o histórico aparecerá aqui.</td></tr>
                     ) : (
-                      filteredMovements.map(mov => {
+                      movementPagination.pageItems.map(mov => {
                         const isPositive = mov.movement_type.startsWith('in_');
 
                         return (
@@ -3277,7 +3454,9 @@ export const Purchasing: React.FC = () => {
                               <div className="cell-with-icon">
                                 <div className="icon-badge brand-bg"><Package size={14} /></div>
                                 <div>
-                                  <strong>{mov.product_name || mov.product?.name || 'Produto'}</strong>
+                                  <RecordLink type="PRODUCT" id={mov.product_id}>
+                                    <strong>{mov.product_name || mov.product?.name || 'Produto'}</strong>
+                                  </RecordLink>
                                   <span className="sub-label">SKU: {mov.sku || mov.product?.sku || '-'}</span>
                                 </div>
                               </div>
@@ -3332,6 +3511,7 @@ export const Purchasing: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...movementPagination} onPageChange={movementPagination.setPage} onPageSizeChange={movementPagination.setPageSize} />
               </div>
             )}
           </div>
@@ -4394,7 +4574,7 @@ export const Purchasing: React.FC = () => {
           isOpen={isReceiveModalOpen}
           onClose={() => setIsReceiveModalOpen(false)}
           title={`Recebimento no Almoxarifado • Ordem ${selectedOrderForReceive.order_number}`}
-          size="md"
+          size="lg"
         >
           <form onSubmit={handleProcessReceive} className="wizard-form">
             {modalError && <div className="modal-alert-error"><AlertCircle size={16} /> {modalError}</div>}
@@ -4410,15 +4590,44 @@ export const Purchasing: React.FC = () => {
               </div>
             </div>
 
-            <div className="form-group">
-              <label>Número da Nota Fiscal / DANFE *</label>
-              <input
-                type="text"
-                value={receiveInvoiceNumber}
-                onChange={e => setReceiveInvoiceNumber(e.target.value)}
-                placeholder="Ex: NF-e 001.284.912"
-                required
-              />
+            <div className="form-section-title">
+              <FileText size={15} /> Identificação Fiscal
+            </div>
+
+            <div className="receive-fields-grid">
+              <div className="form-group">
+                <label>Tipo *</label>
+                <select value={receiveInvoiceType} onChange={e => setReceiveInvoiceType(e.target.value as typeof receiveInvoiceType)}>
+                  <option value="NFE">NF-e</option>
+                  <option value="NFSE">NFS-e</option>
+                  <option value="NFCE">NFC-e</option>
+                  <option value="CTE">CT-e</option>
+                  <option value="OUTRO">Outro</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Número da Nota Fiscal / DANFE *</label>
+                <input type="text" value={receiveInvoiceNumber} onChange={e => setReceiveInvoiceNumber(e.target.value)} placeholder="Ex: 001284912" required />
+              </div>
+              <div className="form-group">
+                <label>Série</label>
+                <input value={receiveInvoiceSeries} onChange={e => setReceiveInvoiceSeries(e.target.value)} placeholder="Ex: 1" />
+              </div>
+              <div className="form-group">
+                <label>Data de Emissão *</label>
+                <input type="date" value={receiveInvoiceIssueDate} onChange={e => setReceiveInvoiceIssueDate(e.target.value)} required />
+              </div>
+            </div>
+
+            <div className="receive-fields-grid" style={{ gridTemplateColumns: '2fr 1fr' }}>
+              <div className="form-group">
+                <label>Chave de Acesso da NF-e (44 dígitos)</label>
+                <input value={receiveInvoiceAccessKey} onChange={e => setReceiveInvoiceAccessKey(e.target.value)} placeholder="Ex: 35260912345678000190550010009876541234567890" maxLength={100} />
+              </div>
+              <div className="form-group">
+                <label>Total de Impostos (R$)</label>
+                <input type="number" step="0.01" min="0" value={receiveTaxAmount} onChange={e => setReceiveTaxAmount(e.target.value)} placeholder="0.00" />
+              </div>
             </div>
 
             <div className="form-group">
@@ -4451,6 +4660,90 @@ export const Purchasing: React.FC = () => {
                 </label>
               )}
             </div>
+
+            <div className="form-section-title">
+              <DollarSign size={15} /> Fatura Pendente & Título a Pagar
+            </div>
+
+            <div className="form-checkbox-row" style={{ gridTemplateColumns: '1fr' }}>
+              <label className="form-checkbox-label">
+                <input type="checkbox" checked={receiveGeneratePayable} onChange={e => setReceiveGeneratePayable(e.target.checked)} />
+                <div className="checkbox-text">
+                  <strong>Gerar fatura pendente de pagamento ao fornecedor</strong>
+                  <small>Cria a obrigação financeira no Contas a Pagar vinculada à Ordem de Compra, NF-e e Entrada em Estoque.</small>
+                </div>
+              </label>
+            </div>
+
+            {receiveGeneratePayable && (
+              <>
+                <div className="receive-fields-grid">
+                  <div className="form-group">
+                    <label>Primeiro Vencimento *</label>
+                    <input type="date" value={receivePayableDueDate} onChange={e => setReceivePayableDueDate(e.target.value)} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Parcelas *</label>
+                    <input type="number" min="1" max="48" value={receiveInstallments} onChange={e => setReceiveInstallments(e.target.value)} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Intervalo (dias)</label>
+                    <input type="number" min="1" max="365" value={receiveInstallmentFrequency} onChange={e => setReceiveInstallmentFrequency(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label>Natureza</label>
+                    <select value={receiveExpenseNature} onChange={e => setReceiveExpenseNature(e.target.value as 'OPEX' | 'CAPEX')}>
+                      <option value="OPEX">OPEX (Operacional)</option>
+                      <option value="CAPEX">CAPEX (Investimento)</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Forma Prevista</label>
+                    <select value={receivePaymentMethod} onChange={e => setReceivePaymentMethod(e.target.value)}>
+                      <option value="BOLETO">Boleto Bancário</option>
+                      <option value="PIX">PIX</option>
+                      <option value="TRANSFERENCIA">Transferência / TED</option>
+                      <option value="CARTAO">Cartão Corporativo</option>
+                    </select>
+                  </div>
+                </div>
+
+                {receivePaymentMethod === 'BOLETO' && (
+                  <div className="receive-fields-grid" style={{ gridTemplateColumns: '1.2fr 1fr' }}>
+                    <div className="form-group">
+                      <label>Linha Digitável do Boleto (47/48 dígitos)</label>
+                      <input
+                        type="text"
+                        value={receiveDigitableLine}
+                        onChange={e => setReceiveDigitableLine(e.target.value)}
+                        placeholder="Ex: 34191.79001 01043.510047 91020.150008 5 99990000150000"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Código de Barras</label>
+                      <input
+                        type="text"
+                        value={receiveBarcode}
+                        onChange={e => setReceiveBarcode(e.target.value)}
+                        placeholder="Ex: 34195999900001500001790001043510049102015000"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {receivePaymentMethod === 'PIX' && (
+                  <div className="form-group">
+                    <label>Chave PIX ou Código Copia e Cola</label>
+                    <input
+                      type="text"
+                      value={receivePixCode}
+                      onChange={e => setReceivePixCode(e.target.value)}
+                      placeholder="Ex: 12.345.678/0001-90 ou payload pix..."
+                    />
+                  </div>
+                )}
+              </>
+            )}
 
             <div className="form-group">
               <label>Notas de Conferência Física</label>
@@ -4565,9 +4858,9 @@ export const Purchasing: React.FC = () => {
           isOpen={isQuickOrderModalOpen}
           onClose={() => setIsQuickOrderModalOpen(false)}
           title={
-            selectedSuggestionProductIds.length > 0
-              ? "⚡ Emissão Ágil de Ordem de Compra • Reposição de Estoque"
-              : "📄 Emissão Direta de Ordem de Compra Oficial (PO)"
+            replenishmentFlow === 'request'
+              ? "Solicitação Formal de Compra • Reposição de Estoque"
+              : "Emissão Ágil de Ordem de Compra • Reposição de Estoque"
           }
           size="lg"
         >
@@ -4579,6 +4872,7 @@ export const Purchasing: React.FC = () => {
               </div>
             )}
 
+            {replenishmentFlow === 'order' ? (<>
             <div className="form-section-divider">
               <Truck size={14} />
               <span>1. Fornecedor & Condições Comerciais</span>
@@ -4672,10 +4966,38 @@ export const Purchasing: React.FC = () => {
                 />
               </div>
             </div>
+            </>) : (<>
+              <div className="form-section-divider">
+                <FileText size={14} />
+                <span>1. Dados da Solicitação de Compra</span>
+              </div>
+              <div className="form-row">
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Centro de Custo / Orçamento</label>
+                  <select
+                    value={quickOrderCostCenterId}
+                    onChange={e => setQuickOrderCostCenterId(e.target.value)}
+                  >
+                    <option value="">Sem Centro de Custo</option>
+                    {costCenters.map(cc => (
+                      <option key={cc.id} value={cc.id}>[{cc.code}] {cc.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Data Necessária</label>
+                  <input
+                    type="date"
+                    value={quickOrderDeliveryDate}
+                    onChange={e => setQuickOrderDeliveryDate(e.target.value)}
+                  />
+                </div>
+              </div>
+            </>)}
 
             <div className="form-section-divider">
               <Package size={14} />
-              <span>2. Itens do Pedido ({quickOrderItems.length} produtos selecionados)</span>
+              <span>2. Itens da {replenishmentFlow === 'request' ? 'Solicitação' : 'Ordem'} ({quickOrderItems.length} produtos selecionados)</span>
             </div>
 
             <div className="quick-order-items-table-wrapper">
@@ -4793,23 +5115,27 @@ export const Purchasing: React.FC = () => {
                 <span>Subtotal dos Produtos:</span>
                 <strong>{formatCurrency(quickOrderItems.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0))}</strong>
               </div>
-              <div className="summary-line">
-                <span>Frete (+):</span>
-                <span>{formatCurrency(parseFloat(quickOrderFreightAmount) || 0)}</span>
-              </div>
-              <div className="summary-line">
-                <span>Desconto (-):</span>
-                <span>{formatCurrency(parseFloat(quickOrderDiscountAmount) || 0)}</span>
-              </div>
+              {replenishmentFlow === 'order' && (<>
+                <div className="summary-line">
+                  <span>Frete (+):</span>
+                  <span>{formatCurrency(parseFloat(quickOrderFreightAmount) || 0)}</span>
+                </div>
+                <div className="summary-line">
+                  <span>Desconto (-):</span>
+                  <span>{formatCurrency(parseFloat(quickOrderDiscountAmount) || 0)}</span>
+                </div>
+              </>)}
               <div className="summary-line total-net">
-                <span>Total Líquido da Ordem:</span>
+                <span>{replenishmentFlow === 'request' ? 'Total Estimado da Solicitação:' : 'Total Líquido da Ordem:'}</span>
                 <span className="final-value">
                   {formatCurrency(
                     Math.max(
                       0,
                       quickOrderItems.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0) +
-                      (parseFloat(quickOrderFreightAmount) || 0) -
-                      (parseFloat(quickOrderDiscountAmount) || 0)
+                      (replenishmentFlow === 'order'
+                        ? (parseFloat(quickOrderFreightAmount) || 0) -
+                          (parseFloat(quickOrderDiscountAmount) || 0)
+                        : 0)
                     )
                   )}
                 </span>
@@ -4817,11 +5143,14 @@ export const Purchasing: React.FC = () => {
             </div>
 
             <div className="form-group">
-              <label>Observações / Instruções de Entrega</label>
+              <label>{replenishmentFlow === 'request' ? 'Justificativa da Solicitação *' : 'Observações / Instruções de Entrega'}</label>
               <textarea
                 value={quickOrderNotes}
                 onChange={e => setQuickOrderNotes(e.target.value)}
-                placeholder="Ex: Entregar em horário comercial no almoxarifado central..."
+                placeholder={replenishmentFlow === 'request'
+                  ? 'Explique a necessidade da reposição...'
+                  : 'Ex: Entregar em horário comercial no almoxarifado central...'}
+                required={replenishmentFlow === 'request'}
                 rows={2}
               />
             </div>
@@ -4829,8 +5158,12 @@ export const Purchasing: React.FC = () => {
             <div className="modal-actions">
               <button type="button" className="btn-cancel" onClick={() => setIsQuickOrderModalOpen(false)}>Cancelar</button>
               <button type="submit" className="btn-save" disabled={isSaving || quickOrderItems.length === 0}>
-                {isSaving ? <Loader2 size={16} className="spinning" /> : <Zap size={16} />}
-                <span>Emitir Ordem de Compra Oficial (PO)</span>
+                {isSaving
+                  ? <Loader2 size={16} className="spinning" />
+                  : replenishmentFlow === 'request' ? <FileText size={16} /> : <Zap size={16} />}
+                <span>{replenishmentFlow === 'request'
+                  ? 'Criar Solicitação e Encaminhar para Aprovação'
+                  : 'Emitir Ordem de Compra Oficial (PO)'}</span>
               </button>
             </div>
           </form>
@@ -4858,5 +5191,3 @@ export const Purchasing: React.FC = () => {
     </div>
   );
 };
-
-

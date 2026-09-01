@@ -73,6 +73,7 @@ class LeadUpdate(BaseModel):
 class LeadResponse(LeadBase):
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
 
@@ -100,6 +101,7 @@ class OpportunityBase(BaseModel):
     probability_percent: int = Field(default=50, ge=0, le=100)
     expected_closing_date: date | None = None
     stage: str = "PROSPECTING"  # PROSPECTING, QUALIFICATION, PROPOSAL, NEGOTIATION, WON, LOST
+    priority: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
     loss_reason: str | None = None
     lead_id: uuid.UUID | None = None
     assigned_to_id: uuid.UUID | None = None
@@ -118,6 +120,7 @@ class OpportunityUpdate(BaseModel):
     probability_percent: int | None = None
     expected_closing_date: date | None = None
     stage: str | None = None
+    priority: Literal["LOW", "MEDIUM", "HIGH"] | None = None
     loss_reason: str | None = None
     assigned_to_id: uuid.UUID | None = None
 
@@ -125,6 +128,7 @@ class OpportunityUpdate(BaseModel):
 class OpportunityResponse(OpportunityBase):
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
     lead: LeadResponse | None = None

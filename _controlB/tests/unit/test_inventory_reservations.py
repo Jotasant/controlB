@@ -20,11 +20,21 @@ from controlb.modules.documents.models import (
 from controlb.modules.identity.models import Organization
 from controlb.modules.inventory import service as inventory_service
 from controlb.modules.inventory.models import (
+    InventoryBalance,
+    InventoryTransfer,
     Product,
     StockMovement,
     StockReservation,
     StockReservationItem,
 )
+from controlb.modules.inventory.schemas import (
+    InventoryLocationCreate,
+    InventoryTransferCreate,
+    InventoryTransferItemCreate,
+)
+from controlb.modules.purchasing import schemas as purchasing_schemas
+from controlb.modules.purchasing import service as purchasing_service
+from controlb.modules.purchasing.models import InventoryReplenishment, Supplier
 from controlb.modules.sales import schemas as sales_schemas
 from controlb.modules.sales import service as sales_service
 from controlb.modules.sales.models import (
@@ -85,6 +95,312 @@ def _product(
     db.add(product)
     db.commit()
     return product
+
+
+def test_transfer_preserves_global_stock_and_moves_local_balances(db: Session):
+    organization = _organization(db, "transfer")
+    product = _product(db, organization, stock="10")
+    actor = _actor(organization)
+    source = inventory_service.ensure_default_location(db, organization.id)
+    inventory_service.sync_default_location_balance(db, organization.id, product)
+    destination = inventory_service.create_inventory_location(
+        db,
+        organization.id,
+        InventoryLocationCreate(code="LOJA", name="Loja"),
+    )
+    db.commit()
+
+    transfer = inventory_service.create_inventory_transfer(
+        db,
+        organization.id,
+        actor,
+        InventoryTransferCreate(
+            source_location_id=source.id,
+            destination_location_id=destination.id,
+            items=[
+                InventoryTransferItemCreate(
+                    product_id=product.id, quantity=Decimal("4")
+                )
+            ],
+            notes="Abastecimento da loja",
+        ),
+    )
+    db.commit()
+
+    db.refresh(product)
+    balances = list(
+        db.scalars(
+            select(InventoryBalance).where(
+                InventoryBalance.product_id == product.id
+            )
+        ).all()
+    )
+    balances_by_location = {item.location_id: item.quantity for item in balances}
+    movements = list(
+        db.scalars(
+            select(StockMovement).where(
+                StockMovement.transfer_id == transfer.id
+            )
+        ).all()
+    )
+    document = db.get(BusinessDocument, transfer.document_id)
+
+    assert product.current_stock == Decimal("10")
+    assert balances_by_location[source.id] == Decimal("6")
+    assert balances_by_location[destination.id] == Decimal("4")
+    assert {movement.movement_type for movement in movements} == {
+        "transfer_out",
+        "transfer_in",
+    }
+    assert all(movement.balance_after == Decimal("10") for movement in movements)
+    assert transfer.status == "COMPLETED"
+    assert document is not None
+    assert document.document_type == "INVENTORY_TRANSFER"
+    assert document.document_number.startswith("TRF-")
+
+
+def test_transfer_with_insufficient_local_stock_is_atomic(db: Session):
+    organization = _organization(db, "transfer-insufficient")
+    product = _product(db, organization, stock="3")
+    actor = _actor(organization)
+    source = inventory_service.ensure_default_location(db, organization.id)
+    inventory_service.sync_default_location_balance(db, organization.id, product)
+    destination = inventory_service.create_inventory_location(
+        db,
+        organization.id,
+        InventoryLocationCreate(code="EXPEDICAO", name="Expedição"),
+    )
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        inventory_service.create_inventory_transfer(
+            db,
+            organization.id,
+            actor,
+            InventoryTransferCreate(
+                source_location_id=source.id,
+                destination_location_id=destination.id,
+                items=[
+                    InventoryTransferItemCreate(
+                        product_id=product.id, quantity=Decimal("4")
+                    )
+                ],
+            ),
+        )
+    db.rollback()
+
+    source_balance = db.scalar(
+        select(InventoryBalance).where(
+            InventoryBalance.product_id == product.id,
+            InventoryBalance.location_id == source.id,
+        )
+    )
+    transfer_count = db.scalar(select(func.count(InventoryTransfer.id)))
+    assert exc_info.value.status_code == 409
+    assert source_balance is not None
+    assert source_balance.quantity == Decimal("3")
+    assert transfer_count == 0
+
+
+def test_quick_order_persists_replenishment_and_document_chain(db: Session):
+    organization = _organization(db, "replenishment")
+    product = _product(db, organization, stock="2")
+    supplier = Supplier(
+        organization_id=organization.id,
+        name="Fornecedor de teste",
+        trade_name="Fornecedor",
+        cnpj_cpf=f"CNPJ-{uuid.uuid4().hex[:12]}",
+        payment_terms="30 DDL",
+        is_active=True,
+    )
+    db.add(supplier)
+    db.commit()
+
+    order = purchasing_service.create_quick_replenishment_order(
+        db,
+        _actor(organization),
+        purchasing_schemas.QuickReplenishmentOrderCreate(
+            supplier_id=supplier.id,
+            items=[
+                purchasing_schemas.PurchaseOrderItemCreate(
+                    product_id=product.id,
+                    quantity=Decimal("8"),
+                    unit_price=Decimal("4"),
+                )
+            ],
+        ),
+    )
+
+    replenishment = db.get(InventoryReplenishment, order.replenishment_id)
+    assert replenishment is not None
+    assert replenishment.status == "ORDERED"
+    assert replenishment.items[0].current_stock == Decimal("2")
+    assert replenishment.items[0].target_stock == Decimal("10")
+    assert replenishment.items[0].requested_quantity == Decimal("8")
+
+    replenishment_document = db.get(BusinessDocument, replenishment.document_id)
+    order_document = db.get(BusinessDocument, order.document_id)
+    relation = db.scalar(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == replenishment.document_id,
+            DocumentRelation.child_document_id == order.document_id,
+        )
+    )
+    events = list(
+        db.scalars(
+            select(DocumentEvent).where(
+                DocumentEvent.document_id == replenishment.document_id
+            )
+        ).all()
+    )
+
+    assert replenishment_document is not None
+    assert replenishment_document.document_type == "REPLENISHMENT"
+    assert replenishment_document.document_number.startswith("REP-")
+    assert replenishment_document.current_status == "ORDERED"
+    assert order_document is not None
+    assert order_document.document_type == "PURCHASE_ORDER"
+    assert relation is not None
+    assert relation.relation_type == "GENERATED"
+    assert {event.event_type for event in events} == {"CREATED", "ORDER_CREATED"}
+
+    purchasing_service.cancel_purchase_order(
+        db, order.id, organization.id, current_user=_actor(organization)
+    )
+    db.refresh(replenishment)
+    db.refresh(replenishment_document)
+    assert replenishment.status == "CANCELLED"
+    assert replenishment_document.current_status == "CANCELLED"
+    assert db.scalar(
+        select(func.count(DocumentEvent.id)).where(
+            DocumentEvent.document_id == replenishment.document_id,
+            DocumentEvent.event_type == "ORDER_CANCELLED",
+        )
+    ) == 1
+
+
+def test_formal_replenishment_tracks_request_until_order(db: Session):
+    organization = _organization(db, "formal-replenishment")
+    product = _product(db, organization, stock="2")
+    actor = _actor(organization)
+
+    purchase_request = purchasing_service.create_formal_replenishment_request(
+        db,
+        actor,
+        purchasing_schemas.PurchaseRequestCreate(
+            justification="Reposição formal de estoque crítico",
+            items=[
+                purchasing_schemas.PurchaseRequestItemCreate(
+                    product_id=product.id,
+                    quantity=Decimal("8"),
+                    estimated_unit_price=Decimal("4"),
+                )
+            ],
+        ),
+    )
+
+    replenishment = db.get(
+        InventoryReplenishment, purchase_request.replenishment_id
+    )
+    assert replenishment is not None
+    assert replenishment.status == "REQUESTED"
+    request_relation = db.scalar(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == replenishment.document_id,
+            DocumentRelation.child_document_id == purchase_request.document_id,
+        )
+    )
+    assert request_relation is not None
+    assert request_relation.relation_type == "GENERATED"
+
+    supplier = Supplier(
+        organization_id=organization.id,
+        name="Fornecedor formal",
+        trade_name="Fornecedor formal",
+        cnpj_cpf=f"CNPJ-{uuid.uuid4().hex[:12]}",
+        is_active=True,
+    )
+    db.add(supplier)
+    db.commit()
+    purchasing_service.transition_purchase_request_status(
+        db,
+        purchase_request,
+        organization.id,
+        "APPROVED",
+        current_user=actor,
+    )
+    quotation = purchasing_service.open_quotation_process(
+        db,
+        current_user=actor,
+        request_id=purchase_request.id,
+        notes="Cotação formal da reposição",
+    )
+    supplier_quote = purchasing_service.add_supplier_quote_to_process(
+        db,
+        current_user=actor,
+        quotation_id=quotation.id,
+        quote_data=purchasing_schemas.SupplierQuoteCreate(
+            supplier_id=supplier.id,
+            quote_reference="PROP-REPOSICAO-1",
+            lead_time_days=3,
+            items=[
+                purchasing_schemas.SupplierQuoteItemCreate(
+                    product_id=product.id,
+                    quantity=Decimal("8"),
+                    unit_price=Decimal("4"),
+                )
+            ],
+        ),
+    )
+    order = purchasing_service.select_winner_and_generate_order(
+        db,
+        current_user=actor,
+        quotation_id=quotation.id,
+        quote_id=supplier_quote.id,
+        notes="Melhor proposta da reposição",
+    )
+
+    db.refresh(replenishment)
+    assert order.replenishment_id == replenishment.id
+    assert replenishment.status == "ORDERED"
+    chain_relations = list(
+        db.scalars(
+            select(DocumentRelation).where(
+                DocumentRelation.organization_id == organization.id
+            )
+        ).all()
+    )
+    relation_edges = {
+        (relation.parent_document_id, relation.child_document_id)
+        for relation in chain_relations
+    }
+    assert (
+        replenishment.document_id,
+        purchase_request.document_id,
+    ) in relation_edges
+    assert (
+        purchase_request.document_id,
+        quotation.document_id,
+    ) in relation_edges
+    assert (
+        quotation.document_id,
+        order.document_id,
+    ) in relation_edges
+
+    purchasing_service.cancel_purchase_request(
+        db,
+        purchase_request.id,
+        organization.id,
+        current_user=actor,
+    )
+    db.refresh(replenishment)
+    assert replenishment.status == "CANCELLED"
+    assert db.scalar(
+        select(func.count(DocumentEvent.id)).where(
+            DocumentEvent.document_id == replenishment.document_id,
+            DocumentEvent.event_type == "ORDER_CANCELLED",
+        )
+    ) == 1
 
 
 def _order(
@@ -171,6 +487,24 @@ def test_reservation_is_integral_idempotent_and_does_not_change_physical_stock(
     assert "RESERVED" in {item.event_type for item in chain.events}
 
 
+def test_reservation_uses_canonical_sales_order_status(db: Session):
+    organization = _organization(db, "canonical-status")
+    product = _product(db, organization, stock="10")
+    order = _order(db, organization, [(product, "1")])
+    document = db.get(BusinessDocument, order.document_id)
+    assert document is not None
+
+    order.status = "CONFIRMED"
+    document.current_status = "CANCELLED"
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        inventory_service.reserve_sales_order(db, organization.id, None, order.id)
+
+    assert exc_info.value.status_code == 409
+    assert order.status == "CANCELLED"
+
+
 def test_release_and_reactivation_reuse_header_and_create_distinct_cycle_events(
     db: Session,
 ):
@@ -211,7 +545,10 @@ def test_release_and_reactivation_reuse_header_and_create_distinct_cycle_events(
     )
     assert [event.event_type for event in events].count("RESERVED") == 2
     assert [event.event_type for event in events].count("RELEASED") == 1
-    assert len({event.idempotency_key for event in events}) == 3
+    cycle_events = [
+        event for event in events if event.event_type in {"RESERVED", "RELEASED"}
+    ]
+    assert len({event.idempotency_key for event in cycle_events}) == 3
 
 
 def test_competing_orders_cannot_overbook_and_tenant_is_hidden(db: Session):
@@ -257,6 +594,73 @@ def test_manual_release_cannot_regress_dispatched_order(db: Session):
     assert exc_info.value.status_code == 409
     assert reservation.status == "RESERVED"
     assert order.delivery_status == "DISPATCHED"
+
+
+def test_dispatch_consumes_reservation_posts_stock_once_and_delivery_completes(
+    db: Session,
+):
+    organization = _organization(db, "delivery")
+    actor = _actor(organization)
+    product = _product(db, organization, stock="10", suffix="delivery")
+    order = _order(db, organization, [(product, "3")])
+    reservation = inventory_service.reserve_sales_order(
+        db, organization.id, actor.id, order.id
+    )
+
+    delivery = inventory_service.dispatch_sales_order(
+        db, organization.id, actor, order.id
+    )
+    assert delivery.status == "DISPATCHED"
+    assert delivery.stock_posted is True
+    assert delivery.reservation_id == reservation.id
+    assert reservation.status == "CONSUMED"
+    assert order.delivery_status == "DISPATCHED"
+    assert product.current_stock == Decimal("7")
+    assert len(delivery.items) == 1
+    assert delivery.items[0].quantity == Decimal("3")
+    assert db.scalar(
+        select(func.count(StockMovement.id)).where(
+            StockMovement.delivery_id == delivery.id
+        )
+    ) == 1
+
+    same_delivery = inventory_service.dispatch_sales_order(
+        db, organization.id, actor, order.id
+    )
+    assert same_delivery.id == delivery.id
+    assert product.current_stock == Decimal("7")
+    assert db.scalar(
+        select(func.count(StockMovement.id)).where(
+            StockMovement.delivery_id == delivery.id
+        )
+    ) == 1
+
+    completed = inventory_service.confirm_sales_order_delivery(
+        db, organization.id, actor, order.id
+    )
+    assert completed.status == "DELIVERED"
+    assert completed.delivered_at is not None
+    assert order.delivery_status == "DELIVERED"
+    assert product.current_stock == Decimal("7")
+    delivery_header = db.get(BusinessDocument, delivery.document_id)
+    assert delivery_header.current_status == "DELIVERED"
+    assert delivery_header.completed_at is not None
+
+    with pytest.raises(HTTPException) as cancellation:
+        sales_service.delete_sales_order(
+            db, order.id, organization.id, actor, reason="cancelamento tardio"
+        )
+    assert cancellation.value.status_code == 409
+    assert product.current_stock == Decimal("7")
+
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=organization.id,
+        document_type="SALES_ORDER",
+        native_id=order.id,
+    )
+    assert "DELIVERY" in {document.document_type for document in chain.documents}
+    assert "FULFILLED_BY" in {relation.relation_type for relation in chain.relations}
 
 
 def test_cancelling_order_releases_reservation_and_retry_heals_delivery(db: Session):

@@ -52,6 +52,7 @@ def test_adjust_stock_set_balance_success():
 
     with patch("controlb.modules.inventory.repository.get_product_by_id", return_value=mock_product), \
          patch("controlb.modules.inventory.repository.update_product") as mock_update_prod, \
+         patch("controlb.modules.inventory.service.documents_service.create_document", return_value=MagicMock(id=uuid.uuid4())), \
          patch("controlb.modules.inventory.repository.create_stock_movement", return_value=mock_movement) as mock_create_mov:
 
         result = service.adjust_stock(
@@ -112,6 +113,7 @@ def test_adjust_stock_remove_stock_loss_success():
 
     with patch("controlb.modules.inventory.repository.get_product_by_id", return_value=mock_product), \
          patch("controlb.modules.inventory.repository.update_product") as mock_update_prod, \
+         patch("controlb.modules.inventory.service.documents_service.create_document", return_value=MagicMock(id=uuid.uuid4())), \
          patch("controlb.modules.inventory.repository.create_stock_movement", return_value=mock_movement) as mock_create_mov:
 
         result = service.adjust_stock(
@@ -150,6 +152,7 @@ def test_register_purchase_receipt_integration():
 
     with patch("controlb.modules.inventory.repository.get_product_by_id", return_value=mock_product), \
          patch("controlb.modules.inventory.repository.update_product") as mock_update_prod, \
+         patch("controlb.modules.inventory.service.documents_service.create_document", return_value=MagicMock(id=uuid.uuid4())), \
          patch("controlb.modules.inventory.repository.create_stock_movement") as mock_create_mov:
 
         service.register_purchase_receipt(
@@ -206,6 +209,7 @@ def test_adjust_stock_invoice_entry_success():
 
     with patch("controlb.modules.inventory.repository.get_product_by_id", return_value=mock_product), \
          patch("controlb.modules.inventory.repository.update_product") as mock_update_prod, \
+         patch("controlb.modules.inventory.service.documents_service.create_document", return_value=MagicMock(id=uuid.uuid4())), \
          patch("controlb.modules.inventory.repository.create_stock_movement") as mock_create_mov:
 
         service.adjust_stock(
@@ -227,4 +231,3 @@ def test_adjust_stock_invoice_entry_success():
         assert "Forn: EMS Farmacêutica" in mov_arg.reference_doc
         assert "Lote: LT-2026-904" in mov_arg.reference_doc
         assert mov_arg.balance_after == Decimal("120.0000")
-

@@ -588,6 +588,8 @@
                 &.td-actions {
                   text-align: right;
 
+                  > button + button { margin-left: 0.35rem; }
+
                   .btn-action-pay {
                     display: inline-flex;
                     align-items: center;
@@ -912,6 +914,213 @@
 
     .banner-val {
       font-weight: 700;
+      color: #ef4444;
+    }
+  }
+}
+
+.finance-page .btn-action-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent-blue);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover { background: var(--accent-blue); color: #fff; }
+}
+
+.finance-page .ui-inline-feedback,
+.modal-overlay .ui-inline-feedback {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.8rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+
+  &--error {
+    border-color: rgba(239, 68, 68, 0.25);
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-red);
+  }
+}
+
+// =============================================================================
+// VÍNCULO DE DOCUMENTOS FISCAIS E COMPROVANTES NO EXTRATO BANCÁRIO
+// =============================================================================
+
+.doc-link-pill-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.doc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s ease;
+
+  &.fiscal-pill {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    color: #10b981;
+
+    &:hover {
+      background: rgba(16, 185, 129, 0.2);
+    }
+  }
+
+  &.receipt-pill {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    color: #3b82f6;
+
+    &:hover {
+      background: rgba(59, 130, 246, 0.2);
+    }
+  }
+}
+
+.btn-unlink-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+  }
+}
+
+.btn-quick-link-nf,
+.btn-quick-attach-receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-quick-link-nf {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px dashed rgba(16, 185, 129, 0.35);
+  color: #10b981;
+
+  &:hover {
+    background: rgba(16, 185, 129, 0.18);
+    border-style: solid;
+  }
+}
+
+.btn-quick-attach-receipt {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px dashed rgba(59, 130, 246, 0.35);
+  color: #3b82f6;
+
+  &:hover {
+    background: rgba(59, 130, 246, 0.18);
+    border-style: solid;
+  }
+}
+
+.modal-mode-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.5rem;
+
+  .mode-tab-btn {
+    padding: 0.45rem 0.85rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &.active {
+      background: rgba(16, 185, 129, 0.12);
+      border-color: #10b981;
+      color: #10b981;
+    }
+
+    &:hover:not(.active) {
+      background: var(--bg-surface-elevated);
+      color: var(--text-primary);
+    }
+  }
+}
+
+.tx-preview-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+
+  .tx-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+
+    .tx-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .tx-sub {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+  }
+
+  .tx-val {
+    font-size: 0.95rem;
+    font-weight: 700;
+
+    &.credit {
+      color: #10b981;
+    }
+
+    &.debit {
       color: #ef4444;
     }
   }

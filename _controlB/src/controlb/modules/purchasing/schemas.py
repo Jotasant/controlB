@@ -10,8 +10,8 @@ Define os schemas para validação de entrada (Create/Update) e serialização d
 
 import uuid
 from decimal import Decimal
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from datetime import date, datetime
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 # ==============================================================================
@@ -289,6 +289,7 @@ class PurchaseRequestBase(BaseModel):
 class PurchaseRequestCreate(PurchaseRequestBase):
     """Payload para emissão de nova Solicitação de Compra com seus itens."""
     organization_id: uuid.UUID | None = None
+    replenishment_id: uuid.UUID | None = None
     items: list[PurchaseRequestItemCreate] = Field(..., min_length=1, description="Lista de itens solicitados")
 
 
@@ -304,6 +305,8 @@ class PurchaseRequestResponse(PurchaseRequestBase):
     """Schema de resposta completo da Solicitação de Compra."""
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
+    replenishment_id: uuid.UUID | None = None
     requester_id: uuid.UUID
     request_number: str
     status: str
@@ -366,15 +369,45 @@ class PurchaseOrderCreate(PurchaseOrderBase):
     """Payload para emissão de Ordem de Compra."""
     organization_id: uuid.UUID | None = None
     buyer_id: uuid.UUID | None = None
+    replenishment_id: uuid.UUID | None = None
     items: list[PurchaseOrderItemCreate] = Field(..., min_length=1, description="Itens negociados")
 
 
 class PurchaseOrderReceive(BaseModel):
     """Payload para registro de recebimento físico de mercadoria."""
     invoice_number: str = Field(..., min_length=1, description="Número da Nota Fiscal / DANFE")
+    invoice_type: str = Field("NFE", description="NFE, NFSE, NFCE, CTE ou OUTRO")
+    invoice_series: str | None = Field(None, max_length=20)
+    invoice_access_key: str | None = Field(None, max_length=100)
+    invoice_issue_date: date | None = None
+    invoice_tax_amount: Decimal = Field(default=Decimal("0.00"), ge=0)
     invoice_attachment: str | None = Field(None, description="Arquivo anexado da NF-e (PDF/XML/Imagem em base64 ou URL)")
     received_at: datetime | None = None
+    generate_payable: bool = False
+    payable_due_date: date | None = None
+    installments_count: int = Field(default=1, ge=1, le=48)
+    installment_frequency_days: int = Field(default=30, ge=1, le=365)
+    expense_nature: str = Field("OPEX", description="OPEX ou CAPEX")
+    payment_method_expected: str | None = "BOLETO"
+    financial_category_id: uuid.UUID | None = None
+    digitable_line: str | None = Field(None, description="Linha digitável do boleto")
+    barcode: str | None = Field(None, description="Código de barras do boleto")
+    pix_code: str | None = Field(None, description="Chave / Copia e Cola PIX")
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_financial_generation(self):
+        self.invoice_type = self.invoice_type.strip().upper()
+        if self.invoice_type not in {"NFE", "NFSE", "NFCE", "CTE", "OUTRO"}:
+            raise ValueError("Tipo de documento fiscal inválido.")
+        self.expense_nature = self.expense_nature.strip().upper()
+        if self.expense_nature not in {"OPEX", "CAPEX"}:
+            raise ValueError("A natureza da despesa deve ser OPEX ou CAPEX.")
+        if self.generate_payable and self.payable_due_date is None:
+            raise ValueError(
+                "O primeiro vencimento é obrigatório para gerar a conta a pagar."
+            )
+        return self
 
 
 class GeneratePOFromRequest(BaseModel):
@@ -406,6 +439,7 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     """Schema de resposta oficial da Ordem de Compra."""
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     buyer_id: uuid.UUID
     order_number: str
     status: str
@@ -420,6 +454,7 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     items: list[PurchaseOrderItemResponse] = []
     supplier: SupplierResponse | None = None
     purchase_request: PurchaseRequestResponse | None = None
+    replenishment_id: uuid.UUID | None = None
     supplier_quote_id: uuid.UUID | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -504,6 +539,7 @@ class QuotationProcessResponse(QuotationProcessBase):
     """Schema de resposta do Processo de Cotação com suas propostas concorrentes."""
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     quotation_number: str
     status: str  # open, analyzing, completed, cancelled
     is_active: bool
@@ -586,6 +622,38 @@ class QuickReplenishmentOrderCreate(BaseModel):
     expected_delivery_date: datetime | None = None
     notes: str | None = None
     items: list[PurchaseOrderItemCreate]
+
+
+class InventoryReplenishmentItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    replenishment_id: uuid.UUID
+    product_id: uuid.UUID
+    current_stock: Decimal
+    min_stock: Decimal
+    target_stock: Decimal
+    requested_quantity: Decimal
+    estimated_unit_price: Decimal
+    created_at: datetime
+    product: ProductResponse | None = None
+
+
+class InventoryReplenishmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    document_id: uuid.UUID
+    replenishment_number: str
+    status: str
+    estimated_total_amount: Decimal
+    created_by_id: uuid.UUID | None = None
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[InventoryReplenishmentItemResponse]
 
 
 class StockAdjustmentCreate(BaseModel):

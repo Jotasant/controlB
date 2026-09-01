@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from controlb.db import Base
-from controlb.modules.documents import schemas, service
+from controlb.modules.documents import api as documents_api
+from controlb.modules.documents import schemas, security, service
 from controlb.modules.documents.models import (
     BusinessDocument,
     DocumentEvent,
@@ -422,3 +423,139 @@ def test_document_cannot_be_related_to_itself(db: Session):
         )
 
     assert exc_info.value.status_code == 400
+
+
+def _user_with_permissions(organization_id: uuid.UUID, *permission_codes: str) -> User:
+    role = Role(
+        id=uuid.uuid4(),
+        organization_id=organization_id,
+        name="Leitor documental",
+        is_active=True,
+    )
+    role.permissions = [
+        Permission(
+            id=uuid.uuid4(),
+            code=code,
+            name=code,
+            module=code.partition(":")[0],
+            is_active=True,
+        )
+        for code in permission_codes
+    ]
+    return User(
+        id=uuid.uuid4(),
+        organization_id=organization_id,
+        email=f"{uuid.uuid4()}@example.com",
+        full_name="Leitor documental",
+        hashed_password="not-used",
+        is_active=True,
+        role=role,
+    )
+
+
+def test_document_permission_policy_maps_all_integrated_types():
+    assert security.required_view_permission("CRM_INTERACTION") == "crm:view"
+    assert security.required_view_permission("INVOICE") == "billing:view"
+    assert security.required_view_permission("BILLING_REQUEST") == "billing:view"
+    assert security.required_view_permission("INVENTORY_RECEIPT") == "products:view"
+    assert security.required_view_permission("INVENTORY_TRANSFER") == "products:view"
+    assert security.required_view_permission("REPLENISHMENT") == "purchasing:view"
+    assert security.required_view_permission("PAYABLE") == "finance:payables"
+    assert security.required_view_permission("UNKNOWN_TYPE") == "documents:view"
+    assert security.can_view_document_type("SALES_ORDER", {"sales:view"})
+    assert not security.can_view_document_type("INVOICE", {"sales:view"})
+    assert security.can_view_document_type("INVOICE", {"*:*"})
+
+
+def test_document_api_filters_list_before_pagination_and_blocks_detail(db: Session):
+    organization_id = uuid.uuid4()
+    sales_document = service.ensure_document(
+        db,
+        organization_id=organization_id,
+        category="sales.order",
+        document_type="SALES_ORDER",
+        native_id=uuid.uuid4(),
+        document_number="PED-AUTH-001",
+        current_status="CONFIRMED",
+    )
+    finance_document = service.ensure_document(
+        db,
+        organization_id=organization_id,
+        category="finance.payable",
+        document_type="PAYABLE",
+        native_id=uuid.uuid4(),
+        document_number="PAG-AUTH-001",
+        current_status="PENDING",
+    )
+    sales_user = _user_with_permissions(organization_id, "sales:view")
+
+    visible_documents = documents_api.list_documents(
+        category=None,
+        origin_module=None,
+        current_status=None,
+        search=None,
+        responsible_id=None,
+        limit=1,
+        offset=0,
+        db=db,
+        current_user=sales_user,
+    )
+
+    assert [document.id for document in visible_documents] == [sales_document.id]
+    with pytest.raises(HTTPException) as exc_info:
+        documents_api.get_document(finance_document.id, db=db, current_user=sales_user)
+    assert exc_info.value.status_code == 403
+    assert "finance:payables" in exc_info.value.detail
+
+
+def test_document_api_removes_unauthorized_nodes_relations_and_events(db: Session):
+    organization_id = uuid.uuid4()
+    sales_document = service.ensure_document(
+        db,
+        organization_id=organization_id,
+        category="sales.order",
+        document_type="SALES_ORDER",
+        native_id=uuid.uuid4(),
+        document_number="PED-CHAIN-001",
+        current_status="CONFIRMED",
+    )
+    invoice_document = service.ensure_document(
+        db,
+        organization_id=organization_id,
+        category="billing.invoice",
+        document_type="INVOICE",
+        native_id=uuid.uuid4(),
+        document_number="FAT-CHAIN-001",
+        current_status="ISSUED",
+    )
+    service.relate_documents(
+        db,
+        organization_id=organization_id,
+        parent_document=sales_document,
+        child_document=invoice_document,
+        relation_type="INVOICED_BY",
+    )
+    service.record_event(
+        db,
+        organization_id=organization_id,
+        document=invoice_document,
+        event_type="ISSUED",
+    )
+    sales_user = _user_with_permissions(organization_id, "sales:view")
+
+    chain = documents_api.get_document_chain(
+        "SALES_ORDER",
+        sales_document.native_id,
+        db=db,
+        current_user=sales_user,
+    )
+    tree = documents_api.get_document_tree(
+        sales_document.id,
+        db=db,
+        current_user=sales_user,
+    )
+
+    assert [document.id for document in chain.documents] == [sales_document.id]
+    assert chain.relations == []
+    assert {event.document_id for event in chain.events} <= {sales_document.id}
+    assert tree.related == []

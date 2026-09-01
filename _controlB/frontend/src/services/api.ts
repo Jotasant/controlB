@@ -11,7 +11,8 @@
 import axios from 'axios';
 import { 
   User, UserMe, Role, Organization, Permission, TokenResponse,
-  Supplier, CostCenter, ProductCategory, Product, PurchaseRequest, PurchaseOrder 
+  Supplier, CostCenter, ProductCategory, Product, PurchaseRequest, PurchaseOrder,
+  PurchaseOrderReceivePayload
 } from '@/types';
 
 // Cria a instância do Axios
@@ -153,6 +154,46 @@ export const formatApiError = (err: any, fallback: string = 'Ocorreu um erro ao 
  * O tipo permanece aberto para que novos módulos reutilizem o mesmo contrato.
  */
 export const documentService = {
+  async get(documentId: string, forceRefresh = false): Promise<import('@/types').BusinessDocument> {
+    return cacheManager.fetchWithCache(
+      `documents:item:${documentId}`,
+      async () => {
+        const response = await api.get<import('@/types').BusinessDocument>(
+          `/documents/${encodeURIComponent(documentId)}`
+        );
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async list(
+    filters: import('@/types').BusinessDocumentFilters = {},
+    forceRefresh = false
+  ): Promise<import('@/types').BusinessDocument[]> {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const query = params.toString();
+    const cacheKey = `documents:list:${query}`;
+
+    return cacheManager.fetchWithCache(
+      cacheKey,
+      async () => {
+        const response = await api.get<import('@/types').BusinessDocument[]>(
+          `/documents/${query ? `?${query}` : ''}`
+        );
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
   async getChain(
     documentType: string,
     nativeId: string,
@@ -611,6 +652,96 @@ export const inventoryService = {
     return response.data;
   },
 
+  async getSalesOrderDelivery(orderId: string): Promise<import('@/types').InventoryDelivery> {
+    const response = await api.get<import('@/types').InventoryDelivery>(
+      `/inventory/deliveries/sales-orders/${orderId}`
+    );
+    return response.data;
+  },
+
+  async getInventoryDelivery(deliveryId: string): Promise<import('@/types').InventoryDelivery> {
+    const response = await api.get<import('@/types').InventoryDelivery>(
+      `/inventory/deliveries/${deliveryId}`
+    );
+    return response.data;
+  },
+
+  async getStockReservation(reservationId: string): Promise<import('@/types').StockReservation> {
+    const response = await api.get<import('@/types').StockReservation>(
+      `/inventory/reservations/${reservationId}`
+    );
+    return response.data;
+  },
+
+  async getInventoryLocations(forceRefresh = false): Promise<import('@/types').InventoryLocation[]> {
+    return cacheManager.fetchWithCache(
+      'inventory:locations',
+      async () => {
+        const response = await api.get<import('@/types').InventoryLocation[]>('/inventory/locations');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async createInventoryLocation(data: {
+    code: string;
+    name: string;
+    description?: string | null;
+  }): Promise<import('@/types').InventoryLocation> {
+    const response = await api.post<import('@/types').InventoryLocation>('/inventory/locations', data);
+    cacheManager.invalidate('inventory:locations');
+    return response.data;
+  },
+
+  async getInventoryBalances(productId?: string, forceRefresh = false): Promise<import('@/types').InventoryBalance[]> {
+    const key = `inventory:balances:${productId || 'all'}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const params = productId ? { product_id: productId } : {};
+        const response = await api.get<import('@/types').InventoryBalance[]>('/inventory/balances', { params });
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async createInventoryTransfer(payload: import('@/types').InventoryTransferPayload): Promise<import('@/types').InventoryTransfer> {
+    const response = await api.post<import('@/types').InventoryTransfer>('/inventory/transfers', payload);
+    cacheManager.invalidate('inventory');
+    cacheManager.invalidate('inventory:balances');
+    cacheManager.invalidate('inventory:movements');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async getInventoryTransfers(forceRefresh = false): Promise<import('@/types').InventoryTransfer[]> {
+    return cacheManager.fetchWithCache(
+      'inventory:transfers',
+      async () => {
+        const response = await api.get<import('@/types').InventoryTransfer[]>('/inventory/transfers');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async getInventoryTransfer(transferId: string, forceRefresh = false): Promise<import('@/types').InventoryTransfer> {
+    return cacheManager.fetchWithCache(
+      `inventory:transfer:${transferId}`,
+      async () => {
+        const response = await api.get<import('@/types').InventoryTransfer>(`/inventory/transfers/${transferId}`);
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
   async getInventoryMovements(productId?: string, limit?: number, forceRefresh = false): Promise<import('@/types').StockMovement[]> {
     const key = `inventory:movements:${productId || 'all'}:${limit || 0}`;
     return cacheManager.fetchWithCache(
@@ -646,6 +777,48 @@ export const inventoryService = {
 
   async importToolsPharma(file: File): Promise<import('@/types').InventoryImportSummaryResponse> {
     return this.importInventorySpreadsheet(file);
+  },
+
+  async getImportBatches(limit = 50, offset = 0, forceRefresh = false): Promise<import('@/types').InventoryImportBatchListItem[]> {
+    return cacheManager.fetchWithCache(
+      `inventory:import_batches:${limit}:${offset}`,
+      async () => {
+        const response = await api.get<import('@/types').InventoryImportBatchListItem[]>(
+          `/inventory/import-batches?limit=${limit}&offset=${offset}`
+        );
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async getImportBatchDetail(batchId: string, forceRefresh = false): Promise<import('@/types').InventoryImportBatch> {
+    return cacheManager.fetchWithCache(
+      `inventory:import_batch:${batchId}`,
+      async () => {
+        const response = await api.get<import('@/types').InventoryImportBatch>(
+          `/inventory/import-batches/${batchId}`
+        );
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async getStagnantInventoryReport(forceRefresh = false): Promise<import('@/types').StagnantInventoryReport> {
+    return cacheManager.fetchWithCache(
+      'inventory:stagnant_report',
+      async () => {
+        const response = await api.get<import('@/types').StagnantInventoryReport>(
+          '/inventory/reports/stagnation'
+        );
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
   }
 };
 
@@ -858,10 +1031,12 @@ export const purchasingService = {
     return response.data;
   },
 
-  async receivePurchaseOrder(orderId: string, data: { invoice_number: string; invoice_attachment?: string | null; notes?: string }): Promise<PurchaseOrder> {
+  async receivePurchaseOrder(orderId: string, data: PurchaseOrderReceivePayload): Promise<PurchaseOrder> {
     const response = await api.post<PurchaseOrder>(`/purchasing/orders/${orderId}/receive`, data);
     cacheManager.invalidate('purchasing:orders');
     cacheManager.invalidate('inventory');
+    cacheManager.invalidate('finance');
+    cacheManager.invalidate('documents');
     cacheManager.invalidate('purchasing:replenishment');
     return response.data;
   },
@@ -996,6 +1171,18 @@ export const purchasingService = {
   },
 
   // --- REPOSIÇÃO ÁGIL (ASSISTENTE DE COMPRAS & PO DIRETA) ---
+  async getInventoryReplenishments(forceRefresh = false): Promise<import('@/types').InventoryReplenishment[]> {
+    return cacheManager.fetchWithCache(
+      'purchasing:replenishment-documents',
+      async () => {
+        const response = await api.get<import('@/types').InventoryReplenishment[]>('/purchasing/replenishments');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
   async getReplenishmentSuggestions(forceRefresh = false): Promise<import('@/types').PurchaseSuggestionsSummary> {
     return cacheManager.fetchWithCache(
       'purchasing:replenishment',
@@ -1012,7 +1199,26 @@ export const purchasingService = {
     const response = await api.post<PurchaseOrder>('/purchasing/orders/quick-replenishment', payload);
     cacheManager.invalidate('purchasing:orders');
     cacheManager.invalidate('purchasing:replenishment');
+    cacheManager.invalidate('purchasing:replenishment-documents');
     cacheManager.invalidate('inventory');
+    return response.data;
+  },
+
+  async createFormalReplenishmentRequest(payload: {
+    justification: string;
+    cost_center_id?: string;
+    required_date?: string;
+    items: Array<{
+      product_id: string;
+      quantity: number;
+      estimated_unit_price: number;
+      notes?: string;
+    }>;
+  }): Promise<PurchaseRequest> {
+    const response = await api.post<PurchaseRequest>('/purchasing/replenishments/requests', payload);
+    cacheManager.invalidate('purchasing:requests');
+    cacheManager.invalidate('purchasing:replenishment');
+    cacheManager.invalidate('purchasing:replenishment-documents');
     return response.data;
   }
 };
@@ -1054,6 +1260,12 @@ export const financeService = {
     return response.data;
   },
 
+  async updateCategory(id: string, data: Partial<import('@/types').FinancialCategory>): Promise<import('@/types').FinancialCategory> {
+    const response = await api.patch<import('@/types').FinancialCategory>(`/finance/categories/${id}`, data);
+    cacheManager.invalidate('finance:categories');
+    return response.data;
+  },
+
   async getBankAccounts(forceRefresh = false): Promise<import('@/types').BankAccount[]> {
     return cacheManager.fetchWithCache(
       'finance:bank_accounts',
@@ -1070,6 +1282,12 @@ export const financeService = {
     const response = await api.post<import('@/types').BankAccount>('/finance/bank-accounts', data);
     cacheManager.invalidate('finance:bank_accounts');
     cacheManager.invalidate('finance:dashboard');
+    return response.data;
+  },
+
+  async updateBankAccount(id: string, data: Partial<import('@/types').BankAccount>): Promise<import('@/types').BankAccount> {
+    const response = await api.patch<import('@/types').BankAccount>(`/finance/bank-accounts/${id}`, data);
+    cacheManager.invalidate('finance:bank_accounts');
     return response.data;
   },
 
@@ -1095,14 +1313,30 @@ export const financeService = {
     return response.data;
   },
 
-  async getPayables(status?: string, expenseNature?: string, forceRefresh = false): Promise<import('@/types').Payable[]> {
-    const key = `finance:payables:${status || 'all'}:${expenseNature || 'all'}`;
+  async updateFiscalDocument(id: string, data: Partial<import('@/types').FiscalDocument>): Promise<import('@/types').FiscalDocument> {
+    const response = await api.patch<import('@/types').FiscalDocument>(`/finance/fiscal-documents/${id}`, data);
+    cacheManager.invalidate('finance:fiscal');
+    cacheManager.invalidate('billing:fiscal');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async getPayables(
+    status?: string,
+    expenseNature?: string,
+    forceRefresh = false,
+    obligationType?: string,
+    businessOrigin?: string
+  ): Promise<import('@/types').Payable[]> {
+    const key = `finance:payables:${status || 'all'}:${expenseNature || 'all'}:${obligationType || 'all'}:${businessOrigin || 'all'}`;
     return cacheManager.fetchWithCache(
       key,
       async () => {
         const params: Record<string, string> = {};
         if (status) params.status = status;
         if (expenseNature) params.expense_nature = expenseNature;
+        if (obligationType) params.obligation_type = obligationType;
+        if (businessOrigin) params.business_origin = businessOrigin;
         const response = await api.get<import('@/types').Payable[]>('/finance/payables', { params });
         return Array.isArray(response.data) ? response.data : [];
       },
@@ -1117,11 +1351,15 @@ export const financeService = {
     original_amount: number;
     issue_date: string;
     due_date: string;
-    expense_nature?: 'CAPEX' | 'OPEX';
+    expense_nature?: 'OPEX' | 'CAPEX' | 'FINANCIAL' | 'TAX' | 'PAYROLL' | 'TRANSFER' | 'NOT_APPLICABLE';
+    obligation_type?: 'GOODS_SUPPLIER' | 'SERVICE_PROVIDER' | 'TAX' | 'PAYROLL' | 'RENT_LEASE' | 'FINANCING' | 'REIMBURSEMENT' | 'INVESTMENT' | 'OTHER';
+    business_origin?: 'PURCHASE' | 'REPLENISHMENT' | 'INVESTMENT' | 'CONTRACT' | 'FISCAL_DOCUMENT' | 'MANUAL' | 'OTHER';
     payment_method_expected?: string;
     cost_center_id?: string;
     financial_category_id?: string;
     supplier_id?: string;
+    purchase_order_id?: string;
+    fiscal_document_id?: string;
     installments_count?: number;
     installment_frequency_days?: number;
     instrument?: {
@@ -1135,6 +1373,14 @@ export const financeService = {
     const response = await api.post<import('@/types').Payable[]>('/finance/payables', data);
     cacheManager.invalidate('finance:payables');
     cacheManager.invalidate('finance:dashboard');
+    return response.data;
+  },
+
+  async updatePayable(id: string, data: Partial<import('@/types').Payable>): Promise<import('@/types').Payable> {
+    const response = await api.patch<import('@/types').Payable>(`/finance/payables/${id}`, data);
+    cacheManager.invalidate('finance:payables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
     return response.data;
   },
 
@@ -1186,6 +1432,66 @@ export const financeService = {
     return response.data;
   },
 
+  async updateBankTransaction(id: string, data: Partial<{
+    bank_account_id: string;
+    transaction_date: string;
+    description: string;
+    amount: number;
+    transaction_type: 'CREDIT' | 'DEBIT';
+    external_id: string | null;
+    document_number: string | null;
+  }>): Promise<import('@/types').BankTransaction> {
+    const response = await api.patch<import('@/types').BankTransaction>(`/finance/transactions/${id}`, data);
+    cacheManager.invalidate('finance:transactions');
+    cacheManager.invalidate('finance:bank_accounts');
+    cacheManager.invalidate('finance:dashboard');
+    return response.data;
+  },
+
+  async linkTransactionFiscalDocument(transactionId: string, data: {
+    fiscal_document_id?: string;
+    new_fiscal_document?: any;
+  }): Promise<import('@/types').BankTransaction> {
+    const response = await api.post<import('@/types').BankTransaction>(`/finance/transactions/${transactionId}/fiscal-document`, data);
+    cacheManager.invalidate('finance:transactions');
+    cacheManager.invalidate('finance:fiscal');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async unlinkTransactionFiscalDocument(transactionId: string): Promise<import('@/types').BankTransaction> {
+    const response = await api.delete<import('@/types').BankTransaction>(`/finance/transactions/${transactionId}/fiscal-document`);
+    cacheManager.invalidate('finance:transactions');
+    cacheManager.invalidate('finance:fiscal');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async attachTransactionReceipt(transactionId: string, data: {
+    file_name: string;
+    file_url: string;
+    mime_type?: string;
+    payable_id?: string;
+  }): Promise<import('@/types').BankTransaction> {
+    const response = await api.post<import('@/types').BankTransaction>(`/finance/transactions/${transactionId}/receipt`, data);
+    cacheManager.invalidate('finance:transactions');
+    cacheManager.invalidate('finance:payables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async removeTransactionReceipt(transactionId: string): Promise<import('@/types').BankTransaction> {
+    const response = await api.delete<import('@/types').BankTransaction>(`/finance/transactions/${transactionId}/receipt`);
+    cacheManager.invalidate('finance:transactions');
+    cacheManager.invalidate('finance:payables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
   async reconcileTransaction(data: {
     bank_transaction_id: string;
     payment_id?: string;
@@ -1213,6 +1519,7 @@ export const financeService = {
   },
 
   async createReceivable(data: {
+    customer_id?: string;
     customer_name: string;
     customer_document?: string;
     description: string;
@@ -1220,11 +1527,22 @@ export const financeService = {
     issue_date: string;
     due_date: string;
     payment_method_expected?: string;
+    cost_center_id?: string;
+    financial_category_id?: string;
+    fiscal_document_id?: string;
     notes?: string;
   }): Promise<import('@/types').Receivable> {
     const response = await api.post<import('@/types').Receivable>('/finance/receivables', data);
     cacheManager.invalidate('finance:receivables');
     cacheManager.invalidate('finance:dashboard');
+    return response.data;
+  },
+
+  async updateReceivable(id: string, data: Partial<import('@/types').Receivable>): Promise<import('@/types').Receivable> {
+    const response = await api.patch<import('@/types').Receivable>(`/finance/receivables/${id}`, data);
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
     return response.data;
   },
 
@@ -1250,6 +1568,18 @@ export const financeService = {
 // ==============================================================================
 
 export const billingService = {
+  async getRequests(forceRefresh = false): Promise<import('@/types').BusinessDocument[]> {
+    return cacheManager.fetchWithCache(
+      'billing:requests',
+      async () => {
+        const response = await api.get<import('@/types').BusinessDocument[]>('/billing/requests');
+        return Array.isArray(response.data) ? response.data : [];
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
   async getInvoices(forceRefresh = false): Promise<import('@/types').Invoice[]> {
     return cacheManager.fetchWithCache(
       'billing:invoices',
@@ -1260,6 +1590,73 @@ export const billingService = {
       DEFAULT_CACHE_TTL,
       forceRefresh
     );
+  },
+
+  async getInvoice(id: string): Promise<import('@/types').Invoice> {
+    const response = await api.get<import('@/types').Invoice>(`/billing/invoices/${id}`);
+    return response.data;
+  },
+
+  async issueRequest(requestId: string, data: {
+    issue_date: string;
+    due_date: string;
+    installments_count?: number;
+    tax_amount?: number;
+    notes?: string;
+    generate_receivables_in_finance?: boolean;
+    generate_outbound_fiscal_document?: boolean;
+    fiscal_document_type?: 'NFE' | 'NFSE' | 'NFCE' | 'OUTRO';
+    fiscal_document_number?: string;
+    fiscal_series?: string;
+    fiscal_access_key?: string;
+    items?: Array<{ sales_order_item_id: string; quantity: number }>;
+  }): Promise<import('@/types').Invoice> {
+    const response = await api.post<import('@/types').Invoice>(`/billing/requests/${requestId}/issue`, data);
+    cacheManager.invalidate('billing:requests');
+    cacheManager.invalidate('billing:invoices');
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('sales:order:');
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('finance:fiscal');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async cancelRequest(requestId: string, reason: string): Promise<import('@/types').BusinessDocument> {
+    const response = await api.post<import('@/types').BusinessDocument>(`/billing/requests/${requestId}/cancel`, { reason });
+    cacheManager.invalidate('billing:requests');
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('sales:order:');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async updateInvoice(id: string, data: {
+    customer_name?: string;
+    customer_document?: string | null;
+    issue_date?: string;
+    due_date?: string;
+    notes?: string | null;
+  }): Promise<import('@/types').Invoice> {
+    const response = await api.patch<import('@/types').Invoice>(`/billing/invoices/${id}`, data);
+    cacheManager.invalidate('billing:invoices');
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async cancelInvoice(id: string, reason: string): Promise<import('@/types').Invoice> {
+    const response = await api.post<import('@/types').Invoice>(`/billing/invoices/${id}/cancel`, { reason });
+    cacheManager.invalidate('billing:invoices');
+    cacheManager.invalidate('billing:requests');
+    cacheManager.invalidate('billing:fiscal');
+    cacheManager.invalidate('sales:orders');
+    cacheManager.invalidate('sales:order:');
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('finance:fiscal');
+    cacheManager.invalidate('documents');
+    return response.data;
   },
 
   async createInvoice(data: {
@@ -1273,11 +1670,19 @@ export const billingService = {
     installments_count?: number;
     notes?: string;
     generate_receivables_in_finance?: boolean;
+    generate_outbound_fiscal_document?: boolean;
+    fiscal_document_type?: 'NFE' | 'NFSE' | 'NFCE' | 'OUTRO';
+    fiscal_document_number?: string;
+    fiscal_series?: string;
+    fiscal_access_key?: string;
+    items?: Array<{ sales_order_item_id: string; quantity: number }>;
   }): Promise<import('@/types').Invoice> {
     const response = await api.post<import('@/types').Invoice>('/billing/invoices', data);
     cacheManager.invalidate('billing:invoices');
     cacheManager.invalidate('finance:receivables');
     cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('finance:fiscal');
+    cacheManager.invalidate('billing:fiscal');
     return response.data;
   },
 
@@ -1416,6 +1821,7 @@ export const crmService = {
     probability_percent?: number;
     expected_closing_date?: string;
     stage?: string;
+    priority?: 'LOW' | 'MEDIUM' | 'HIGH';
     lead_id?: string;
     loss_reason?: string;
     assigned_to_id?: string;
@@ -1816,9 +2222,7 @@ export const salesService = {
     const response = await api.post<import('@/types').SalesOrder>(`/sales/orders/${orderId}/request-billing`);
     cacheManager.invalidate('sales:orders');
     cacheManager.invalidate(`sales:order:${orderId}`);
-    cacheManager.invalidate('billing:invoices');
-    cacheManager.invalidate('finance:receivables');
-    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('billing:requests');
     cacheManager.invalidate('sales:analytics');
     cacheManager.invalidate(`documents:chain:SALES_ORDER:${orderId}`);
     return response.data;

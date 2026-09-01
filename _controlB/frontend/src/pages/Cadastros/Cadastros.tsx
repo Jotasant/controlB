@@ -11,20 +11,26 @@ import React, { useEffect, useState } from 'react';
 import { 
   Building2, Users, Shield, ChevronRight, 
   Search, CheckCircle2, XCircle, RefreshCw, Plus, Mail,
-  Loader2, AlertCircle, Trash2, Edit3, ShieldAlert
+  Loader2, AlertCircle, Trash2, ShieldAlert
 } from 'lucide-react';
 import { identityService, authService, formatApiError } from '@/services/api';
 import { User, Role, Organization, Permission } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useListPagination } from '@/hooks/useListPagination';
+import { ListPagination } from '@/components/ListPagination';
 import './Cadastros.scss';
 
 type MenuOption = 'usuarios' | 'organizacoes' | 'cargos';
 
-export const Cadastros: React.FC = () => {
+interface CadastrosProps {
+  initialMenu?: MenuOption;
+}
+
+export const Cadastros: React.FC<CadastrosProps> = ({ initialMenu = 'usuarios' }) => {
   const { hasPermission } = usePermissions();
 
-  const [activeMenu, setActiveMenu] = useState<MenuOption>('usuarios');
+  const [activeMenu, setActiveMenu] = useState<MenuOption>(initialMenu);
   const [searchTerm, setSearchTerm] = useState('');
 
   // Estados dos Dados carregados da API
@@ -391,19 +397,22 @@ export const Cadastros: React.FC = () => {
     (r?.name || '').toLowerCase().includes(term) ||
     ((r?.description || '').toLowerCase().includes(term))
   );
+  const userPagination = useListPagination(filteredUsers);
+  const orgPagination = useListPagination(filteredOrgs);
+  const rolePagination = useListPagination(filteredRoles);
 
   // =========================================================================
   // LÓGICA DE SELEÇÃO MÚLTIPLA E BOTÃO "SELECIONAR TUDO"
   // =========================================================================
 
   // 👥 Usuários
-  const selectableUsers = filteredUsers.filter(u => u.email !== currentUserEmail);
+  const selectableUsers = userPagination.pageItems.filter(u => u.email !== currentUserEmail);
   const isAllUsersSelected = selectableUsers.length > 0 && selectableUsers.every(u => selectedUserIds.includes(u.id));
   const toggleSelectAllUsers = () => {
     if (isAllUsersSelected) {
-      setSelectedUserIds([]);
+      setSelectedUserIds(previous => previous.filter(id => !selectableUsers.some(user => user.id === id)));
     } else {
-      setSelectedUserIds(selectableUsers.map(u => u.id));
+      setSelectedUserIds(previous => Array.from(new Set([...previous, ...selectableUsers.map(user => user.id)])));
     }
   };
   const toggleSelectUser = (userId: string) => {
@@ -413,12 +422,12 @@ export const Cadastros: React.FC = () => {
   };
 
   // 🏢 Organizações
-  const isAllOrgsSelected = filteredOrgs.length > 0 && filteredOrgs.every(o => selectedOrgIds.includes(o.id));
+  const isAllOrgsSelected = orgPagination.pageItems.length > 0 && orgPagination.pageItems.every(o => selectedOrgIds.includes(o.id));
   const toggleSelectAllOrgs = () => {
     if (isAllOrgsSelected) {
-      setSelectedOrgIds([]);
+      setSelectedOrgIds(previous => previous.filter(id => !orgPagination.pageItems.some(org => org.id === id)));
     } else {
-      setSelectedOrgIds(filteredOrgs.map(o => o.id));
+      setSelectedOrgIds(previous => Array.from(new Set([...previous, ...orgPagination.pageItems.map(org => org.id)])));
     }
   };
   const toggleSelectOrg = (orgId: string) => {
@@ -428,12 +437,12 @@ export const Cadastros: React.FC = () => {
   };
 
   // 🛡️ Cargos
-  const isAllRolesSelected = filteredRoles.length > 0 && filteredRoles.every(r => selectedRoleIds.includes(r.id));
+  const isAllRolesSelected = rolePagination.pageItems.length > 0 && rolePagination.pageItems.every(r => selectedRoleIds.includes(r.id));
   const toggleSelectAllRoles = () => {
     if (isAllRolesSelected) {
-      setSelectedRoleIds([]);
+      setSelectedRoleIds(previous => previous.filter(id => !rolePagination.pageItems.some(role => role.id === id)));
     } else {
-      setSelectedRoleIds(filteredRoles.map(r => r.id));
+      setSelectedRoleIds(previous => Array.from(new Set([...previous, ...rolePagination.pageItems.map(role => role.id)])));
     }
   };
   const toggleSelectRole = (roleId: string) => {
@@ -661,11 +670,11 @@ export const Cadastros: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredUsers.map(user => {
+                      {userPagination.pageItems.map(user => {
                         const isSelf = user.email === currentUserEmail;
                         const isSelected = selectedUserIds.includes(user.id);
                         return (
-                          <tr key={user.id} className={isSelected ? 'selected-row' : ''}>
+                          <tr key={user.id} className={`${isSelected ? 'selected-row' : ''} ${(hasPermission('users:edit') || isSelf) ? 'ui-record-row' : ''}`} role={(hasPermission('users:edit') || isSelf) ? 'button' : undefined} tabIndex={(hasPermission('users:edit') || isSelf) ? 0 : undefined} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input, label') && (hasPermission('users:edit') || isSelf)) handleOpenUserProfile(user); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && (hasPermission('users:edit') || isSelf)) { event.preventDefault(); handleOpenUserProfile(user); } }}>
                             <td className="td-checkbox">
                               <input 
                                 type="checkbox" 
@@ -706,16 +715,6 @@ export const Cadastros: React.FC = () => {
                             <td>{user?.created_at ? new Date(user.created_at).toLocaleDateString('pt-BR') : '-'}</td>
                             <td style={{ textAlign: 'right' }}>
                               <div className="row-actions">
-                                {(hasPermission('users:edit') || isSelf) && (
-                                  <button
-                                    className="btn-action-icon edit"
-                                    onClick={() => handleOpenUserProfile(user)}
-                                    title="Editar Perfil do Usuário"
-                                  >
-                                    <Edit3 size={14} />
-                                  </button>
-                                )}
-
                                 {hasPermission('users:delete') && (
                                   <button
                                     className="btn-action-icon delete"
@@ -733,6 +732,7 @@ export const Cadastros: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                  <ListPagination {...userPagination} onPageChange={userPagination.setPage} onPageSizeChange={userPagination.setPageSize} />
                 </div>
               )
             )}
@@ -764,10 +764,10 @@ export const Cadastros: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredOrgs.map(org => {
+                      {orgPagination.pageItems.map(org => {
                         const isSelected = selectedOrgIds.includes(org.id);
                         return (
-                          <tr key={org.id} className={isSelected ? 'selected-row' : ''}>
+                          <tr key={org.id} className={`${isSelected ? 'selected-row' : ''} ${hasPermission('organizations:manage') ? 'ui-record-row' : ''}`} role={hasPermission('organizations:manage') ? 'button' : undefined} tabIndex={hasPermission('organizations:manage') ? 0 : undefined} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input, label') && hasPermission('organizations:manage')) handleOpenOrgEdit(org); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && hasPermission('organizations:manage')) { event.preventDefault(); handleOpenOrgEdit(org); } }}>
                             <td className="td-checkbox">
                               <input 
                                 type="checkbox" 
@@ -800,14 +800,6 @@ export const Cadastros: React.FC = () => {
                               {hasPermission('organizations:manage') && (
                                 <div className="row-actions">
                                   <button
-                                    className="btn-action-icon edit"
-                                    onClick={() => handleOpenOrgEdit(org)}
-                                    title="Editar Organização"
-                                  >
-                                    <Edit3 size={14} />
-                                  </button>
-
-                                  <button
                                     className="btn-action-icon delete"
                                     onClick={() => setItemToDelete({ ids: [org.id], names: [org.name], type: 'org' })}
                                     title="Excluir Organização"
@@ -822,6 +814,7 @@ export const Cadastros: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                  <ListPagination {...orgPagination} onPageChange={orgPagination.setPage} onPageSizeChange={orgPagination.setPageSize} />
                 </div>
               )
             )}
@@ -854,10 +847,10 @@ export const Cadastros: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredRoles.map(role => {
+                      {rolePagination.pageItems.map(role => {
                         const isSelected = selectedRoleIds.includes(role.id);
                         return (
-                          <tr key={role.id} className={isSelected ? 'selected-row' : ''}>
+                          <tr key={role.id} className={`${isSelected ? 'selected-row' : ''} ${hasPermission('roles:manage') ? 'ui-record-row' : ''}`} role={hasPermission('roles:manage') ? 'button' : undefined} tabIndex={hasPermission('roles:manage') ? 0 : undefined} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input, label') && hasPermission('roles:manage')) handleOpenRoleEdit(role); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && hasPermission('roles:manage')) { event.preventDefault(); handleOpenRoleEdit(role); } }}>
                             <td className="td-checkbox">
                               <input 
                                 type="checkbox" 
@@ -905,14 +898,6 @@ export const Cadastros: React.FC = () => {
                               {hasPermission('roles:manage') && (
                                 <div className="row-actions">
                                   <button
-                                    className="btn-action-icon edit"
-                                    onClick={() => handleOpenRoleEdit(role)}
-                                    title="Editar Cargo e Permissões"
-                                  >
-                                    <Edit3 size={14} />
-                                  </button>
-
-                                  <button
                                     className="btn-action-icon delete"
                                     onClick={() => setItemToDelete({ ids: [role.id], names: [role.name], type: 'role' })}
                                     title="Excluir Cargo"
@@ -927,6 +912,7 @@ export const Cadastros: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                  <ListPagination {...rolePagination} onPageChange={rolePagination.setPage} onPageSizeChange={rolePagination.setPageSize} />
                 </div>
               )
             )}

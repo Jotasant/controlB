@@ -13,19 +13,42 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from controlb.db import SessionLocal
+from controlb.modules.billing import schemas as billing_schemas
+from controlb.modules.billing import service as billing_service
+from controlb.modules.crm import schemas as crm_schemas
+from controlb.modules.crm import service as crm_service
 from controlb.modules.documents import service as documents_service
-from controlb.modules.documents.models import BusinessDocument, DocumentEvent
+from controlb.modules.documents.models import (
+    BusinessDocument,
+    DocumentEvent,
+    DocumentRelation,
+    DocumentSequence,
+)
+from controlb.modules.finance import service as finance_service
+from controlb.modules.finance import schemas as finance_schemas
+from controlb.modules.finance.models import FiscalDocument, Payable
 from controlb.modules.identity.models import Organization, Permission, Role, User
-from controlb.modules.inventory.models import ProductCategory, Product
-from controlb.modules.crm import service as crm_service, schemas as crm_schemas
+from controlb.modules.inventory.models import (
+    InventoryReceipt,
+    Product,
+    ProductCategory,
+    StockMovement,
+)
+from controlb.modules.purchasing import schemas as purchasing_schemas
+from controlb.modules.purchasing import service as purchasing_service
+from controlb.modules.purchasing.models import Supplier
 from controlb.modules.sales import (
     api as sales_api,
+)
+from controlb.modules.sales import (
     repository as sales_repository,
+)
+from controlb.modules.sales import (
     schemas as sales_schemas,
+)
+from controlb.modules.sales import (
     service as sales_service,
 )
-from controlb.modules.billing import service as billing_service, schemas as billing_schemas
-from controlb.modules.finance import service as finance_service
 
 
 @pytest.fixture
@@ -96,6 +119,7 @@ def test_crm_lead_and_opportunity_pipeline_flow(db: Session, mock_org: Organizat
         )
     )
     assert lead.id is not None
+    assert lead.document_id is not None
     assert lead.name == "Hospital São Lucas"
     assert lead.customer_id is not None  # Integrado automaticamente com Vendas!
 
@@ -115,8 +139,18 @@ def test_crm_lead_and_opportunity_pipeline_flow(db: Session, mock_org: Organizat
         )
     )
     assert opp.stage == "PROPOSAL"
+    assert opp.document_id is not None
     assert opp.customer_id == lead.customer_id
     assert opp.estimated_amount == Decimal("50000.00")
+
+    lead_relation = db.scalars(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == lead.document_id,
+            DocumentRelation.child_document_id == opp.document_id,
+            DocumentRelation.relation_type == "ORIGINATED_FROM",
+        )
+    ).first()
+    assert lead_relation is not None
 
     # 3. Move oportunidade para WON (Ganho)
     updated_opp = crm_service.update_opportunity_stage(
@@ -126,6 +160,587 @@ def test_crm_lead_and_opportunity_pipeline_flow(db: Session, mock_org: Organizat
         stage="WON"
     )
     assert updated_opp.stage == "WON"
+    opportunity_document = db.get(BusinessDocument, opp.document_id)
+    assert opportunity_document.current_status == "WON"
+    assert opportunity_document.completed_at is not None
+
+
+def test_crm_opportunity_uses_canonical_document_header(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+):
+    opportunity = crm_service.create_opportunity(
+        db,
+        mock_org.id,
+        crm_schemas.OpportunityCreate(
+            title="Contrato hospitalar",
+            customer_name="Hospital Vida",
+            stage="PROSPECTING",
+            priority="HIGH",
+        ),
+        current_user=mock_user,
+    )
+
+    document = db.get(BusinessDocument, opportunity.document_id)
+    assert document is not None
+    assert document.native_id == opportunity.id
+    assert document.category == "crm.opportunity"
+    assert document.document_number.startswith(f"OPP-{datetime.now(UTC).year}-")
+    assert document.title == opportunity.title
+    assert document.current_status == opportunity.stage == "PROSPECTING"
+    assert document.priority == opportunity.priority == "HIGH"
+    assert document.created_by_id == mock_user.id
+
+    updated = crm_service.update_opportunity(
+        db,
+        opportunity.id,
+        mock_org.id,
+        crm_schemas.OpportunityUpdate(
+            title="Contrato hospitalar renovado",
+            stage="NEGOTIATION",
+            priority="LOW",
+            assigned_to_id=mock_user.id,
+        ),
+        current_user=mock_user,
+    )
+    db.refresh(document)
+    assert updated.title == document.title == "Contrato hospitalar renovado"
+    assert updated.stage == document.current_status == "NEGOTIATION"
+    assert updated.priority == document.priority == "LOW"
+    assert crm_schemas.OpportunityResponse.model_validate(updated).priority == "LOW"
+    assert updated.assigned_to_id == document.responsible_id == mock_user.id
+
+    lost = crm_service.update_opportunity_stage(
+        db,
+        opportunity.id,
+        mock_org.id,
+        "LOST",
+        "Concorrente escolhido",
+        current_user=mock_user,
+    )
+    db.refresh(document)
+    assert lost.stage == document.current_status == "LOST"
+    assert document.description == "Concorrente escolhido"
+    assert document.completed_at is not None
+
+    reopened = crm_service.update_opportunity_stage(
+        db,
+        opportunity.id,
+        mock_org.id,
+        "NEGOTIATION",
+        current_user=mock_user,
+    )
+    db.refresh(document)
+    assert reopened.stage == document.current_status == "NEGOTIATION"
+    assert document.completed_at is None
+
+    event_types = set(
+        db.scalars(
+            select(DocumentEvent.event_type).where(
+                DocumentEvent.document_id == document.id
+            )
+        ).all()
+    )
+    assert {
+        "CREATED",
+        "STAGE_CHANGED",
+        "RESPONSIBLE_CHANGED",
+        "PRIORITY_CHANGED",
+    } <= event_types
+
+
+def test_purchase_request_uses_canonical_document_header(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    payload = purchasing_schemas.PurchaseRequestCreate(
+        organization_id=mock_org.id,
+        justification="Reposição do estoque crítico",
+        items=[
+            purchasing_schemas.PurchaseRequestItemCreate(
+                product_id=mock_product.id,
+                quantity=Decimal("10"),
+                estimated_unit_price=Decimal("12.50"),
+            )
+        ],
+    )
+    purchase_request = purchasing_service.create_purchase_request(
+        db,
+        current_user=mock_user,
+        request_data=payload,
+    )
+
+    document = db.get(BusinessDocument, purchase_request.document_id)
+    assert document is not None
+    assert document.native_id == purchase_request.id
+    assert document.category == "purchase.request"
+    assert document.document_number.startswith(f"SC-{datetime.now(UTC).year}-")
+    assert purchase_request.request_number == document.document_number
+    assert purchase_request.status == "pending_approval"
+    assert document.current_status == "PENDING_APPROVAL"
+    assert document.responsible_id == purchase_request.requester_id == mock_user.id
+
+    updated = purchasing_service.update_purchase_request_data(
+        db,
+        purchase_request.id,
+        mock_org.id,
+        purchasing_schemas.PurchaseRequestUpdate(
+            justification="Reposição revisada e priorizada"
+        ),
+        current_user=mock_user,
+    )
+    db.refresh(document)
+    assert updated.justification == document.description
+
+    approved = purchasing_service.process_approval_action(
+        db,
+        purchase_request.id,
+        mock_user,
+        purchasing_schemas.ApprovalActionRequest(
+            action="approved",
+            comments="Dentro da alçada",
+        ),
+    )
+    db.refresh(document)
+    assert approved.status == "approved"
+    assert document.current_status == "APPROVED"
+
+    purchasing_service.transition_purchase_request_status(
+        db,
+        purchase_request,
+        mock_org.id,
+        "ORDERED",
+        current_user=mock_user,
+        event_type="ORDER_CREATED",
+    )
+    db.refresh(document)
+    assert purchase_request.status == "ordered"
+    assert document.current_status == "ORDERED"
+    assert document.completed_at is not None
+
+    purchasing_service.transition_purchase_request_status(
+        db,
+        purchase_request,
+        mock_org.id,
+        "APPROVED",
+        current_user=mock_user,
+        event_type="QUOTATION_REOPENED",
+    )
+    db.refresh(document)
+    assert purchase_request.status == "approved"
+    assert document.current_status == "APPROVED"
+    assert document.completed_at is None
+
+    event_types = set(
+        db.scalars(
+            select(DocumentEvent.event_type).where(
+                DocumentEvent.document_id == document.id
+            )
+        ).all()
+    )
+    assert {"CREATED", "APPROVED", "ORDER_CREATED", "QUOTATION_REOPENED"} <= event_types
+
+
+def test_purchase_quotation_preserves_canonical_document_chain(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    purchase_request = purchasing_service.create_purchase_request(
+        db,
+        current_user=mock_user,
+        request_data=purchasing_schemas.PurchaseRequestCreate(
+            organization_id=mock_org.id,
+            justification="Reposição por processo concorrencial",
+            items=[
+                purchasing_schemas.PurchaseRequestItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("5"),
+                    estimated_unit_price=Decimal("12.50"),
+                )
+            ],
+        ),
+    )
+    purchasing_service.process_approval_action(
+        db,
+        purchase_request.id,
+        mock_user,
+        purchasing_schemas.ApprovalActionRequest(
+            action="approved",
+            comments="Aprovada para cotação",
+        ),
+    )
+
+    quotation = purchasing_service.open_quotation_process(
+        db,
+        current_user=mock_user,
+        request_id=purchase_request.id,
+        notes="Comparar prazo e preço",
+    )
+    quotation_document = db.get(BusinessDocument, quotation.document_id)
+    assert quotation_document is not None
+    assert quotation_document.native_id == quotation.id
+    assert quotation_document.category == "purchase.quotation"
+    assert quotation_document.document_type == "PURCHASE_QUOTATION"
+    assert quotation.quotation_number == quotation_document.document_number
+    assert quotation.quotation_number.startswith(f"RFQ-{datetime.now(UTC).year}-")
+    assert quotation_document.current_status == "OPEN"
+    assert quotation_document.description == quotation.notes
+
+    request_relation = db.scalar(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == purchase_request.document_id,
+            DocumentRelation.child_document_id == quotation.document_id,
+        )
+    )
+    assert request_relation is not None
+
+    supplier = Supplier(
+        organization_id=mock_org.id,
+        name="Distribuidora RFQ",
+        cnpj_cpf=f"{uuid.uuid4().int % 10**14:014d}",
+    )
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    supplier_quote = purchasing_service.add_supplier_quote_to_process(
+        db,
+        current_user=mock_user,
+        quotation_id=quotation.id,
+        quote_data=purchasing_schemas.SupplierQuoteCreate(
+            supplier_id=supplier.id,
+            quote_reference="PROP-RFQ-1",
+            payment_terms="30 DDL",
+            lead_time_days=3,
+            items=[
+                purchasing_schemas.SupplierQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("5"),
+                    unit_price=Decimal("11.90"),
+                )
+            ],
+        ),
+    )
+    db.refresh(quotation_document)
+    assert quotation.status == "analyzing"
+    assert quotation_document.current_status == "ANALYZING"
+
+    order = purchasing_service.select_winner_and_generate_order(
+        db,
+        current_user=mock_user,
+        quotation_id=quotation.id,
+        quote_id=supplier_quote.id,
+        notes="Melhor proposta global",
+    )
+    db.refresh(quotation_document)
+    assert quotation.status == "completed"
+    assert quotation_document.current_status == "COMPLETED"
+    assert quotation_document.completed_at is not None
+
+    order_document = db.scalar(
+        select(BusinessDocument).where(
+            BusinessDocument.document_type == "PURCHASE_ORDER",
+            BusinessDocument.native_id == order.id,
+        )
+    )
+    assert order_document is not None
+    order_relation = db.scalar(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == quotation.document_id,
+            DocumentRelation.child_document_id == order_document.id,
+        )
+    )
+    assert order_relation is not None
+
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="PURCHASE_QUOTATION",
+        native_id=quotation.id,
+    )
+    assert {document.id for document in chain.documents} >= {
+        purchase_request.document_id,
+        quotation.document_id,
+        order_document.id,
+    }
+
+    purchasing_service.reopen_quotation_process(
+        db,
+        current_user=mock_user,
+        quotation_id=quotation.id,
+    )
+    db.refresh(quotation_document)
+    assert quotation.status == "analyzing"
+    assert quotation_document.current_status == "ANALYZING"
+    assert quotation_document.completed_at is None
+
+    event_types = set(
+        db.scalars(
+            select(DocumentEvent.event_type).where(
+                DocumentEvent.document_id == quotation.document_id
+            )
+        ).all()
+    )
+    assert {"CREATED", "SUPPLIER_QUOTE_ADDED", "WINNER_SELECTED", "REOPENED"} <= event_types
+
+
+def test_purchase_order_uses_canonical_document_lifecycle(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    supplier = Supplier(
+        organization_id=mock_org.id,
+        name="Fornecedor do Pedido Canônico",
+        cnpj_cpf=f"{uuid.uuid4().int % 10**14:014d}",
+    )
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    initial_stock = mock_product.current_stock
+    order = purchasing_service.create_purchase_order(
+        db,
+        current_user=mock_user,
+        order_data=purchasing_schemas.PurchaseOrderCreate(
+            organization_id=mock_org.id,
+            buyer_id=mock_user.id,
+            supplier_id=supplier.id,
+            notes="Pedido para reposição controlada",
+            items=[
+                purchasing_schemas.PurchaseOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("2"),
+                    unit_price=Decimal("10.00"),
+                )
+            ],
+        ),
+    )
+    order_document = db.get(BusinessDocument, order.document_id)
+    assert order_document is not None
+    assert order_document.native_id == order.id
+    assert order_document.category == "purchase.order"
+    assert order_document.document_type == "PURCHASE_ORDER"
+    assert order.order_number == order_document.document_number
+    assert order.order_number.startswith(f"PC-{datetime.now(UTC).year}-")
+    assert order_document.current_status == "ISSUED"
+    assert order_document.description == order.notes
+
+    received = purchasing_service.receive_purchase_order_shipment(
+        db,
+        order_id=order.id,
+        current_user=mock_user,
+        data=purchasing_schemas.PurchaseOrderReceive(
+            invoice_number="NF-PC-001",
+            invoice_series="1",
+            invoice_issue_date=date.today(),
+            generate_payable=True,
+            payable_due_date=date.today() + timedelta(days=15),
+            installments_count=2,
+            installment_frequency_days=30,
+            notes="Conferência concluída",
+        ),
+    )
+    db.refresh(order_document)
+    db.refresh(mock_product)
+    assert received.status == "received"
+    assert order_document.current_status == "RECEIVED"
+    assert order_document.completed_at is not None
+    assert "Conferência concluída" in (order_document.description or "")
+    assert mock_product.current_stock == initial_stock + Decimal("2")
+
+    receipt = db.scalar(
+        select(InventoryReceipt).where(InventoryReceipt.purchase_order_id == order.id)
+    )
+    assert receipt is not None
+    assert receipt.receipt_number.startswith(f"REC-{datetime.now(UTC).year}-")
+    assert receipt.invoice_number == "NF-PC-001"
+    receipt_document = db.get(BusinessDocument, receipt.document_id)
+    assert receipt_document is not None
+    assert receipt_document.native_id == receipt.id
+    assert receipt_document.category == "inventory.receipt"
+    assert receipt_document.document_type == "INVENTORY_RECEIPT"
+    assert receipt_document.current_status == "RECEIVED"
+    assert receipt_document.completed_at is not None
+    assert db.scalar(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == order.document_id,
+            DocumentRelation.child_document_id == receipt.document_id,
+            DocumentRelation.relation_type == "FULFILLED_BY",
+        )
+    ) is not None
+    receipt_movements = list(
+        db.scalars(
+            select(StockMovement).where(StockMovement.receipt_id == receipt.id)
+        ).all()
+    )
+    assert len(receipt_movements) == 1
+    assert receipt_movements[0].product_id == mock_product.id
+
+    fiscal_document = db.scalar(
+        select(FiscalDocument).where(FiscalDocument.purchase_order_id == order.id)
+    )
+    assert fiscal_document is not None
+    fiscal_header = db.get(BusinessDocument, fiscal_document.document_id)
+    assert fiscal_header is not None
+    assert fiscal_header.category == "finance.fiscal_document"
+    assert fiscal_header.document_number.startswith(
+        f"DFE-{datetime.now(UTC).year}-"
+    )
+    assert db.scalar(
+        select(DocumentRelation).where(
+            DocumentRelation.parent_document_id == receipt.document_id,
+            DocumentRelation.child_document_id == fiscal_document.document_id,
+            DocumentRelation.relation_type == "DOCUMENTED_BY",
+        )
+    ) is not None
+
+    payables = list(
+        db.scalars(
+            select(Payable)
+            .where(Payable.fiscal_document_id == fiscal_document.id)
+            .order_by(Payable.installment_number)
+        ).all()
+    )
+    assert len(payables) == 2
+    assert [payable.original_amount for payable in payables] == [
+        Decimal("10.00"),
+        Decimal("10.00"),
+    ]
+    assert all(payable.payable_number.startswith("PAG-") for payable in payables)
+    assert all(payable.status == "APPROVED" for payable in payables)
+    assert all(payable.obligation_type == "GOODS_SUPPLIER" for payable in payables)
+    assert all(payable.business_origin == "PURCHASE" for payable in payables)
+    assert all(
+        db.scalar(
+            select(DocumentRelation).where(
+                DocumentRelation.parent_document_id == fiscal_document.document_id,
+                DocumentRelation.child_document_id == payable.document_id,
+                DocumentRelation.relation_type == "GENERATED",
+            )
+        ) is not None
+        for payable in payables
+    )
+
+    chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="PURCHASE_ORDER",
+        native_id=order.id,
+    )
+    chain_document_ids = {document.id for document in chain.documents}
+    assert receipt.document_id in chain_document_ids
+    assert fiscal_document.document_id in chain_document_ids
+    assert {payable.document_id for payable in payables} <= chain_document_ids
+
+    with pytest.raises(HTTPException) as received_cancel_error:
+        purchasing_service.cancel_purchase_order(
+            db,
+            order_id=order.id,
+            organization_id=mock_org.id,
+            current_user=mock_user,
+        )
+    assert received_cancel_error.value.status_code == 400
+
+    cancellable_order = purchasing_service.create_purchase_order(
+        db,
+        current_user=mock_user,
+        order_data=purchasing_schemas.PurchaseOrderCreate(
+            organization_id=mock_org.id,
+            buyer_id=mock_user.id,
+            supplier_id=supplier.id,
+            items=[
+                purchasing_schemas.PurchaseOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("9.50"),
+                )
+            ],
+        ),
+    )
+    cancelled = purchasing_service.cancel_purchase_order(
+        db,
+        order_id=cancellable_order.id,
+        organization_id=mock_org.id,
+        current_user=mock_user,
+    )
+    cancelled_document = db.get(BusinessDocument, cancelled.document_id)
+    assert cancelled.status == "cancelled"
+    assert cancelled_document is not None
+    assert cancelled_document.current_status == "CANCELLED"
+    assert cancelled_document.completed_at is not None
+
+    received_events = set(
+        db.scalars(
+            select(DocumentEvent.event_type).where(
+                DocumentEvent.document_id == order.document_id
+            )
+        ).all()
+    )
+    assert {"CREATED", "RECEIVED"} <= received_events
+
+
+def test_crm_lead_uses_canonical_document_header(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+):
+    lead = crm_service.create_lead(
+        db,
+        mock_org.id,
+        crm_schemas.LeadCreate(
+            name="Hospital Central",
+            company_name="Hospital Central S.A.",
+            status="NEW",
+            notes="Primeiro contato",
+        ),
+        current_user=mock_user,
+    )
+
+    document = db.get(BusinessDocument, lead.document_id)
+    assert document is not None
+    assert document.native_id == lead.id
+    assert document.category == "crm.lead"
+    assert document.document_number.startswith(f"LEAD-{datetime.now(UTC).year}-")
+    assert document.title == lead.name
+    assert document.current_status == lead.status == "NEW"
+    assert document.description == "Primeiro contato"
+    assert document.created_by_id == mock_user.id
+
+    updated = crm_service.update_lead(
+        db,
+        lead.id,
+        mock_org.id,
+        crm_schemas.LeadUpdate(
+            name="Hospital Central Renovado",
+            status="QUALIFIED",
+            notes="Lead qualificado",
+            assigned_to_id=mock_user.id,
+        ),
+        current_user=mock_user,
+    )
+
+    db.refresh(document)
+    assert updated.document_id == document.id
+    assert updated.name == document.title == "Hospital Central Renovado"
+    assert updated.status == document.current_status == "QUALIFIED"
+    assert updated.assigned_to_id == document.responsible_id == mock_user.id
+    assert document.description == "Lead qualificado"
+
+    event_types = set(
+        db.scalars(
+            select(DocumentEvent.event_type).where(
+                DocumentEvent.document_id == document.id
+            )
+        ).all()
+    )
+    assert {"CREATED", "STATUS_CHANGED", "RESPONSIBLE_CHANGED"} <= event_types
 
 
 def test_crm_interaction_lifecycle_edit_and_audit(
@@ -494,16 +1109,185 @@ def test_billing_invoice_creates_receivables_in_finance(db: Session, mock_org: O
     assert invoice.net_amount == Decimal("3150.00")
     assert len(invoice.installments) == 3
     assert invoice.installments[0].amount == Decimal("1050.00")
+    invoice_header = documents_service.get_document(
+        db, invoice.document_id, mock_org.id
+    )
+    assert invoice_header.category == "billing.invoice"
+    assert invoice_header.document_number == invoice.invoice_number
+
+    fiscal = db.get(FiscalDocument, invoice.fiscal_document_id)
+    assert fiscal is not None
+    assert fiscal.direction == "OUTBOUND"
+    assert fiscal.status == "draft"
 
     # 2. Valida se gerou automaticamente as contas a receber no Financeiro
     receivables = finance_service.list_receivables(db, mock_org.id)
     assert len(receivables) >= 3
     assert receivables[0].customer_name == "Empresa Cliente S.A."
     assert sum([r.original_amount for r in receivables]) == Decimal("3150.00")
+    assert {r.invoice_installment_id for r in receivables} == {
+        installment.id for installment in invoice.installments
+    }
+    assert all(r.document_id and r.receivable_number for r in receivables)
+
+    relation_pairs = set(
+        db.execute(
+            select(
+                DocumentRelation.parent_document_id,
+                DocumentRelation.child_document_id,
+            ).where(DocumentRelation.organization_id == mock_org.id)
+        ).all()
+    )
+    assert (invoice.document_id, fiscal.document_id) in relation_pairs
+    assert all((fiscal.document_id, r.document_id) in relation_pairs for r in receivables)
+
+
+def test_billing_invoice_update_propagates_to_open_receivables_and_can_cancel(
+    db: Session, mock_org: Organization, mock_user: User
+):
+    original_due_date = date.today() + timedelta(days=15)
+    invoice = billing_service.create_invoice(
+        db,
+        mock_org.id,
+        mock_user,
+        billing_schemas.InvoiceCreate(
+            customer_name="Cliente Original Ltda",
+            total_amount=Decimal("600.00"),
+            issue_date=date.today(),
+            due_date=original_due_date,
+            installments_count=2,
+        ),
+    )
+
+    updated = billing_service.update_invoice(
+        db,
+        mock_org.id,
+        invoice.id,
+        mock_user,
+        billing_schemas.InvoiceUpdate(
+            customer_name="Cliente Atualizado Ltda",
+            due_date=original_due_date + timedelta(days=10),
+            notes="Prazo renegociado antes do recebimento",
+        ),
+    )
+    assert updated.customer_name == "Cliente Atualizado Ltda"
+    assert updated.due_date == original_due_date + timedelta(days=10)
+    assert [item.due_date for item in updated.installments] == [
+        original_due_date + timedelta(days=10),
+        original_due_date + timedelta(days=40),
+    ]
+    receivables = finance_service.list_receivables(db, mock_org.id)
+    invoice_receivables = [
+        item
+        for item in receivables
+        if item.invoice_installment_id in {part.id for part in updated.installments}
+    ]
+    assert {item.customer_name for item in invoice_receivables} == {
+        "Cliente Atualizado Ltda"
+    }
+    assert {item.due_date for item in invoice_receivables} == {
+        original_due_date + timedelta(days=10),
+        original_due_date + timedelta(days=40),
+    }
+
+    cancelled = billing_service.cancel_invoice(
+        db,
+        mock_org.id,
+        invoice.id,
+        mock_user,
+        billing_schemas.InvoiceCancel(reason="Venda desfeita pelo cliente"),
+    )
+    assert cancelled.status == "CANCELLED"
+    assert {item.status for item in cancelled.installments} == {"CANCELLED"}
+    assert {item.status for item in invoice_receivables} == {"CANCELLED"}
+    fiscal = db.get(FiscalDocument, cancelled.fiscal_document_id)
+    assert fiscal.status == "cancelled"
+    header = documents_service.get_document(db, cancelled.document_id, mock_org.id)
+    assert header.current_status == "CANCELLED"
+    assert "INVOICE_UPDATED" in {
+        event.event_type for event in header.events
+    }
+    assert "INVOICE_CANCELLED" in {
+        event.event_type for event in header.events
+    }
+
+
+def test_receipts_update_installment_and_invoice_status(
+    db: Session, mock_org: Organization, mock_user: User
+):
+    invoice = billing_service.create_invoice(
+        db,
+        mock_org.id,
+        mock_user,
+        billing_schemas.InvoiceCreate(
+            customer_name="Cliente com Parcelas",
+            total_amount=Decimal("200.00"),
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=10),
+            installments_count=2,
+            generate_outbound_fiscal_document=False,
+        ),
+    )
+    receivables = {
+        item.invoice_installment_id: item
+        for item in finance_service.list_receivables(db, mock_org.id)
+        if item.invoice_installment_id in {part.id for part in invoice.installments}
+    }
+
+    first = receivables[invoice.installments[0].id]
+    finance_service.register_receipt(
+        db,
+        mock_org.id,
+        first.id,
+        mock_user,
+        finance_schemas.ReceiptCreate(
+            amount=Decimal("40.00"),
+            receipt_date=date.today(),
+        ),
+    )
+    refreshed = billing_service.get_invoice(db, mock_org.id, invoice.id)
+    assert refreshed.status == "PARTIALLY_RECEIVED"
+    assert refreshed.installments[0].status == "PARTIALLY_RECEIVED"
+
+    finance_service.register_receipt(
+        db,
+        mock_org.id,
+        first.id,
+        mock_user,
+        finance_schemas.ReceiptCreate(
+            amount=Decimal("60.00"),
+            receipt_date=date.today(),
+        ),
+    )
+    second = receivables[invoice.installments[1].id]
+    finance_service.register_receipt(
+        db,
+        mock_org.id,
+        second.id,
+        mock_user,
+        finance_schemas.ReceiptCreate(
+            amount=Decimal("100.00"),
+            receipt_date=date.today(),
+        ),
+    )
+    paid = billing_service.get_invoice(db, mock_org.id, invoice.id)
+    assert paid.status == "PAID"
+    assert {item.status for item in paid.installments} == {"PAID"}
+
+    with pytest.raises(HTTPException) as edit_error:
+        billing_service.update_invoice(
+            db,
+            mock_org.id,
+            invoice.id,
+            mock_user,
+            billing_schemas.InvoiceUpdate(customer_name="Nome inválido após baixa"),
+        )
+    assert edit_error.value.status_code == 400
 
 
 def test_identity_contact_and_sales_customer_relationship(db: Session, mock_org: Organization):
-    from controlb.modules.identity import service as id_service, schemas as id_schemas
+    from controlb.modules.identity import schemas as id_schemas
+    from controlb.modules.identity import service as id_service
 
     # 1. Cria Contato Institucional no Módulo Identity
     contact = id_service.create_contact(
@@ -628,6 +1412,139 @@ def test_quote_conversion_to_order(db: Session, mock_org: Organization, mock_use
             mock_user,
         )
     assert delete_exc.value.status_code == 409
+
+
+def test_sales_quote_uses_canonical_document_header(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    def create_quote(customer_name: str):
+        return sales_service.create_sales_quote(
+            db,
+            mock_org.id,
+            mock_user,
+            sales_schemas.SalesQuoteCreate(
+                customer_name=customer_name,
+                items=[
+                    sales_schemas.SalesQuoteItemCreate(
+                        product_id=mock_product.id,
+                        quantity=Decimal("1"),
+                        unit_price=Decimal("10.00"),
+                    )
+                ],
+            ),
+        )
+
+    first_quote = create_quote("Cliente Canônico A")
+    second_quote = create_quote("Cliente Canônico B")
+    first_document = db.get(BusinessDocument, first_quote.document_id)
+
+    assert first_document is not None
+    assert first_quote.quote_number == first_document.document_number
+    assert first_quote.quote_number.endswith("-0001")
+    assert second_quote.quote_number.endswith("-0002")
+    assert first_document.category == "sales.quotation"
+    assert first_document.current_status == "DRAFT"
+    assert first_document.responsible_id == mock_user.id
+    assert first_document.issued_at == first_quote.created_at
+    assert db.scalar(
+        select(DocumentSequence).where(
+            DocumentSequence.organization_id == mock_org.id,
+            DocumentSequence.category == "sales.quotation",
+        )
+    ) is not None
+
+    # Simula divergência legada: a leitura deve restaurar a projeção a partir
+    # do cabeçalho central, nunca sobrescrever BusinessDocument com o legado.
+    first_quote.quote_number = "LEGACY-INVALID"
+    first_quote.status = "SENT"
+    db.flush()
+
+    projected_quote = sales_service.get_sales_quote(db, first_quote.id, mock_org.id)
+    assert projected_quote.quote_number == first_document.document_number
+    assert projected_quote.status == "DRAFT"
+    assert first_document.current_status == "DRAFT"
+
+    sales_service.update_sales_quote(
+        db,
+        first_quote.id,
+        mock_org.id,
+        sales_schemas.SalesQuoteUpdate(customer_name="Cliente Canônico Atualizado"),
+        mock_user,
+    )
+    assert first_document.title.endswith("Cliente Canônico Atualizado")
+
+    transitioned_quote = sales_service.update_sales_quote_status(
+        db,
+        first_quote.id,
+        mock_org.id,
+        "SENT",
+        mock_user,
+    )
+    assert transitioned_quote.status == "SENT"
+    assert first_document.current_status == "SENT"
+
+
+def test_sales_order_uses_canonical_document_header(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    def create_order(customer_name: str):
+        return sales_service.create_sales_order(
+            db,
+            mock_org.id,
+            mock_user,
+            sales_schemas.SalesOrderCreate(
+                customer_name=customer_name,
+                items=[
+                    sales_schemas.SalesOrderItemCreate(
+                        product_id=mock_product.id,
+                        quantity=Decimal("1"),
+                        unit_price=Decimal("10.00"),
+                    )
+                ],
+            ),
+        )
+
+    first_order = create_order("Cliente Pedido Canônico A")
+    second_order = create_order("Cliente Pedido Canônico B")
+    first_document = db.get(BusinessDocument, first_order.document_id)
+
+    assert first_document is not None
+    assert first_order.order_number == first_document.document_number
+    assert first_order.order_number.endswith("-0001")
+    assert second_order.order_number.endswith("-0002")
+    assert first_document.category == "sales.order"
+    assert first_document.current_status == "CONFIRMED"
+    assert first_document.responsible_id == mock_user.id
+    assert first_document.issued_at == first_order.created_at
+
+    first_order.order_number = "LEGACY-ORDER-INVALID"
+    first_order.status = "COMPLETED"
+    db.flush()
+
+    projected_order = sales_service.get_sales_order(db, first_order.id, mock_org.id)
+    assert projected_order.order_number == first_document.document_number
+    assert projected_order.status == "CONFIRMED"
+
+    transitioned_order = sales_service.update_sales_order_status(
+        db,
+        first_order.id,
+        mock_org.id,
+        sales_schemas.SalesOrderUpdate(
+            customer_name="Cliente Pedido Canônico Atualizado",
+            status="COMPLETED",
+        ),
+        mock_user,
+    )
+    assert transitioned_order.status == "COMPLETED"
+    assert first_document.current_status == "COMPLETED"
+    assert first_document.completed_at is not None
+    assert first_document.title.endswith("Cliente Pedido Canônico Atualizado")
 
 
 def test_quote_conversion_rolls_back_as_single_unit(
@@ -802,7 +1719,12 @@ def test_terminal_order_cannot_be_cancelled(
             ],
         ),
     )
-    setattr(order, field_name, terminal_value)
+    if field_name == "status":
+        order_document = db.get(BusinessDocument, order.document_id)
+        assert order_document is not None
+        order_document.current_status = terminal_value
+    else:
+        setattr(order, field_name, terminal_value)
     db.commit()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1285,17 +2207,47 @@ def test_order_status_update_and_request_billing_lifecycle(
         mock_user
     )
     assert updated_order.delivery_status == "DISPATCHED"
+    dispatched_stock = db.get(Product, mock_product.id).current_stock
 
     # 4. Solicitar faturamento do pedido
-    billed_order = sales_service.request_order_billing(
+    requested_order = sales_service.request_order_billing(
         db,
         order.id,
         mock_org.id,
         mock_user
     )
-    assert billed_order.billing_status == "INVOICED"
+    assert requested_order.billing_status == "REQUESTED"
+    assert db.get(Product, mock_product.id).current_stock == dispatched_stock
 
-    # 5. Validação da cadeia documental
+    pending_chain = documents_service.get_document_chain(
+        db,
+        organization_id=mock_org.id,
+        document_type="SALES_ORDER",
+        native_id=order.id,
+    )
+    billing_request_document = next(
+        document for document in pending_chain.documents
+        if document.document_type == "BILLING_REQUEST"
+    )
+    assert billing_request_document.current_status == "REQUESTED"
+    assert all(document.document_type != "INVOICE" for document in pending_chain.documents)
+
+    invoice = billing_service.process_billing_request(
+        db,
+        mock_org.id,
+        billing_request_document.id,
+        mock_user,
+        billing_schemas.BillingRequestIssue(
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=30),
+        ),
+    )
+    db.refresh(order)
+    assert order.billing_status == "INVOICED"
+    assert len(invoice.items) == 1
+    assert invoice.items[0].quantity == Decimal("10.0000")
+
+    # 5. Validação da cadeia documental após o Faturamento processar a fila
     chain = documents_service.get_document_chain(
         db,
         organization_id=mock_org.id,
@@ -1303,8 +2255,202 @@ def test_order_status_update_and_request_billing_lifecycle(
         native_id=order.id
     )
     assert chain.root_document_id is not None
-    assert len(chain.documents) >= 2
-    assert any(d.document_type == "INVOICE" for d in chain.documents)
+    document_by_type = {d.document_type: d for d in chain.documents}
+    assert "BILLING_REQUEST" in document_by_type
+    assert "INVOICE" in document_by_type
+    assert any(d.document_type == "DELIVERY" for d in chain.documents)
+    assert "FISCAL_DOCUMENT" in document_by_type
+    assert "RECEIVABLE" in document_by_type
+
+    relation_edges = {
+        (relation.parent_document_id, relation.child_document_id, relation.relation_type)
+        for relation in chain.relations
+    }
+    assert (
+        order.document_id,
+        document_by_type["BILLING_REQUEST"].id,
+        "GENERATED",
+    ) in relation_edges
+    assert (
+        document_by_type["BILLING_REQUEST"].id,
+        document_by_type["INVOICE"].id,
+        "GENERATED",
+    ) in relation_edges
+    assert (
+        document_by_type["INVOICE"].id,
+        document_by_type["FISCAL_DOCUMENT"].id,
+        "DOCUMENTED_BY",
+    ) in relation_edges
+    assert any(
+        parent_id == document_by_type["FISCAL_DOCUMENT"].id
+        and child_id == document_by_type["RECEIVABLE"].id
+        and relation_type == "GENERATED"
+        for parent_id, child_id, relation_type in relation_edges
+    )
+
+    billing_request = db.get(
+        BusinessDocument, document_by_type["BILLING_REQUEST"].id
+    )
+    assert billing_request.current_status == "COMPLETED"
+    assert {
+        event.event_type
+        for event in billing_request.events
+    } >= {"CREATED", "INVOICE_CREATED"}
+
+    cancelled_invoice = billing_service.cancel_invoice(
+        db,
+        mock_org.id,
+        document_by_type["INVOICE"].native_id,
+        mock_user,
+        billing_schemas.InvoiceCancel(reason="Correção comercial para refaturamento"),
+    )
+    db.refresh(order)
+    db.refresh(billing_request)
+    assert cancelled_invoice.status == "CANCELLED"
+    assert order.billing_status == "PENDING"
+    assert billing_request.current_status == "CANCELLED"
+    order_header = db.get(BusinessDocument, order.document_id)
+    assert "BILLING_REOPENED" in {
+        event.event_type for event in order_header.events
+    }
+
+
+def test_partial_billing_preserves_item_balance_and_is_idempotent(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente Faturamento Parcial",
+            payment_terms="30 DDL",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("10"),
+                    unit_price=Decimal("50.00"),
+                )
+            ],
+        ),
+    )
+    sales_service.request_order_billing(db, order.id, mock_org.id, mock_user)
+    first_request = next(
+        request for request in billing_service.list_billing_requests(db, mock_org.id)
+        if str(request.payload.get("sales_order_id")) == str(order.id)
+        and request.current_status == "REQUESTED"
+    )
+
+    first_invoice = billing_service.process_billing_request(
+        db,
+        mock_org.id,
+        first_request.id,
+        mock_user,
+        billing_schemas.BillingRequestIssue(
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=30),
+            items=[
+                billing_schemas.InvoiceItemCreate(
+                    sales_order_item_id=order.items[0].id,
+                    quantity=Decimal("6"),
+                )
+            ],
+        ),
+    )
+    db.refresh(order)
+    assert first_invoice.total_amount == Decimal("300.00")
+    assert first_invoice.items[0].quantity == Decimal("6.0000")
+    assert order.billing_status == "PARTIALLY_INVOICED"
+
+    repeated = billing_service.process_billing_request(
+        db,
+        mock_org.id,
+        first_request.id,
+        mock_user,
+        billing_schemas.BillingRequestIssue(
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=30),
+        ),
+    )
+    assert repeated.id == first_invoice.id
+
+    sales_service.request_order_billing(db, order.id, mock_org.id, mock_user)
+    second_request = next(
+        request for request in billing_service.list_billing_requests(db, mock_org.id)
+        if str(request.payload.get("sales_order_id")) == str(order.id)
+        and request.current_status == "REQUESTED"
+    )
+    second_invoice = billing_service.process_billing_request(
+        db,
+        mock_org.id,
+        second_request.id,
+        mock_user,
+        billing_schemas.BillingRequestIssue(
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=30),
+        ),
+    )
+    db.refresh(order)
+    assert second_invoice.total_amount == Decimal("200.00")
+    assert second_invoice.items[0].quantity == Decimal("4.0000")
+    assert order.billing_status == "INVOICED"
+
+    billing_service.cancel_invoice(
+        db,
+        mock_org.id,
+        second_invoice.id,
+        mock_user,
+        billing_schemas.InvoiceCancel(reason="Refaturar saldo remanescente"),
+    )
+    db.refresh(order)
+    assert order.billing_status == "PARTIALLY_INVOICED"
+
+
+def test_pending_billing_request_blocks_duplicates_and_can_be_cancelled(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente Solicitação Cancelável",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("80.00"),
+                )
+            ],
+        ),
+    )
+    sales_service.request_order_billing(db, order.id, mock_org.id, mock_user)
+    with pytest.raises(HTTPException) as duplicate:
+        sales_service.request_order_billing(db, order.id, mock_org.id, mock_user)
+    assert duplicate.value.status_code == 409
+
+    request = next(
+        item for item in billing_service.list_billing_requests(db, mock_org.id)
+        if str(item.payload.get("sales_order_id")) == str(order.id)
+        and item.current_status == "REQUESTED"
+    )
+    cancelled = billing_service.cancel_billing_request(
+        db,
+        mock_org.id,
+        request.id,
+        mock_user,
+        billing_schemas.BillingRequestCancel(reason="Pedido será revisado"),
+    )
+    db.refresh(order)
+    assert cancelled.current_status == "CANCELLED"
+    assert cancelled.payload["cancellation_reason"] == "Pedido será revisado"
+    assert order.billing_status == "PENDING"
 
 
 def test_order_update_persists_editable_commercial_fields(
@@ -1889,13 +3035,13 @@ def test_credit_exposure_approval_and_operational_blocking(
     assert decided.order.credit_status == "APPROVED"
     assert sales_schemas.CreditApprovalResponse.model_validate(decided).order.order_number
 
-    billed = sales_service.request_order_billing(
+    requested = sales_service.request_order_billing(
         db,
         second_order.id,
         mock_org.id,
         mock_user,
     )
-    assert billed.billing_status == "INVOICED"
+    assert requested.billing_status == "REQUESTED"
 
     chain = documents_service.get_document_chain(
         db,
@@ -1917,7 +3063,8 @@ def test_identity_contact_partner_odoo_pattern_and_role_filtering(db, mock_org, 
     4. Filtragem especializada por papéis de módulo (is_customer vs is_supplier)
     5. Busca por múltiplos campos e proteção contra documento duplicado
     """
-    from controlb.modules.identity import service as identity_service, schemas as identity_schemas
+    from controlb.modules.identity import schemas as identity_schemas
+    from controlb.modules.identity import service as identity_service
 
     # 1. Cria Contato Cliente
     client_contact = identity_service.create_contact(

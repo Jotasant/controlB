@@ -11,6 +11,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ShoppingBag, FileText, RefreshCw, Search,
   Trash2, Users, Plus, Target, DollarSign,
@@ -28,7 +29,8 @@ import {
 import {
   SalesOrder, SalesQuote, Product,
   Customer, SalesGoal, PriceTable, SalesReturn, SalesAnalytics,
-  BusinessDocumentChain, SellerResponse, CreditApprovalRequest, CommercialApprovalRequest
+  BusinessDocumentChain, SellerResponse, CreditApprovalRequest, CommercialApprovalRequest,
+  InventoryDelivery, StockReservation
 } from '@/types';
 import { formatCurrency, formatQuantity } from '@/utils/formatters';
 import { Modal } from '@/components/Modal/Modal';
@@ -41,6 +43,11 @@ import { OrderModal } from '@/components/OrderModal/OrderModal';
 import { CommercialTeamsSettings } from '@/components/CommercialTeamsSettings/CommercialTeamsSettings';
 import { CommercialPoliciesSettings } from '@/components/CommercialPoliciesSettings/CommercialPoliciesSettings';
 import { useToast } from '@/components/Toast/ToastContext';
+import { BulkActionsBar } from '@/components/BulkActionsBar';
+import { ListPagination } from '@/components/ListPagination';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { useListPagination } from '@/hooks/useListPagination';
+import { DocumentLink, RecordLink, useRecordDeepLink, isRequestedView, parseRecordReference } from '@/components/RecordLink';
 import './Sales.scss';
 
 type ActiveSalesTab =
@@ -54,9 +61,15 @@ type ActiveSalesTab =
   | 'analytics'
   | 'settings';
 
+const ALLOWED_SALES_TABS: readonly ActiveSalesTab[] = [
+  'quotes', 'orders', 'approvals', 'deliveries', 'customers', 'commercial', 'post_sales', 'analytics', 'settings'
+];
+
 export const Sales: React.FC = () => {
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<ActiveSalesTab>('quotes');
+  const [searchParams] = useSearchParams();
+  const initialTab = isRequestedView(searchParams, ALLOWED_SALES_TABS, 'quotes');
+  const [activeTab, setActiveTab] = useState<ActiveSalesTab>(initialTab);
   const [loading, setLoading] = useState<boolean>(true);
 
   // --- DADOS DO SERVIDOR ---
@@ -71,6 +84,10 @@ export const Sales: React.FC = () => {
   const [sellers, setSellers] = useState<SellerResponse[]>([]);
   const [creditApprovals, setCreditApprovals] = useState<CreditApprovalRequest[]>([]);
   const [commercialApprovals, setCommercialApprovals] = useState<CommercialApprovalRequest[]>([]);
+  const quoteSelection = useBulkSelection<SalesQuote>();
+  const orderSelection = useBulkSelection<SalesOrder>();
+  const customerSelection = useBulkSelection<Customer>();
+  const returnSelection = useBulkSelection<SalesReturn>();
 
   // --- FILTROS E BUSCAS GLOBAIS POR ABA ---
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -192,6 +209,13 @@ export const Sales: React.FC = () => {
   // ESTADOS: 5. PÓS-VENDA (DEVOLUÇÕES / TROCAS)
   // =========================================================================
   const [isReturnModalOpen, setIsReturnModalOpen] = useState<boolean>(false);
+  const [selectedReturn, setSelectedReturn] = useState<SalesReturn | null>(null);
+  const [logisticsDetail, setLogisticsDetail] = useState<
+    | { kind: 'DELIVERY'; record: InventoryDelivery }
+    | { kind: 'STOCK_RESERVATION'; record: StockReservation }
+    | null
+  >(null);
+  const [logisticsDetailError, setLogisticsDetailError] = useState<string | null>(null);
   const [retCustomerName, setRetCustomerName] = useState<string>('');
   const [retType, setRetType] = useState<'DEVOLUCAO' | 'TROCA' | 'CANCELAMENTO'>('DEVOLUCAO');
   const [retReason, setRetReason] = useState<string>('Defeito de fábrica');
@@ -213,6 +237,12 @@ export const Sales: React.FC = () => {
   const fmtCurrency = (val: number | string | undefined | null): string => {
     return formatCurrency(safeNumber(val));
   };
+  const billingStatusLabel = (value: SalesOrder['billing_status']) => ({
+    PENDING: 'Não solicitado',
+    REQUESTED: 'Solicitado',
+    PARTIALLY_INVOICED: 'Parcialmente faturado',
+    INVOICED: 'Faturado'
+  }[value]);
 
   const fmtPercent = (val: number | string | undefined | null): string => {
     return `${safeNumber(val).toFixed(1)}%`;
@@ -412,7 +442,7 @@ export const Sales: React.FC = () => {
     setBillingOrderId(order.id);
     try {
       await salesService.requestOrderBilling(order.id);
-      triggerSuccess(`Faturamento do Pedido #${order.order_number} gerado com sucesso! Títulos a receber criados no Financeiro.`);
+      triggerSuccess(`Pedido #${order.order_number} enviado para a fila do Faturamento.`);
       loadAllData();
     } catch (err: any) {
       toast.error(formatApiError(err, "Erro ao solicitar faturamento do pedido."));
@@ -576,6 +606,71 @@ export const Sales: React.FC = () => {
     setEditingCustomer(customer || null);
     setIsCustomerModalOpen(true);
   };
+
+  useRecordDeepLink({
+    types: ['CUSTOMER', 'CLIENT'],
+    records: customers,
+    onOpen: (customer) => {
+      setActiveTab('customers');
+      handleOpenCustomerModal(customer);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['SALES_QUOTE', 'QUOTE'],
+    records: quotes,
+    onOpen: (quote) => {
+      setActiveTab('quotes');
+      handleOpenQuoteModal(quote);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['SALES_ORDER', 'ORDER'],
+    records: orders,
+    onOpen: (order) => {
+      setActiveTab('orders');
+      handleOpenOrderModal(order);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['SALES_RETURN'],
+    records: salesReturns,
+    onOpen: (salesReturn) => {
+      setActiveTab('post_sales');
+      setSelectedReturn(salesReturn);
+    },
+  });
+
+  const requestedRecord = parseRecordReference(searchParams);
+  const requestedLogisticsType = requestedRecord?.type === 'DELIVERY'
+    || requestedRecord?.type === 'STOCK_RESERVATION'
+    ? requestedRecord.type
+    : null;
+  const requestedLogisticsId = requestedLogisticsType ? requestedRecord?.id || '' : '';
+
+  useEffect(() => {
+    if (!requestedLogisticsType || !requestedLogisticsId) return;
+    let cancelled = false;
+    setActiveTab('deliveries');
+    setLogisticsDetailError(null);
+
+    const handleError = (error: unknown) => {
+      if (!cancelled) setLogisticsDetailError(formatApiError(error, 'Não foi possível abrir o registro logístico.'));
+    };
+    if (requestedLogisticsType === 'DELIVERY') {
+      inventoryService.getInventoryDelivery(requestedLogisticsId)
+        .then(record => { if (!cancelled) setLogisticsDetail({ kind: 'DELIVERY', record }); })
+        .catch(handleError);
+    } else {
+      inventoryService.getStockReservation(requestedLogisticsId)
+        .then(record => { if (!cancelled) setLogisticsDetail({ kind: 'STOCK_RESERVATION', record }); })
+        .catch(handleError);
+    }
+
+    return () => { cancelled = true; };
+  }, [requestedLogisticsId, requestedLogisticsType]);
 
   const handleDeleteCustomer = (customer: Customer) => {
     openConfirm({
@@ -867,6 +962,39 @@ export const Sales: React.FC = () => {
     });
   }, [salesReturns, searchTerm, typeFilter]);
 
+  const quotePagination = useListPagination(filteredQuotes);
+  const orderPagination = useListPagination(filteredOrders);
+  const customerPagination = useListPagination(filteredCustomers);
+  const returnPagination = useListPagination(filteredReturns);
+  const cancellableOrdersOnPage = orderPagination.pageItems.filter(order => (
+    order.status !== 'CANCELLED' && order.status !== 'COMPLETED' && order.billing_status === 'PENDING'
+  ));
+
+  const openBulkAction = (
+    label: string,
+    ids: string[],
+    action: (id: string) => Promise<unknown>,
+    clearSelection: () => void,
+  ) => {
+    if (ids.length === 0) return;
+    openConfirm({
+      title: `${label} em massa`,
+      message: `Confirma a operação em ${ids.length} registro(s) selecionado(s)? As regras individuais de cada registro serão preservadas.`,
+      type: 'danger',
+      confirmText: `${label} selecionados`,
+      onConfirm: async () => {
+        const results = await Promise.allSettled(ids.map(action));
+        const succeeded = results.filter(result => result.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        clearSelection();
+        closeConfirm();
+        if (failed) toast.warning(`${succeeded} registro(s) processado(s); ${failed} não atenderam às regras da operação.`, 'Operação parcial');
+        else triggerSuccess(`${succeeded} registro(s) processado(s) com sucesso.`);
+        await loadAllData(true);
+      },
+    });
+  };
+
   return (
     <div className="sales-page">
       <div className="sales-layout">
@@ -1107,10 +1235,20 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar
+                selectedCount={quoteSelection.selectedCount}
+                resourceName={{ singular: 'cotação', plural: 'cotações' }}
+                onClear={quoteSelection.clearSelection}
+                onDelete={() => openBulkAction('Cancelar', quoteSelection.selectedIdList, salesService.deleteQuote, quoteSelection.clearSelection)}
+                deleteLabel="Cancelar selecionadas"
+              />
               <div className="table-container ui-table-wrap">
                 <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell">
+                        <input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar cotações desta página" checked={quoteSelection.isAllSelected(quotePagination.pageItems)} onChange={() => quoteSelection.toggleSelectAll(quotePagination.pageItems)} />
+                      </th>
                       <th>Cotação</th>
                       <th>Cliente</th>
                       <th>Emissão</th>
@@ -1123,22 +1261,28 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredQuotes.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="empty-state ui-empty-state">
+                        <td colSpan={8} className="empty-state ui-empty-state">
                           Nenhuma cotação comercial encontrada.
                         </td>
                       </tr>
                     ) : (
-                      filteredQuotes.map(q => (
+                      quotePagination.pageItems.map(q => (
                         <tr
                           key={q.id}
                           onClick={() => handleOpenQuoteModal(q)}
-                          style={{ cursor: 'pointer' }}
+                          className={`ui-record-row ${quoteSelection.isSelected(q.id) ? 'ui-record-row--selected' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenQuoteModal(q); } }}
                           title="Clique na linha para abrir/visualizar a cotação"
                         >
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar cotação ${q.quote_number}`} checked={quoteSelection.isSelected(q.id)} onClick={(event) => event.stopPropagation()} onChange={() => quoteSelection.toggleSelect(q.id)} /></td>
                           <td><strong>#{q.quote_number}</strong></td>
                           <td>
                             <div className="cell-client">
-                              <span className="client-name">{q.customer_name}</span>
+                              <RecordLink type="CUSTOMER" id={q.customer_id} className="client-name">
+                                {q.customer_name}
+                              </RecordLink>
                               {q.customer_document && <span className="client-doc">{q.customer_document}</span>}
                             </div>
                           </td>
@@ -1269,6 +1413,7 @@ export const Sales: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...quotePagination} onPageChange={quotePagination.setPage} onPageSizeChange={quotePagination.setPageSize} />
               </div>
             </div>
           )}
@@ -1299,10 +1444,18 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar
+                selectedCount={orderSelection.selectedCount}
+                resourceName={{ singular: 'pedido', plural: 'pedidos' }}
+                onClear={orderSelection.clearSelection}
+                onDelete={() => openBulkAction('Cancelar', orderSelection.selectedIdList, (id) => salesService.deleteOrder(id, 'Cancelamento em massa'), orderSelection.clearSelection)}
+                deleteLabel="Cancelar selecionados"
+              />
               <div className="table-container ui-table-wrap">
                 <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar pedidos canceláveis desta página" checked={orderSelection.isAllSelected(cancellableOrdersOnPage)} onChange={() => orderSelection.toggleSelectAll(cancellableOrdersOnPage)} /></th>
                       <th>Pedido</th>
                       <th>Cliente</th>
                       <th>Emissão</th>
@@ -1318,22 +1471,28 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredOrders.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="empty-state ui-empty-state">
+                        <td colSpan={11} className="empty-state ui-empty-state">
                           Nenhum pedido de venda encontrado.
                         </td>
                       </tr>
                     ) : (
-                      filteredOrders.map(o => (
+                      orderPagination.pageItems.map(o => (
                         <tr
                           key={o.id}
                           onClick={() => handleOpenOrderModal(o)}
-                          style={{ cursor: 'pointer' }}
+                          className={`ui-record-row ${orderSelection.isSelected(o.id) ? 'ui-record-row--selected' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenOrderModal(o); } }}
                           title="Clique na linha para abrir/editar o pedido"
                         >
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar pedido ${o.order_number}`} disabled={o.status === 'CANCELLED' || o.status === 'COMPLETED' || o.billing_status !== 'PENDING'} checked={orderSelection.isSelected(o.id)} onClick={(event) => event.stopPropagation()} onChange={() => orderSelection.toggleSelect(o.id)} /></td>
                           <td><strong>#{o.order_number}</strong></td>
                           <td>
                             <div className="cell-client">
-                              <span className="client-name">{o.customer_name}</span>
+                              <RecordLink type="CUSTOMER" id={o.customer_id} className="client-name">
+                                {o.customer_name}
+                              </RecordLink>
                               {o.customer_document && <span className="client-doc">{o.customer_document}</span>}
                             </div>
                           </td>
@@ -1353,8 +1512,8 @@ export const Sales: React.FC = () => {
                             </span>
                           </td>
                           <td>
-                            <span className={`status-pill ui-status ${o.billing_status === 'INVOICED' ? 'success' : 'warning'}`}>
-                              {o.billing_status === 'INVOICED' ? 'Faturado' : 'Aguardando'}
+                            <span className={`status-pill ui-status ${o.billing_status === 'INVOICED' ? 'success' : o.billing_status === 'PARTIALLY_INVOICED' ? 'info' : 'warning'}`}>
+                              {billingStatusLabel(o.billing_status)}
                             </span>
                           </td>
                           <td>
@@ -1409,8 +1568,8 @@ export const Sales: React.FC = () => {
                                 )}
                               </Can>
 
-                              {/* Ação 2: Faturamento Direto */}
-                              {o.billing_status === 'PENDING' && o.status !== 'CANCELLED'
+                              {/* Ação 2: Solicitação ao domínio de Faturamento */}
+                              {['PENDING', 'PARTIALLY_INVOICED'].includes(o.billing_status) && o.status !== 'CANCELLED'
                                 && !['PENDING', 'REJECTED'].includes(o.credit_status)
                                 && !['PENDING', 'REJECTED'].includes(o.commercial_approval_status) && (
                                 <button
@@ -1418,10 +1577,10 @@ export const Sales: React.FC = () => {
                                   className="table-action-btn ui-table-action primary"
                                   onClick={(e) => { e.stopPropagation(); void handleRequestBilling(o); }}
                                   disabled={billingOrderId === o.id}
-                                  title="Emitir fatura e gerar contas a receber no Financeiro"
+                                  title="Enviar o saldo do pedido para a fila do Faturamento"
                                 >
                                   <DollarSign size={14} />
-                                  {billingOrderId === o.id ? 'Faturando...' : 'Faturar'}
+                                  {billingOrderId === o.id ? 'Solicitando...' : 'Solicitar faturamento'}
                                 </button>
                               )}
 
@@ -1459,7 +1618,7 @@ export const Sales: React.FC = () => {
                               </button>
 
                               {/* Ação 5: Cancelar */}
-                              {o.status !== 'CANCELLED' && o.status !== 'COMPLETED' && o.billing_status !== 'INVOICED' && (
+                              {o.status !== 'CANCELLED' && o.status !== 'COMPLETED' && o.billing_status === 'PENDING' && (
                                 <button
                                   type="button"
                                   className="table-action-btn ui-table-action danger"
@@ -1476,6 +1635,7 @@ export const Sales: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...orderPagination} onPageChange={orderPagination.setPage} onPageSizeChange={orderPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -1522,8 +1682,16 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredCreditApprovals.map(item => (
                       <tr key={item.id}>
-                        <td><strong>#{item.order.order_number}</strong></td>
-                        <td>{item.order.customer_name}</td>
+                        <td>
+                          <RecordLink type="SALES_ORDER" id={item.order.id}>
+                            <strong>#{item.order.order_number}</strong>
+                          </RecordLink>
+                        </td>
+                        <td>
+                          <RecordLink type="CUSTOMER" id={item.order.customer_id}>
+                            {item.order.customer_name}
+                          </RecordLink>
+                        </td>
                         <td>{fmtCurrency(item.credit_limit)}</td>
                         <td>{fmtCurrency(item.exposure_before_order)}</td>
                         <td><strong>{fmtCurrency(item.order_amount)}</strong></td>
@@ -1602,10 +1770,28 @@ export const Sales: React.FC = () => {
                       const typeLabel = item.approval_type === 'DISCOUNT'
                         ? 'Desconto' : item.approval_type === 'MARGIN' ? 'Margem' : 'Prazo';
                       const suffix = item.approval_type === 'PAYMENT_TERM' ? ' dias' : '%';
+                      const customerId = item.quote?.customer_id || item.order?.customer_id;
                       return (
                         <tr key={item.id}>
-                          <td><strong>#{number}</strong><br /><small>{item.quote ? 'Orçamento' : 'Pedido'}</small></td>
-                          <td>{customer}</td>
+                          <td>
+                            {item.quote ? (
+                              <RecordLink type="SALES_QUOTE" id={item.quote.id}>
+                                <strong>#{item.quote.quote_number}</strong>
+                              </RecordLink>
+                            ) : item.order ? (
+                              <RecordLink type="SALES_ORDER" id={item.order.id}>
+                                <strong>#{item.order.order_number}</strong>
+                              </RecordLink>
+                            ) : (
+                              <strong>#{number}</strong>
+                            )}
+                            <br /><small>{item.quote ? 'Orçamento' : 'Pedido'}</small>
+                          </td>
+                          <td>
+                            <RecordLink type="CUSTOMER" id={customerId}>
+                              {customer}
+                            </RecordLink>
+                          </td>
                           <td>{typeLabel}</td>
                           <td><strong>{safeNumber(item.metric_value).toFixed(2)}{suffix}</strong></td>
                           <td>{safeNumber(item.threshold_value).toFixed(2)}{suffix}</td>
@@ -1704,10 +1890,16 @@ export const Sales: React.FC = () => {
                           style={{ cursor: 'pointer' }}
                           title="Clique na linha para abrir/visualizar o pedido"
                         >
-                          <td><strong>#{o.order_number}</strong></td>
+                          <td>
+                            <RecordLink type="SALES_ORDER" id={o.id}>
+                              <strong>#{o.order_number}</strong>
+                            </RecordLink>
+                          </td>
                           <td>
                             <div className="cell-client">
-                              <span className="client-name">{o.customer_name}</span>
+                              <RecordLink type="CUSTOMER" id={o.customer_id} className="client-name">
+                                {o.customer_name}
+                              </RecordLink>
                               {o.customer_document && <span className="client-doc">{o.customer_document}</span>}
                             </div>
                           </td>
@@ -1730,8 +1922,8 @@ export const Sales: React.FC = () => {
                             </span>
                           </td>
                           <td>
-                            <span className={`status-pill ui-status ${o.billing_status === 'INVOICED' ? 'success' : 'warning'}`}>
-                              {o.billing_status === 'INVOICED' ? 'Faturado' : 'Aguardando'}
+                            <span className={`status-pill ui-status ${o.billing_status === 'INVOICED' ? 'success' : o.billing_status === 'PARTIALLY_INVOICED' ? 'info' : 'warning'}`}>
+                              {billingStatusLabel(o.billing_status)}
                             </span>
                           </td>
                           <td>{new Date(o.created_at).toLocaleDateString('pt-BR')}</td>
@@ -1814,10 +2006,18 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar
+                selectedCount={customerSelection.selectedCount}
+                resourceName={{ singular: 'cliente', plural: 'clientes' }}
+                onClear={customerSelection.clearSelection}
+                onDelete={() => openBulkAction('Excluir', customerSelection.selectedIdList, salesService.deleteCustomer, customerSelection.clearSelection)}
+                deleteLabel="Excluir selecionados"
+              />
               <div className="table-container ui-table-wrap">
                 <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar clientes desta página" checked={customerSelection.isAllSelected(customerPagination.pageItems)} onChange={() => customerSelection.toggleSelectAll(customerPagination.pageItems)} /></th>
                       <th>Tipo</th>
                       <th>Cliente / Razão Social</th>
                       <th>CNPJ / CPF</th>
@@ -1830,18 +2030,22 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredCustomers.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="empty-state ui-empty-state">
+                        <td colSpan={8} className="empty-state ui-empty-state">
                           Nenhum cliente cadastrado no módulo de vendas.
                         </td>
                       </tr>
                     ) : (
-                      filteredCustomers.map(c => (
+                      customerPagination.pageItems.map(c => (
                         <tr
                           key={c.id}
                           onClick={() => handleOpenCustomerModal(c)}
-                          style={{ cursor: 'pointer' }}
+                          className={`ui-record-row ${customerSelection.isSelected(c.id) ? 'ui-record-row--selected' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenCustomerModal(c); } }}
                           title="Clique na linha para abrir/editar os dados do cliente"
                         >
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar cliente ${c.name}`} checked={customerSelection.isSelected(c.id)} onClick={(event) => event.stopPropagation()} onChange={() => customerSelection.toggleSelect(c.id)} /></td>
                           <td>
                             <span className={`person-badge ${c.person_type.toLowerCase()}`}>
                               {c.person_type}
@@ -1879,6 +2083,7 @@ export const Sales: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...customerPagination} onPageChange={customerPagination.setPage} onPageSizeChange={customerPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -2033,10 +2238,18 @@ export const Sales: React.FC = () => {
                 </div>
               </div>
 
+              <BulkActionsBar
+                selectedCount={returnSelection.selectedCount}
+                resourceName={{ singular: 'registro', plural: 'registros' }}
+                onClear={returnSelection.clearSelection}
+                onDelete={() => openBulkAction('Excluir', returnSelection.selectedIdList, salesService.deleteSalesReturn, returnSelection.clearSelection)}
+                deleteLabel="Excluir selecionados"
+              />
               <div className="table-container ui-table-wrap">
                 <table className="data-table ui-table ui-table--wide">
                   <thead>
                     <tr>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar registros desta página" checked={returnSelection.isAllSelected(returnPagination.pageItems)} onChange={() => returnSelection.toggleSelectAll(returnPagination.pageItems)} /></th>
                       <th>Tipo</th>
                       <th>Cliente</th>
                       <th>Data</th>
@@ -2050,13 +2263,26 @@ export const Sales: React.FC = () => {
                   <tbody>
                     {filteredReturns.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="empty-state ui-empty-state">
+                        <td colSpan={9} className="empty-state ui-empty-state">
                           Nenhum registro de pós-venda encontrado.
                         </td>
                       </tr>
                     ) : (
-                      filteredReturns.map(r => (
-                        <tr key={r.id}>
+                      returnPagination.pageItems.map(r => (
+                        <tr
+                          key={r.id}
+                          className={`ui-record-row ${returnSelection.isSelected(r.id) ? 'ui-record-row--selected' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedReturn(r)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              setSelectedReturn(r);
+                            }
+                          }}
+                        >
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar registro de ${r.customer_name}`} checked={returnSelection.isSelected(r.id)} onClick={(event) => event.stopPropagation()} onChange={() => returnSelection.toggleSelect(r.id)} /></td>
                           <td>
                             <span className={`status-pill ui-status ${
                               r.return_type === 'DEVOLUCAO' ? 'danger' :
@@ -2065,7 +2291,11 @@ export const Sales: React.FC = () => {
                               {r.return_type}
                             </span>
                           </td>
-                          <td><strong>{r.customer_name}</strong></td>
+                          <td>
+                            <RecordLink type="CUSTOMER" id={r.customer_id}>
+                              <strong>{r.customer_name}</strong>
+                            </RecordLink>
+                          </td>
                           <td>{new Date(r.created_at).toLocaleDateString('pt-BR')}</td>
                           <td>{r.reason}</td>
                           <td>
@@ -2086,7 +2316,7 @@ export const Sales: React.FC = () => {
                             <button
                               type="button"
                               className="table-action-btn ui-table-action danger"
-                              onClick={() => handleDeleteReturn(r)}
+                              onClick={(event) => { event.stopPropagation(); handleDeleteReturn(r); }}
                               title="Excluir Registro"
                             >
                               <Trash2 size={14} />
@@ -2097,6 +2327,7 @@ export const Sales: React.FC = () => {
                     )}
                   </tbody>
                 </table>
+                <ListPagination {...returnPagination} onPageChange={returnPagination.setPage} onPageSizeChange={returnPagination.setPageSize} />
               </div>
             </div>
           )}
@@ -2728,6 +2959,91 @@ export const Sales: React.FC = () => {
       </Modal>
 
       {/* CONFIRM MODAL GENÉRICO */}
+      <Modal
+        isOpen={Boolean(selectedReturn)}
+        onClose={() => setSelectedReturn(null)}
+        title={`Pós-venda · ${selectedReturn?.return_type || ''}`}
+        subtitle="Registro concluído preservado para auditoria; os vínculos abaixo abrem os objetos de origem."
+        size="lg"
+      >
+        {selectedReturn && (
+          <div className="wizard-form ui-form">
+            <div className="form-row cols-2">
+              <div className="form-group"><label>Cliente</label><RecordLink type="CUSTOMER" id={selectedReturn.customer_id}><strong>{selectedReturn.customer_name}</strong></RecordLink></div>
+              <div className="form-group"><label>Status</label><strong>{selectedReturn.status}</strong></div>
+            </div>
+            <div className="form-row cols-2">
+              <div className="form-group"><label>Pedido de venda</label>{selectedReturn.sales_order_id ? <RecordLink type="SALES_ORDER" id={selectedReturn.sales_order_id}>Abrir pedido vinculado</RecordLink> : <span>Não vinculado</span>}</div>
+              <div className="form-group"><label>Venda de PDV</label>{selectedReturn.pos_sale_id ? <RecordLink type="POS_SALE" id={selectedReturn.pos_sale_id}>Abrir venda vinculada</RecordLink> : <span>Não vinculada</span>}</div>
+            </div>
+            <div className="form-group"><label>Motivo</label><p>{selectedReturn.reason}</p></div>
+            <div className="table-container ui-table-wrap">
+              <table className="data-table ui-table">
+                <thead><tr><th>Produto</th><th>Condição</th><th>Quantidade</th><th>Total</th></tr></thead>
+                <tbody>{selectedReturn.items.map(item => (
+                  <tr key={item.id}>
+                    <td><RecordLink type="PRODUCT" id={item.product_id}>{item.product?.name || item.product_id}</RecordLink></td>
+                    <td>{item.condition}</td>
+                    <td>{formatQuantity(item.quantity)}</td>
+                    <td>{fmtCurrency(item.total_price)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div className="modal-footer ui-form__actions">
+              <DocumentLink documentId={selectedReturn.document_id}>Abrir na Central de Documentos</DocumentLink>
+              <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setSelectedReturn(null)}>Fechar</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(logisticsDetail)}
+        onClose={() => setLogisticsDetail(null)}
+        title={logisticsDetail?.kind === 'DELIVERY'
+          ? `Entrega ${logisticsDetail.record.delivery_number}`
+          : `Reserva ${logisticsDetail?.record.reservation_number || ''}`}
+        subtitle="Registro logístico rastreável e vinculado ao pedido de venda."
+        size="lg"
+      >
+        {logisticsDetail && (
+          <div className="wizard-form ui-form">
+            <div className="form-row cols-2">
+              <div className="form-group"><label>Pedido</label><RecordLink type="SALES_ORDER" id={logisticsDetail.record.sales_order_id}>Abrir pedido de venda</RecordLink></div>
+              <div className="form-group"><label>Status</label><strong>{logisticsDetail.record.status}</strong></div>
+            </div>
+            {logisticsDetail.kind === 'DELIVERY' && logisticsDetail.record.reservation_id && (
+              <div className="form-group"><label>Reserva consumida</label><RecordLink type="STOCK_RESERVATION" id={logisticsDetail.record.reservation_id}>Abrir reserva de estoque</RecordLink></div>
+            )}
+            <div className="table-container ui-table-wrap">
+              <table className="data-table ui-table">
+                <thead><tr><th>Produto</th><th>Quantidade</th></tr></thead>
+                <tbody>{logisticsDetail.record.items.map(item => (
+                  <tr key={item.id}>
+                    <td><RecordLink type="PRODUCT" id={item.product_id}>{item.product?.name || item.product_id}</RecordLink></td>
+                    <td>{formatQuantity(item.quantity)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div className="modal-footer ui-form__actions">
+              <DocumentLink documentId={logisticsDetail.record.document_id}>Abrir na Central de Documentos</DocumentLink>
+              <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setLogisticsDetail(null)}>Fechar</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(logisticsDetailError)}
+        onClose={() => setLogisticsDetailError(null)}
+        title="Registro logístico indisponível"
+        size="sm"
+      >
+        <div className="modal-alert-error" role="alert">{logisticsDetailError}</div>
+      </Modal>
+
       <Modal
         isOpen={isDocumentTimelineOpen}
         onClose={() => setIsDocumentTimelineOpen(false)}

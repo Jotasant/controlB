@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import false, or_, select
 from sqlalchemy.orm import Session
 
 from controlb.modules.documents.models import (
@@ -17,21 +17,29 @@ from controlb.modules.documents.models import (
 )
 from controlb.modules.documents.schemas import DocumentCreate, DocumentUpdate
 
-
 # Mapeamento de prefixos padronizados por categoria de negócio
 DEFAULT_PREFIXES = {
     "crm.lead": "LEAD",
     "crm.opportunity": "OPP",
     "crm.proposal": "PROP",
-    "sales.quotation": "PROP",
+    "sales.quotation": "ORC",
     "sales.order": "PV",
+    "sales.pos_sale": "PDV",
+    "sales.return": "DEV",
     "purchase.request": "SC",
     "purchase.quotation": "RFQ",
     "purchase.order": "PC",
     "purchase.replenishment": "REP",
     "inventory.transfer": "TRF",
+    "inventory.movement": "MOVE",
+    "inventory.import_batch": "IMPO",
     "inventory.receipt": "REC",
+    "inventory.reservation": "RSV",
+    "inventory.delivery": "ENT",
+    "inventory.replenishment": "REP",
     "billing.request": "FAT",
+    "billing.invoice": "FAT",
+    "finance.fiscal_document": "DFE",
     "finance.payable": "PAG",
     "finance.receivable": "REC",
 }
@@ -174,10 +182,26 @@ def list_documents(
     current_status: str | None = None,
     responsible_id: uuid.UUID | None = None,
     search: str | None = None,
+    authorized_document_types: set[str] | None = None,
+    mapped_document_types: set[str] | None = None,
+    allow_unmapped_document_types: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> list[BusinessDocument]:
     stmt = select(BusinessDocument).where(BusinessDocument.organization_id == organization_id)
+    if mapped_document_types is not None:
+        permission_conditions = []
+        if authorized_document_types:
+            permission_conditions.append(
+                BusinessDocument.document_type.in_(authorized_document_types)
+            )
+        if allow_unmapped_document_types:
+            permission_conditions.append(
+                BusinessDocument.document_type.not_in(mapped_document_types)
+            )
+        stmt = stmt.where(
+            or_(*permission_conditions) if permission_conditions else false()
+        )
     if category:
         stmt = stmt.where(BusinessDocument.category == category.strip().lower())
     if origin_module:

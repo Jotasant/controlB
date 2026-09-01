@@ -14,6 +14,45 @@ from controlb.modules.identity.models import Organization, User
 from controlb.modules.inventory.models import Product, ProductCategory, StockMovement
 from controlb.modules.inventory.service import import_inventory_spreadsheet
 from controlb.modules.inventory.spreadsheet_parser import parse_inventory_xlsx, classify_category_by_ncm
+from controlb.modules.inventory.schemas import InventoryImportSummaryResponse
+
+
+def test_inventory_import_response_accepts_unchanged_price_variations():
+    """A API não pode falhar ao devolver itens sem variação de preço."""
+    response = InventoryImportSummaryResponse.model_validate(
+        {
+            "total_products_read": 1,
+            "created_products_count": 0,
+            "updated_products_count": 1,
+            "created_categories_count": 0,
+            "sales_identified_count": 0,
+            "total_sales_quantity": Decimal("0"),
+            "entries_identified_count": 0,
+            "total_entries_quantity": Decimal("0"),
+            "total_cost_value": Decimal("10"),
+            "total_sale_value": Decimal("20"),
+            "message": "Importação concluída",
+            "sample_items": [
+                {
+                    "code": "P-1",
+                    "name": "Produto sem alteração",
+                    "previous_stock": Decimal("1"),
+                    "new_stock": Decimal("1"),
+                    "delta_stock": Decimal("0"),
+                    "action_type": "stagnant_unchanged",
+                    "previous_cost_price": Decimal("10"),
+                    "new_cost_price": Decimal("10"),
+                    "cost_variation_amount": None,
+                    "previous_sale_price": Decimal("20"),
+                    "new_sale_price": Decimal("20"),
+                    "sale_variation_amount": None,
+                }
+            ],
+        }
+    )
+
+    assert response.sample_items[0].cost_variation_amount is None
+    assert response.sample_items[0].sale_variation_amount is None
 
 
 @pytest.fixture
@@ -97,6 +136,9 @@ def test_inventory_full_spreadsheet_import(db_session):
         file_bytes=file_bytes
     )
 
+    # Reproduz a serialização executada pelo response_model do endpoint.
+    InventoryImportSummaryResponse.model_validate(result_day2)
+
     assert result_day2["created_products_count"] == 0
     assert result_day2["updated_products_count"] == 1598
     assert result_day2["sales_identified_count"] >= 1
@@ -108,3 +150,23 @@ def test_inventory_full_spreadsheet_import(db_session):
     ).first()
     assert sales_mov is not None
     assert sales_mov.quantity == Decimal("5.0000")
+
+    # 4. Verifica auditoria do Lote persistido
+    from controlb.modules.inventory.models import InventoryImportBatch, InventoryImportItem
+    from controlb.modules.inventory.service import list_inventory_import_batches, get_inventory_import_batch_detail, get_stagnant_inventory_report
+
+    batches = list_inventory_import_batches(db_session, org.id)
+    assert len(batches) == 2
+
+    latest_batch = batches[0]
+    assert latest_batch.sales_identified_count >= 1
+    assert latest_batch.total_sales_estimated_revenue > Decimal("0.00")
+
+    batch_detail = get_inventory_import_batch_detail(db_session, org.id, latest_batch.id)
+    assert len(batch_detail.items) == 1598
+
+    # 5. Verifica Relatório de Estoque Estagnado
+    stagnant_report = get_stagnant_inventory_report(db_session, org.id)
+    assert stagnant_report["total_stagnant_products"] > 0
+    assert stagnant_report["total_stagnant_capital"] > Decimal("0.00")
+    assert len(stagnant_report["top_stagnant_products"]) > 0

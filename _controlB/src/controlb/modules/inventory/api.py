@@ -21,6 +21,12 @@ from controlb.modules.inventory.schemas import (
     ProductAvailabilityResponse,
     StockAdjustmentCreate, StockMovementResponse,
     StockReservationResponse,
+    InventoryDeliveryResponse,
+    InventoryLocationCreate,
+    InventoryLocationResponse,
+    InventoryBalanceResponse,
+    InventoryTransferCreate,
+    InventoryTransferResponse,
 )
 
 router = APIRouter(prefix="", tags=["Inventory / Estoque"])
@@ -204,6 +210,122 @@ def get_stock_reservation(
     )
 
 
+@router.get(
+    "/deliveries/sales-orders/{sales_order_id}",
+    response_model=InventoryDeliveryResponse,
+    summary="Consultar Entrega do Pedido de Venda",
+)
+def get_sales_order_delivery(
+    sales_order_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.get_sales_order_delivery(
+        db, current_user.organization_id, sales_order_id
+    )
+
+
+@router.get(
+    "/deliveries/{delivery_id}",
+    response_model=InventoryDeliveryResponse,
+    summary="Consultar Entrega por ID",
+)
+def get_inventory_delivery(
+    delivery_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.get_inventory_delivery(
+        db, current_user.organization_id, delivery_id
+    )
+
+
+@router.get(
+    "/locations",
+    response_model=list[InventoryLocationResponse],
+    summary="Listar Localizações de Estoque",
+)
+def list_inventory_locations(
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.list_inventory_locations(db, current_user.organization_id)
+
+
+@router.post(
+    "/locations",
+    response_model=InventoryLocationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Criar Localização de Estoque",
+)
+def create_inventory_location(
+    payload: InventoryLocationCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("inventory:move")),
+):
+    return service.create_inventory_location(
+        db, current_user.organization_id, payload
+    )
+
+
+@router.get(
+    "/balances",
+    response_model=list[InventoryBalanceResponse],
+    summary="Listar Saldos por Localização",
+)
+def list_inventory_balances(
+    product_id: uuid.UUID | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.list_inventory_balances(
+        db, current_user.organization_id, product_id
+    )
+
+
+@router.post(
+    "/transfers",
+    response_model=InventoryTransferResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Transferir Estoque entre Localizações",
+)
+def create_inventory_transfer(
+    payload: InventoryTransferCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("inventory:move")),
+):
+    return service.create_inventory_transfer(
+        db, current_user.organization_id, current_user, payload
+    )
+
+
+@router.get(
+    "/transfers",
+    response_model=list[InventoryTransferResponse],
+    summary="Listar Transferências de Estoque",
+)
+def list_inventory_transfers(
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.list_inventory_transfers(db, current_user.organization_id)
+
+
+@router.get(
+    "/transfers/{transfer_id}",
+    response_model=InventoryTransferResponse,
+    summary="Consultar Transferência de Estoque",
+)
+def get_inventory_transfer(
+    transfer_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(identity_service.require_permission("products:view")),
+):
+    return service.get_inventory_transfer(
+        db, current_user.organization_id, transfer_id
+    )
+
+
 # ==============================================================================
 # 4. GESTÃO DE INVENTÁRIO FÍSICO & AUDITORIA DE MOVIMENTAÇÕES
 # ==============================================================================
@@ -232,7 +354,12 @@ def list_inventory_movements(
 # ==============================================================================
 
 from fastapi import File, UploadFile
-from controlb.modules.inventory.schemas import InventoryImportSummaryResponse
+from controlb.modules.inventory.schemas import (
+    InventoryImportSummaryResponse,
+    InventoryImportBatchResponse,
+    InventoryImportBatchListItem,
+    StagnantInventoryReportResponse,
+)
 
 @router.post("/import-spreadsheet", response_model=InventoryImportSummaryResponse, summary="Importar Planilha de Inventário / Estoque")
 @router.post("/import-toolspharma", response_model=InventoryImportSummaryResponse, summary="Importar Planilha (Alias)")
@@ -250,5 +377,48 @@ async def import_inventory_spreadsheet(
         db=db,
         organization_id=current_user.organization_id,
         user_id=current_user.id,
-        file_bytes=file_bytes
+        file_bytes=file_bytes,
+        filename=file.filename
+    )
+
+
+@router.get("/import-batches", response_model=list[InventoryImportBatchListItem], summary="Listar Lotes de Importação de Estoque")
+def list_import_batches(
+    limit: int = Query(50, ge=1, le=200, description="Limite de registros"),
+    offset: int = Query(0, ge=0, description="Offset de paginação"),
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Retorna o histórico cronológico de lotes de importação de planilhas de estoque."""
+    return service.list_inventory_import_batches(
+        db=db,
+        organization_id=current_user.organization_id,
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.get("/import-batches/{batch_id}", response_model=InventoryImportBatchResponse, summary="Detalhar Lote de Importação com Auditoria de Itens")
+def get_import_batch_detail(
+    batch_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Retorna o raio-X completo do lote com todos os itens auditados, variações de preço, vendas e estagnação."""
+    return service.get_inventory_import_batch_detail(
+        db=db,
+        organization_id=current_user.organization_id,
+        batch_id=batch_id
+    )
+
+
+@router.get("/reports/stagnation", response_model=StagnantInventoryReportResponse, summary="Relatório de Estoque Estagnado e Capital Imobilizado")
+def get_stagnation_report(
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    """Retorna análise de produtos parados sem giro de vendas e o valor financeiro imobilizado."""
+    return service.get_stagnant_inventory_report(
+        db=db,
+        organization_id=current_user.organization_id
     )

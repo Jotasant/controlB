@@ -78,6 +78,16 @@ def test_create_quick_replenishment_order_success():
 
     mock_user = User(id=user_id, organization_id=org_id, email="farmaceutico@controlb.com")
     mock_supplier = pur_models.Supplier(id=sup_id, organization_id=org_id, trade_name="Distribuidora MedSul", is_active=True)
+    mock_product = inv_models.Product(
+        id=prod_id,
+        organization_id=org_id,
+        name="Produto para reposição",
+        sku="REP-001",
+        current_stock=Decimal("8.00"),
+        min_stock=Decimal("10.00"),
+        reference_price=Decimal("5.00"),
+        is_active=True,
+    )
 
     payload = pur_schemas.QuickReplenishmentOrderCreate(
         supplier_id=sup_id,
@@ -96,18 +106,27 @@ def test_create_quick_replenishment_order_success():
 
     mock_po = pur_models.PurchaseOrder(
         id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
         organization_id=org_id,
         buyer_id=user_id,
         supplier_id=sup_id,
         purchase_request_id=None,
-        order_number="OC-2026-0005",
+        order_number="PC-2026-0005",
         status="issued",
         total_amount=Decimal("195.00")
     )
 
     with patch("controlb.modules.purchasing.repository.get_supplier_by_id", return_value=mock_supplier), \
-         patch("controlb.modules.purchasing.repository.count_purchase_orders_in_year", return_value=4), \
-         patch("controlb.modules.purchasing.repository.create_purchase_order", return_value=mock_po) as mock_create_po:
+         patch("controlb.modules.purchasing.repository.get_product_by_id", return_value=mock_product), \
+         patch("controlb.modules.purchasing.repository.create_inventory_replenishment") as mock_create_replenishment, \
+         patch("controlb.modules.purchasing.service.persist_purchase_order", return_value=mock_po) as mock_persist_order, \
+         patch(
+             "controlb.modules.documents.service.create_document",
+             return_value=MagicMock(
+                 id=mock_po.document_id,
+                 document_number="REP-2026-0005",
+             ),
+         ):
 
         order = pur_service.create_quick_replenishment_order(
             db=db_mock,
@@ -117,7 +136,12 @@ def test_create_quick_replenishment_order_success():
 
         assert order.status == "issued"
         assert order.purchase_request_id is None
-        mock_create_po.assert_called_once()
-        _, kwargs = mock_create_po.call_args
+        mock_create_replenishment.assert_called_once()
+        replenishment = mock_create_replenishment.call_args.args[1]
+        assert replenishment.status == "OPEN"
+        assert replenishment.items[0].current_stock == Decimal("8.00")
+        assert replenishment.items[0].target_stock == Decimal("50.00")
+        mock_persist_order.assert_called_once()
+        kwargs = mock_persist_order.call_args.kwargs
         assert kwargs["total_amount"] == Decimal("195.00")
-        assert kwargs["order_number"] == "OC-2026-0005"
+        assert kwargs["order_data"].replenishment_id == replenishment.id

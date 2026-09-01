@@ -898,6 +898,50 @@ body {
   }
 }
 
+.ui-record-row,
+.ui-record-card {
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-brand);
+    outline-offset: -2px;
+  }
+}
+
+.ui-selection-cell {
+  width: 42px;
+  min-width: 42px;
+  padding-right: 0.4rem !important;
+  padding-left: 0.75rem !important;
+  text-align: center !important;
+}
+
+.ui-selection-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent-brand, #ff5500);
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+.ui-record-row--selected > td,
+.selected-row > td {
+  background: rgba(255, 85, 0, 0.08) !important;
+}
+
+tr.ui-record-row:hover { background: var(--bg-surface-hover); }
+
+.ui-record-card:hover {
+  border-color: var(--border-highlight);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
 // Barra de rolagem minimalista
 ::-webkit-scrollbar {
   width: 5px;

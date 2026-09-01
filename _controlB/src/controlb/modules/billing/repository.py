@@ -3,10 +3,11 @@ modules/billing/repository.py - Camada de Persistência do Módulo de Faturament
 """
 
 import uuid
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from controlb.modules.billing.models import Invoice, InvoiceInstallment
+from controlb.modules.billing.models import Invoice
 
 
 def get_invoice_by_id(db: Session, invoice_id: uuid.UUID, organization_id: uuid.UUID) -> Invoice | None:
@@ -21,12 +22,10 @@ def list_invoices(db: Session, organization_id: uuid.UUID) -> list[Invoice]:
 
 def create_invoice(db: Session, invoice: Invoice) -> Invoice:
     db.add(invoice)
-    db.commit()
-    db.refresh(invoice)
+    db.flush()
     return invoice
 
 
 def update_invoice(db: Session, invoice: Invoice) -> Invoice:
-    db.commit()
-    db.refresh(invoice)
+    db.flush()
     return invoice

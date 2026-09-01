@@ -19,6 +19,7 @@ import {
 import { salesService, inventoryService, formatApiError } from '@/services/api';
 import { POSSession, POSSale, POSCashMovement, Product, Customer } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
+import { RecordLink, useRecordDeepLink } from '@/components/RecordLink';
 import { formatCurrency } from '@/utils/formatters';
 import './POS.scss';
 
@@ -104,6 +105,15 @@ export const POS: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  useRecordDeepLink({
+    types: ['POS_SALE'],
+    records: posSales,
+    onOpen: (sale) => {
+      setLastCompletedSale(sale);
+      setIsReceiptModalOpen(true);
+    },
+  });
 
   // Cálculos do Carrinho
   const cartSubtotal = useMemo(() => {
@@ -642,16 +652,37 @@ export const POS: React.FC = () => {
                   </thead>
                   <tbody>
                     {posSales.slice(0, 5).map(s => (
-                      <tr key={s.id}>
+                      <tr
+                        key={s.id}
+                        className="ui-record-row"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setLastCompletedSale(s);
+                          setIsReceiptModalOpen(true);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setLastCompletedSale(s);
+                            setIsReceiptModalOpen(true);
+                          }
+                        }}
+                      >
                         <td>#{s.id.substring(0, 8).toUpperCase()}</td>
-                        <td>{s.customer_name}</td>
+                        <td>
+                          <RecordLink type="CUSTOMER" id={s.customer_id} showIcon={false}>
+                            {s.customer_name}
+                          </RecordLink>
+                        </td>
                         <td>{s.payment_method}</td>
                         <td>{formatCurrency(s.net_amount)}</td>
                         <td>
                           <button
                             type="button"
                             className="btn-print-sm"
-                            onClick={() => {
+                            onClick={(event) => {
+                              event.stopPropagation();
                               setLastCompletedSale(s);
                               setIsReceiptModalOpen(true);
                             }}
@@ -830,7 +861,12 @@ export const POS: React.FC = () => {
           <div className="receipt-divider">--------------------------------</div>
 
           <div className="receipt-customer">
-            <p><strong>Cliente:</strong> {lastCompletedSale?.customer_name || 'Consumidor Final'}</p>
+            <p>
+              <strong>Cliente:</strong>{' '}
+              <RecordLink type="CUSTOMER" id={lastCompletedSale?.customer_id} showIcon={false}>
+                {lastCompletedSale?.customer_name || 'Consumidor Final'}
+              </RecordLink>
+            </p>
             {lastCompletedSale?.customer_document && (
               <p><strong>Doc:</strong> {lastCompletedSale.customer_document}</p>
             )}

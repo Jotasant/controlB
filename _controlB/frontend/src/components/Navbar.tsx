@@ -14,7 +14,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, Sun, Moon, ChevronDown, User,
   LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart, Package,
-  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store
+  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store, Files
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
@@ -82,9 +82,20 @@ export const Navbar: React.FC = () => {
   ]);
 
   // Verifica se está dentro de alguma rota de módulo para destacar o menu "Módulos"
-  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras'].some(path => 
+  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras', '/documentos'].some(path =>
     location.pathname.startsWith(path)
   );
+
+  const canAccessDocuments = hasAnyPermission([
+    'documents:view',
+    'crm:view',
+    'sales:view',
+    'billing:view',
+    'finance:payables',
+    'finance:receivables',
+    'products:view',
+    'purchasing:view'
+  ]);
 
   return (
     <header className="slim-navbar">
@@ -210,6 +221,20 @@ export const Navbar: React.FC = () => {
                   <span className="desc">Solicitações, cotações e ordens</span>
                 </div>
               </NavLink>
+
+              {canAccessDocuments && (
+                <NavLink
+                  to="/documentos"
+                  className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                  onClick={() => setIsModulesOpen(false)}
+                >
+                  <Files size={16} className="icon-module" />
+                  <div className="item-text">
+                    <span className="title">Central de Documentos</span>
+                    <span className="desc">Pesquisa, vínculos e rastreabilidade</span>
+                  </div>
+                </NavLink>
+              )}
             </div>
           )}
         </div>

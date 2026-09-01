@@ -8,15 +8,27 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from controlb.modules.documents.models import BusinessDocument
 from controlb.modules.sales.models import (
-    Customer, SalesQuote, SalesQuoteItem, SalesOrder, SalesOrderItem,
-    CreditApprovalRequest, CommercialApprovalRequest,
-    POSSession, POSSale, POSSaleItem, POSCashMovement,
-    SalesGoal, PriceTable, PriceTableItem, CommercialSettings,
-    SalesReturn, SalesReturnItem
+    CommercialApprovalRequest,
+    CommercialSettings,
+    CreditApprovalRequest,
+    Customer,
+    POSCashMovement,
+    POSSale,
+    POSSaleItem,
+    POSSession,
+    PriceTable,
+    PriceTableItem,
+    SalesGoal,
+    SalesOrder,
+    SalesOrderItem,
+    SalesQuote,
+    SalesQuoteItem,
+    SalesReturn,
+    SalesReturnItem,
 )
 from controlb.modules.sales.schemas import CustomerCreate, CustomerUpdate
-
 
 # ==============================================================================
 # 1. CLIENTES (Customer)
@@ -207,12 +219,17 @@ def get_unbilled_order_exposure(
     exclude_order_id: uuid.UUID | None = None,
 ) -> Decimal:
     """Soma pedidos ainda não transformados em contas a receber."""
-    stmt = select(func.coalesce(func.sum(SalesOrder.net_amount), 0)).where(
-        SalesOrder.organization_id == organization_id,
-        SalesOrder.customer_id == customer_id,
-        SalesOrder.status != "CANCELLED",
-        SalesOrder.credit_status != "REJECTED",
-        SalesOrder.billing_status != "INVOICED",
+    stmt = (
+        select(func.coalesce(func.sum(SalesOrder.net_amount), 0))
+        .join(BusinessDocument, BusinessDocument.id == SalesOrder.document_id)
+        .where(
+            SalesOrder.organization_id == organization_id,
+            BusinessDocument.organization_id == organization_id,
+            SalesOrder.customer_id == customer_id,
+            BusinessDocument.current_status != "CANCELLED",
+            SalesOrder.credit_status != "REJECTED",
+            SalesOrder.billing_status != "INVOICED",
+        )
     )
     if exclude_order_id:
         stmt = stmt.where(SalesOrder.id != exclude_order_id)

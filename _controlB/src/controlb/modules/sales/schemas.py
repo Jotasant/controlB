@@ -349,6 +349,7 @@ class POSSaleCreate(BaseModel):
 class POSSaleResponse(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     pos_session_id: uuid.UUID | None = None
     customer_id: uuid.UUID | None = None
     customer_name: str
@@ -555,6 +556,7 @@ class SalesReturnCreate(BaseModel):
 class SalesReturnResponse(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
+    document_id: uuid.UUID
     sales_order_id: uuid.UUID | None = None
     pos_sale_id: uuid.UUID | None = None
     customer_id: uuid.UUID | None = None

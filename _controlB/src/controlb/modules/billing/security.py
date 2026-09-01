@@ -2,9 +2,9 @@
 modules/billing/security.py - Permissões do Módulo de Faturamento
 """
 
-from typing import List, Dict, Any
+from typing import Any
 
-MODULE_PERMISSIONS: List[Dict[str, Any]] = [
+MODULE_PERMISSIONS: list[dict[str, Any]] = [
     {
         "code": "billing:view",
         "name": "Visualizar Faturamento & Faturas",
@@ -15,6 +15,6 @@ MODULE_PERMISSIONS: List[Dict[str, Any]] = [
         "code": "billing:manage",
         "name": "Gerenciar Faturamento & Emissão",
         "module": "Faturamento",
-        "description": "Emitir faturas comerciais, gerar notas fiscais (NF-e/NFC-e) e parcelamento"
+        "description": "Processar solicitações, faturamento parcial, notas fiscais e parcelamento"
     },
 ]

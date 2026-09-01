@@ -4,16 +4,18 @@ modules/sales/service.py - Regras de Negócio e Serviços do Módulo de Vendas &
 
 import re
 import uuid
-from datetime import datetime, timezone, date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from controlb.logger import logger
+from controlb.modules.documents import schemas as document_schemas
 from controlb.modules.documents import service as documents_service
 from controlb.modules.identity.models import User
 from controlb.modules.inventory import repository as inventory_repository
-from controlb.modules.inventory.models import Product, StockMovement
+from controlb.modules.inventory.models import Product
 from controlb.modules.sales import models, repository, schemas
 
 
@@ -375,7 +377,8 @@ def create_customer(
         )
 
     # 2. Sincroniza / Garante Contact unificado em Identity
-    from controlb.modules.identity import repository as identity_repo, schemas as identity_schemas
+    from controlb.modules.identity import repository as identity_repo
+    from controlb.modules.identity import schemas as identity_schemas
     contact = None
     if payload.contact_id:
         contact = identity_repo.get_contact_by_id(db, payload.contact_id, organization_id)
@@ -463,7 +466,8 @@ def update_customer(
 
     # Sincroniza com contact em Identity se existir
     if customer.contact_id:
-        from controlb.modules.identity import repository as identity_repo, schemas as identity_schemas
+        from controlb.modules.identity import repository as identity_repo
+        from controlb.modules.identity import schemas as identity_schemas
         contact = identity_repo.get_contact_by_id(db, customer.contact_id, organization_id)
         if contact:
             contact_update = identity_schemas.ContactUpdate(
@@ -565,20 +569,35 @@ def _ensure_quote_document(
     quote: models.SalesQuote,
     organization_id: uuid.UUID,
 ):
-    document = documents_service.ensure_document(
-        db,
-        organization_id=organization_id,
-        category="sales.quotation",
-        document_type="SALES_QUOTE",
-        native_id=quote.id,
-        document_number=quote.quote_number,
-        title=f"Cotação {quote.quote_number} - {quote.customer_name}",
-        current_status=quote.status,
-        origin_module="SALES",
-        created_by_id=quote.created_by_id,
-        issued_at=quote.created_at,
-    )
+    if quote.document_id:
+        document = documents_service.get_document(db, quote.document_id, organization_id)
+        if document.document_type != "SALES_QUOTE" or document.native_id != quote.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="O cabeçalho documental vinculado à cotação é inconsistente.",
+            )
+    else:
+        # Compatibilidade para registros legados ainda sem vínculo explícito. Depois
+        # deste ponto, BusinessDocument passa a ser a fonte do número e do status.
+        document = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            category="sales.quotation",
+            document_type="SALES_QUOTE",
+            native_id=quote.id,
+            document_number=quote.quote_number,
+            title=f"Cotação {quote.quote_number} - {quote.customer_name}",
+            current_status=quote.status,
+            origin_module="SALES",
+            created_by_id=quote.created_by_id,
+            issued_at=quote.created_at,
+        )
+
+    document.category = "sales.quotation"
+    document.origin_module = "SALES"
     quote.document_id = document.id
+    quote.quote_number = document.document_number
+    quote.status = document.current_status
     return document
 
 
@@ -587,21 +606,67 @@ def _ensure_order_document(
     order: models.SalesOrder,
     organization_id: uuid.UUID,
 ):
-    document = documents_service.ensure_document(
+    if order.document_id:
+        document = documents_service.get_document(db, order.document_id, organization_id)
+        if document.document_type != "SALES_ORDER" or document.native_id != order.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="O cabeçalho documental vinculado ao pedido é inconsistente.",
+            )
+    else:
+        document = documents_service.ensure_document(
+            db,
+            organization_id=organization_id,
+            category="sales.order",
+            document_type="SALES_ORDER",
+            native_id=order.id,
+            document_number=order.order_number,
+            title=f"Pedido de Venda {order.order_number} - {order.customer_name}",
+            current_status=order.status,
+            origin_module="SALES",
+            created_by_id=order.created_by_id,
+            issued_at=order.created_at,
+        )
+
+    document.category = "sales.order"
+    document.origin_module = "SALES"
+    order.document_id = document.id
+    order.order_number = document.document_number
+    order.status = document.current_status
+    return document
+
+
+def get_sales_order_document(
+    db: Session,
+    order: models.SalesOrder,
+    organization_id: uuid.UUID,
+):
+    """Expõe o cabeçalho canônico sem vazar a persistência de Documents."""
+    return _ensure_order_document(db, order, organization_id)
+
+
+def _create_order_document(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    order_id: uuid.UUID,
+    customer_name: str,
+    current_user: User,
+):
+    return documents_service.create_document(
         db,
         organization_id=organization_id,
-        category="sales.order",
-        document_type="SALES_ORDER",
-        native_id=order.id,
-        document_number=order.order_number,
-        title=f"Pedido de Venda {order.order_number} - {order.customer_name}",
-        current_status=order.status,
-        origin_module="SALES",
-        created_by_id=order.created_by_id,
-        issued_at=order.created_at,
+        payload=document_schemas.DocumentCreate(
+            category="sales.order",
+            document_type="SALES_ORDER",
+            native_id=order_id,
+            title=f"Pedido de Venda - {customer_name.strip()}",
+            current_status="CONFIRMED",
+            origin_module="SALES",
+            responsible_id=current_user.id,
+        ),
+        current_user=current_user,
     )
-    order.document_id = document.id
-    return document
 
 
 def get_customer_credit_analysis(
@@ -846,12 +911,26 @@ def create_sales_quote(
     )
     commercial_settings = get_commercial_settings(db, organization_id)
 
-    quote_num = f"ORC-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
     quote_id = uuid.uuid4()
+    quote_document = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="sales.quotation",
+            document_type="SALES_QUOTE",
+            native_id=quote_id,
+            title=f"Cotação - {payload.customer_name.strip()}",
+            current_status="DRAFT",
+            origin_module="SALES",
+            responsible_id=current_user.id,
+        ),
+        current_user=current_user,
+    )
     quote = models.SalesQuote(
         id=quote_id,
         organization_id=organization_id,
-        quote_number=quote_num,
+        document_id=quote_document.id,
+        quote_number=quote_document.document_number,
         customer_id=payload.customer_id,
         opportunity_id=payload.opportunity_id,
         customer_name=payload.customer_name.strip(),
@@ -870,8 +949,6 @@ def create_sales_quote(
         notes=payload.notes,
         created_by_id=current_user.id
     )
-
-    quote_document = _ensure_quote_document(db, quote, organization_id)
 
     total_gross = Decimal("0.00")
     total_disc = Decimal("0.00")
@@ -904,14 +981,14 @@ def create_sales_quote(
 
     saved_quote = repository.create_quote(db, quote)
     quote_document.issued_at = saved_quote.created_at
-    _record_created_event(
+    documents_service.update_document(
         db,
-        organization_id=organization_id,
-        document=quote_document,
-        document_kind="sales-quote",
-        native_id=saved_quote.id,
-        status_value=saved_quote.status,
-        created_by_id=current_user.id,
+        quote_document.id,
+        organization_id,
+        document_schemas.DocumentUpdate(
+            title=f"Cotação {quote_document.document_number} - {saved_quote.customer_name}",
+        ),
+        current_user=current_user,
     )
     _apply_commercial_approval_rules(
         db,
@@ -921,15 +998,10 @@ def create_sales_quote(
     )
 
     if opportunity:
-        opp_doc = documents_service.ensure_document(
-            db,
-            organization_id=organization_id,
-            document_type="OPPORTUNITY",
-            native_id=opportunity.id,
-            document_number=opportunity.title,
-            current_status=opportunity.stage,
-            created_by_id=opportunity.assigned_to_id or current_user.id,
-            issued_at=opportunity.created_at,
+        from controlb.modules.crm import service as crm_service
+
+        opp_doc = crm_service.get_opportunity_document(
+            db, opportunity, organization_id
         )
         documents_service.relate_documents(
             db,
@@ -938,20 +1010,22 @@ def create_sales_quote(
             child_document=quote_document,
             relation_type="GENERATED_QUOTE",
         )
-        documents_service.record_event(
+        next_stage = (
+            "PROPOSAL"
+            if opportunity.stage in ("QUALIFICATION", "PROSPECTING", "DISCOVERY")
+            else opportunity.stage
+        )
+        crm_service.transition_opportunity_stage(
             db,
-            organization_id=organization_id,
-            document=opp_doc,
+            opportunity,
+            organization_id,
+            next_stage,
+            current_user=current_user,
             event_type="QUOTE_CREATED",
-            previous_status=opportunity.stage,
-            new_status="PROPOSAL" if opportunity.stage in ("QUALIFICATION", "PROSPECTING", "DISCOVERY") else opportunity.stage,
-            created_by_id=current_user.id,
             event_metadata={"quote_id": str(saved_quote.id), "quote_number": saved_quote.quote_number},
             idempotency_key=f"opportunity:{opportunity.id}:quote:{saved_quote.id}",
+            record_if_unchanged=True,
         )
-        if opportunity.stage in ("QUALIFICATION", "PROSPECTING", "DISCOVERY"):
-            opportunity.stage = "PROPOSAL"
-            db.add(opportunity)
 
     db.flush()
     return saved_quote
@@ -961,6 +1035,7 @@ def get_sales_quote(db: Session, quote_id: uuid.UUID, organization_id: uuid.UUID
     quote = repository.get_quote_by_id(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+    _ensure_quote_document(db, quote, organization_id)
     return quote
 
 
@@ -974,6 +1049,7 @@ def update_sales_quote(
     quote = repository.get_quote_by_id(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+    quote_document = _ensure_quote_document(db, quote, organization_id)
 
     if quote.status != "DRAFT":
         raise HTTPException(
@@ -1062,6 +1138,15 @@ def update_sales_quote(
         )
 
     saved_quote = repository.update_quote(db, quote)
+    documents_service.update_document(
+        db,
+        quote_document.id,
+        organization_id,
+        document_schemas.DocumentUpdate(
+            title=f"Cotação {quote_document.document_number} - {saved_quote.customer_name}",
+        ),
+        current_user=current_user,
+    )
     if payload.items is not None or payload.payment_terms is not None:
         _apply_commercial_approval_rules(
             db,
@@ -1083,6 +1168,7 @@ def update_sales_quote_status(
     quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+    quote_document = _ensure_quote_document(db, quote, organization_id)
 
     normalized_status = new_status.strip().upper()
     if normalized_status == "CONVERTED":
@@ -1096,7 +1182,6 @@ def update_sales_quote_status(
             detail="Status de cotação inválido.",
         )
     if normalized_status == quote.status:
-        _ensure_quote_document(db, quote, organization_id)
         db.flush()
         return quote
     if normalized_status not in QUOTE_STATUS_TRANSITIONS.get(quote.status, frozenset()):
@@ -1108,8 +1193,6 @@ def update_sales_quote_status(
         _assert_commercial_approval_released(quote)
 
     previous_status = quote.status
-    quote_document = _ensure_quote_document(db, quote, organization_id)
-    quote.status = normalized_status
     documents_service.record_event(
         db,
         organization_id=organization_id,
@@ -1123,6 +1206,7 @@ def update_sales_quote_status(
             f"sales-quote:{quote.id}:status:{previous_status.lower()}:{normalized_status.lower()}"
         ),
     )
+    quote.status = quote_document.current_status
     db.flush()
     return quote
 
@@ -1138,6 +1222,7 @@ def cancel_sales_quote(
     quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+    quote_document = _ensure_quote_document(db, quote, organization_id)
 
     if quote.status in ("CANCELLED", "REJECTED", "EXPIRED"):
         raise HTTPException(
@@ -1153,8 +1238,6 @@ def cancel_sales_quote(
             )
 
     previous_status = quote.status
-    quote_document = _ensure_quote_document(db, quote, organization_id)
-    quote.status = "CANCELLED"
     quote.cancellation_reason = reason.strip()
     for approval in quote.commercial_approvals:
         if approval.status == "PENDING":
@@ -1172,18 +1255,33 @@ def cancel_sales_quote(
         event_metadata={"quote_id": str(quote.id), "reason": quote.cancellation_reason},
         idempotency_key=f"sales-quote:{quote.id}:cancel:{datetime.now(timezone.utc).timestamp()}",
     )
+    quote.status = quote_document.current_status
 
     if quote.opportunity_id:
         from controlb.modules.crm import repository as crm_repo
+        from controlb.modules.crm import service as crm_service
+
         opp = crm_repo.get_opportunity_by_id(db, quote.opportunity_id, organization_id)
+        if opp:
+            crm_service.get_opportunity_document(db, opp, organization_id)
         if opp and opp.stage not in ("WON", "LOST"):
             other_active_quotes = [
                 q for q in repository.list_quotes(db, organization_id)
                 if q.opportunity_id == opp.id and q.id != quote.id and q.status in ("DRAFT", "SENT", "APPROVED")
             ]
             if not other_active_quotes:
-                opp.stage = "NEGOTIATION"
-                db.add(opp)
+                crm_service.transition_opportunity_stage(
+                    db,
+                    opp,
+                    organization_id,
+                    "NEGOTIATION",
+                    current_user=current_user,
+                    event_type="QUOTE_CANCELLED_PIPELINE_REOPENED",
+                    event_metadata={"quote_id": str(quote.id)},
+                    idempotency_key=(
+                        f"opportunity:{opp.id}:quote:{quote.id}:cancelled"
+                    ),
+                )
 
     db.flush()
     return quote
@@ -1199,6 +1297,7 @@ def convert_quote_to_order(
     quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+    quote_document = _ensure_quote_document(db, quote, organization_id)
 
     existing_orders = repository.list_orders_by_quote_id(db, quote.id, organization_id)
     if len(existing_orders) > 1:
@@ -1250,11 +1349,19 @@ def convert_quote_to_order(
         product_ids=[item.product_id for item in quote.items],
     )
 
-    order_num = f"PED-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
-    order = models.SalesOrder(
-        id=uuid.uuid4(),
+    order_id = uuid.uuid4()
+    order_document = _create_order_document(
+        db,
         organization_id=organization_id,
-        order_number=order_num,
+        order_id=order_id,
+        customer_name=quote.customer_name,
+        current_user=current_user,
+    )
+    order = models.SalesOrder(
+        id=order_id,
+        organization_id=organization_id,
+        document_id=order_document.id,
+        order_number=order_document.document_number,
         customer_id=quote.customer_id,
         sales_quote_id=quote.id,
         opportunity_id=quote.opportunity_id,
@@ -1294,9 +1401,19 @@ def convert_quote_to_order(
         order=order,
         current_user=current_user,
     )
-    quote.status = "CONVERTED"
+    quote.status = quote_document.current_status
     db.add(order)
     db.flush()
+    order_document.issued_at = order.created_at
+    documents_service.update_document(
+        db,
+        order_document.id,
+        organization_id,
+        document_schemas.DocumentUpdate(
+            title=f"Pedido de Venda {order_document.document_number} - {order.customer_name}",
+        ),
+        current_user=current_user,
+    )
     _apply_credit_analysis_to_order(
         db,
         organization_id,
@@ -1305,8 +1422,19 @@ def convert_quote_to_order(
         request_reason="Solicitação automática na conversão da cotação.",
     )
     if opportunity:
-        opportunity.stage = "WON"
-        db.add(opportunity)
+        from controlb.modules.crm import service as crm_service
+
+        crm_service.transition_opportunity_stage(
+            db,
+            opportunity,
+            organization_id,
+            "WON",
+            current_user=current_user,
+            event_type="ORDER_CREATED",
+            event_metadata={"order_id": str(order.id)},
+            idempotency_key=f"opportunity:{opportunity.id}:order:{order.id}:won",
+            record_if_unchanged=True,
+        )
 
     db.flush()
     return order
@@ -1316,6 +1444,8 @@ def list_sales_quotes(db: Session, organization_id: uuid.UUID, opportunity_id: u
     quotes = repository.list_quotes(db, organization_id)
     if opportunity_id:
         quotes = [q for q in quotes if q.opportunity_id == opportunity_id]
+    for quote in quotes:
+        _ensure_quote_document(db, quote, organization_id)
     return quotes
 
 
@@ -1329,6 +1459,7 @@ def delete_sales_quote(
     quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
+    quote_document = _ensure_quote_document(db, quote, organization_id)
     if quote.status == "CONVERTED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1338,8 +1469,6 @@ def delete_sales_quote(
         return {"message": "Cotação já estava cancelada."}
 
     previous_status = quote.status
-    quote_document = _ensure_quote_document(db, quote, organization_id)
-    quote.status = "CANCELLED"
     for approval in quote.commercial_approvals:
         if approval.status == "PENDING":
             approval.status = "CANCELLED"
@@ -1355,6 +1484,7 @@ def delete_sales_quote(
         event_metadata={"quote_id": str(quote.id)},
         idempotency_key=f"sales-quote:{quote.id}:cancelled",
     )
+    quote.status = quote_document.current_status
     db.flush()
     return {"message": "Cotação cancelada com sucesso."}
 
@@ -1395,12 +1525,19 @@ def create_sales_order(
     )
     commercial_settings = get_commercial_settings(db, organization_id)
 
-    order_num = f"PED-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
-
-    order = models.SalesOrder(
-        id=uuid.uuid4(),
+    order_id = uuid.uuid4()
+    order_document = _create_order_document(
+        db,
         organization_id=organization_id,
-        order_number=order_num,
+        order_id=order_id,
+        customer_name=payload.customer_name,
+        current_user=current_user,
+    )
+    order = models.SalesOrder(
+        id=order_id,
+        organization_id=organization_id,
+        document_id=order_document.id,
+        order_number=order_document.document_number,
         customer_id=payload.customer_id,
         sales_quote_id=None,
         opportunity_id=payload.opportunity_id,
@@ -1417,8 +1554,6 @@ def create_sales_order(
         notes=payload.notes,
         created_by_id=current_user.id
     )
-
-    order_document = _ensure_order_document(db, order, organization_id)
 
     total_gross = Decimal("0.00")
     total_disc = Decimal("0.00")
@@ -1451,6 +1586,15 @@ def create_sales_order(
 
     saved_order = repository.create_order(db, order)
     order_document.issued_at = saved_order.created_at
+    documents_service.update_document(
+        db,
+        order_document.id,
+        organization_id,
+        document_schemas.DocumentUpdate(
+            title=f"Pedido de Venda {order_document.document_number} - {saved_order.customer_name}",
+        ),
+        current_user=current_user,
+    )
     _record_created_event(
         db,
         organization_id=organization_id,
@@ -1475,8 +1619,21 @@ def create_sales_order(
         request_reason="Solicitação automática na emissão do pedido.",
     )
     if opportunity:
-        opportunity.stage = "WON"
-        db.add(opportunity)
+        from controlb.modules.crm import service as crm_service
+
+        crm_service.transition_opportunity_stage(
+            db,
+            opportunity,
+            organization_id,
+            "WON",
+            current_user=current_user,
+            event_type="ORDER_CREATED",
+            event_metadata={"order_id": str(saved_order.id)},
+            idempotency_key=(
+                f"opportunity:{opportunity.id}:order:{saved_order.id}:won"
+            ),
+            record_if_unchanged=True,
+        )
     db.flush()
     return saved_order
 
@@ -1485,11 +1642,15 @@ def get_sales_order(db: Session, order_id: uuid.UUID, organization_id: uuid.UUID
     order = repository.get_order_by_id(db, order_id, organization_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
+    _ensure_order_document(db, order, organization_id)
     return order
 
 
 def list_sales_orders(db: Session, organization_id: uuid.UUID) -> list[models.SalesOrder]:
-    return repository.list_orders(db, organization_id)
+    orders = repository.list_orders(db, organization_id)
+    for order in orders:
+        _ensure_order_document(db, order, organization_id)
+    return orders
 
 
 def list_credit_approval_requests(
@@ -1628,6 +1789,7 @@ def request_credit_approval(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pedido de venda não encontrado.",
         )
+    order_document = _ensure_order_document(db, order, organization_id)
     if order.status == "CANCELLED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1692,7 +1854,6 @@ def request_credit_approval(
     order.credit_excess_amount = analysis.excess_amount
     repository.save_credit_approval_request(db, approval)
 
-    order_document = _ensure_order_document(db, order, organization_id)
     documents_service.record_event(
         db,
         organization_id=organization_id,
@@ -1737,6 +1898,7 @@ def decide_credit_approval(
         )
 
     order = approval.order
+    order_document = _ensure_order_document(db, order, organization_id)
     if order.status == "CANCELLED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1750,7 +1912,6 @@ def decide_credit_approval(
     approval.decided_at = utcnow()
     order.credit_status = approval.status
 
-    order_document = _ensure_order_document(db, order, organization_id)
     documents_service.record_event(
         db,
         organization_id=organization_id,
@@ -1783,12 +1944,20 @@ def delete_sales_order(
     order = repository.get_order_by_id_for_update(db, order_id, organization_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
+    order_document = _ensure_order_document(db, order, organization_id)
     from controlb.modules.inventory import service as inventory_service
 
-    if order.billing_status == "INVOICED" or order.status == "COMPLETED":
+    if (
+        order.billing_status in {"REQUESTED", "PARTIALLY_INVOICED", "INVOICED"}
+        or order.status == "COMPLETED"
+        or order.delivery_status in {"DISPATCHED", "DELIVERED"}
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Um pedido faturado ou concluído não pode ser cancelado.",
+            detail=(
+                "Um pedido com faturamento solicitado/iniciado, concluído ou com expedição iniciada não pode "
+                "ser cancelado; utilize o fluxo de devolução quando aplicável."
+            ),
         )
     if order.status == "CANCELLED":
         inventory_service.release_sales_order_reservation(
@@ -1802,7 +1971,6 @@ def delete_sales_order(
         return {"message": "Pedido de venda já estava cancelado."}
 
     previous_status = order.status
-    order_document = _ensure_order_document(db, order, organization_id)
     inventory_service.release_sales_order_reservation(
         db,
         organization_id,
@@ -1811,7 +1979,6 @@ def delete_sales_order(
         locked_order=order,
         delivery_status_after="CANCELLED",
     )
-    order.status = "CANCELLED"
     order.delivery_status = "CANCELLED"
     if order.credit_approval and order.credit_approval.status == "PENDING":
         order.credit_approval.status = "CANCELLED"
@@ -1833,6 +2000,7 @@ def delete_sales_order(
         event_metadata={"order_id": str(order.id), "reason": order.cancellation_reason},
         idempotency_key=f"sales-order:{order.id}:cancelled",
     )
+    order.status = order_document.current_status
     db.flush()
     return {"message": "Pedido de venda cancelado com sucesso."}
 
@@ -1848,8 +2016,10 @@ def update_sales_order_status(
     order = repository.get_order_by_id_for_update(db, order_id, organization_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
+    order_document = _ensure_order_document(db, order, organization_id)
 
     previous_status = order.status
+    next_status = order.status
     previous_delivery_status = order.delivery_status
     updated_fields: list[str] = []
 
@@ -1906,11 +2076,11 @@ def update_sales_order_status(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Status comercial do pedido inválido.",
             )
-        if order.status != norm_status:
+        if next_status != norm_status:
             if norm_status == "COMPLETED":
                 _assert_credit_released(order)
                 _assert_commercial_approval_released(order)
-            order.status = norm_status
+            next_status = norm_status
             updated_fields.append("status")
 
     if payload.delivery_status is not None:
@@ -1929,7 +2099,49 @@ def update_sales_order_status(
             if norm_deliv in {"RESERVED", "DISPATCHED", "DELIVERED"}:
                 _assert_credit_released(order)
                 _assert_commercial_approval_released(order)
-            order.delivery_status = norm_deliv
+            if norm_deliv == "RESERVED":
+                from controlb.modules.inventory import service as inventory_service
+
+                inventory_service.reserve_sales_order(
+                    db, organization_id, current_user.id, order.id
+                )
+            elif norm_deliv == "DISPATCHED":
+                from controlb.modules.inventory import service as inventory_service
+
+                inventory_service.dispatch_sales_order(
+                    db,
+                    organization_id,
+                    current_user,
+                    order.id,
+                    locked_order=order,
+                )
+            elif norm_deliv == "DELIVERED":
+                from controlb.modules.inventory import service as inventory_service
+
+                inventory_service.confirm_sales_order_delivery(
+                    db,
+                    organization_id,
+                    current_user,
+                    order.id,
+                    locked_order=order,
+                )
+            else:
+                if order.delivery_status == "RESERVED":
+                    from controlb.modules.inventory import service as inventory_service
+
+                    inventory_service.release_sales_order_reservation(
+                        db,
+                        organization_id,
+                        current_user.id,
+                        order.id,
+                        locked_order=order,
+                        delivery_status_after="PENDING",
+                    )
+                elif order.delivery_status != "PENDING":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Uma expedição iniciada não pode retornar ao status pendente.",
+                    )
             updated_fields.append("delivery_status")
 
     if payload.notes is not None and order.notes != payload.notes:
@@ -1940,9 +2152,8 @@ def update_sales_order_status(
         db.flush()
         return order
 
-    order_document = _ensure_order_document(db, order, organization_id)
     status_changed = (
-        previous_status != order.status
+        previous_status != next_status
         or previous_delivery_status != order.delivery_status
     )
 
@@ -1952,7 +2163,7 @@ def update_sales_order_status(
         document=order_document,
         event_type="STATUS_CHANGED" if status_changed else "UPDATED",
         previous_status=previous_status,
-        new_status=order.status if status_changed else None,
+        new_status=next_status if status_changed else None,
         created_by_id=current_user.id,
         event_metadata={
             "updated_fields": updated_fields,
@@ -1960,10 +2171,24 @@ def update_sales_order_status(
             "billing_status": order.billing_status,
         },
         idempotency_key=(
-            f"sales-order:{order.id}:update:{order.status}:"
+            f"sales-order:{order.id}:update:{next_status}:"
             f"{order.delivery_status}:{uuid.uuid4().hex[:6]}"
         ),
     )
+    order.status = order_document.current_status
+    if "customer_name" in updated_fields:
+        documents_service.update_document(
+            db,
+            order_document.id,
+            organization_id,
+            document_schemas.DocumentUpdate(
+                title=(
+                    f"Pedido de Venda {order_document.document_number} - "
+                    f"{order.customer_name}"
+                ),
+            ),
+            current_user=current_user,
+        )
     db.flush()
     return order
 
@@ -1978,11 +2203,17 @@ def request_order_billing(
     order = repository.get_order_by_id_for_update(db, order_id, organization_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
+    order_document = _ensure_order_document(db, order, organization_id)
 
     if order.billing_status == "INVOICED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Este pedido de venda já foi faturado.",
+        )
+    if order.billing_status == "REQUESTED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este pedido já possui uma solicitação de faturamento pendente.",
         )
     if order.status == "CANCELLED":
         raise HTTPException(
@@ -1993,56 +2224,139 @@ def request_order_billing(
     _assert_credit_released(order)
     _assert_commercial_approval_released(order)
 
-    from controlb.modules.billing import service as billing_service, schemas as billing_schemas
-    
-    invoice = billing_service.create_invoice(
-        db,
-        organization_id,
-        current_user,
-        billing_schemas.InvoiceCreate(
-            sales_order_id=order.id,
-            customer_name=order.customer_name,
-            customer_document=order.customer_document,
-            total_amount=order.net_amount,
-            tax_amount=Decimal("0.00"),
-            issue_date=date.today(),
-            due_date=date.today() + timedelta(days=30),
-            installments_count=1,
-            notes=f"Faturamento gerado a partir do Pedido #{order.order_number}",
-            generate_receivables_in_finance=True,
-        )
-    )
-
-    order.billing_status = "INVOICED"
-    order_document = _ensure_order_document(db, order, organization_id)
-    
-    inv_doc = documents_service.ensure_document(
+    previous_billing_status = order.billing_status
+    chain = documents_service.get_document_chain(
         db,
         organization_id=organization_id,
-        document_type="INVOICE",
-        native_id=invoice.id,
-        document_number=invoice.invoice_number,
-        current_status=invoice.status,
-        created_by_id=current_user.id,
-        issued_at=invoice.created_at,
+        document_type="SALES_ORDER",
+        native_id=order.id,
+    )
+    active_invoice_documents = [
+        documents_service.get_document(db, node.id, organization_id)
+        for node in chain.documents
+        if node.document_type == "INVOICE" and node.current_status != "CANCELLED"
+    ]
+    previously_invoiced_amount = sum(
+        (
+            Decimal(str(document.payload.get("total_amount", "0")))
+            for document in active_invoice_documents
+        ),
+        Decimal("0.00"),
+    )
+    previously_invoiced_by_item: dict[str, Decimal] = {}
+    for document in active_invoice_documents:
+        for item in document.payload.get("items", []):
+            item_id = str(item.get("sales_order_item_id", ""))
+            if item_id:
+                previously_invoiced_by_item[item_id] = (
+                    previously_invoiced_by_item.get(item_id, Decimal("0"))
+                    + Decimal(str(item.get("quantity", "0")))
+                )
+    requested_amount = max(
+        Decimal("0.00"), order.net_amount - previously_invoiced_amount
+    )
+    if requested_amount <= 0:
+        order.billing_status = "INVOICED"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O pedido não possui saldo pendente de faturamento.",
+        )
+    billing_request_id = uuid.uuid4()
+    products = {
+        product.id: product
+        for product in db.query(Product).filter(
+            Product.organization_id == organization_id,
+            Product.id.in_([item.product_id for item in order.items]),
+        ).all()
+    }
+    billing_request = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="billing.request",
+            document_type="BILLING_REQUEST",
+            native_id=billing_request_id,
+            title="Solicitação de Faturamento",
+            current_status="REQUESTED",
+            description=(
+                f"Solicitação de faturamento do Pedido {order.order_number}"
+            ),
+            origin_module="SALES",
+            responsible_id=current_user.id,
+            payload={
+                "sales_order_id": str(order.id),
+                "order_number": order.order_number,
+                "customer_name": order.customer_name,
+                "customer_document": order.customer_document,
+                "amount": str(requested_amount),
+                "previously_invoiced_amount": str(previously_invoiced_amount),
+                "gross_amount": str(order.total_amount),
+                "discount_amount": str(order.discount_amount),
+                "payment_terms": order.payment_terms,
+                "delivery_status": order.delivery_status,
+                "items": [
+                    {
+                        "sales_order_item_id": str(item.id),
+                        "product_id": str(item.product_id),
+                        "product_name": (
+                            products[item.product_id].name
+                            if item.product_id in products
+                            else f"Produto {item.product_id}"
+                        ),
+                        "product_sku": (
+                            products[item.product_id].sku
+                            if item.product_id in products
+                            else None
+                        ),
+                        "quantity": str(item.quantity),
+                        "invoiced_quantity": str(
+                            previously_invoiced_by_item.get(str(item.id), Decimal("0"))
+                        ),
+                        "remaining_quantity": str(
+                            max(
+                                Decimal("0"),
+                                Decimal(str(item.quantity))
+                                - previously_invoiced_by_item.get(str(item.id), Decimal("0")),
+                            )
+                        ),
+                        "unit_price": str(item.unit_price),
+                        "discount_amount": str(item.discount_amount),
+                        "total_price": str(item.total_price),
+                    }
+                    for item in order.items
+                ],
+            },
+            issued_at=utcnow(),
+        ),
+        current_user=current_user,
+    )
+    billing_request.title = (
+        f"Solicitação de Faturamento {billing_request.document_number}"
     )
     documents_service.relate_documents(
         db,
         organization_id=organization_id,
         parent_document=order_document,
-        child_document=inv_doc,
-        relation_type="INVOICED_BY",
+        child_document=billing_request,
+        relation_type="GENERATED",
+        created_by_id=current_user.id,
     )
+
+    order.billing_status = "REQUESTED"
     documents_service.record_event(
         db,
         organization_id=organization_id,
         document=order_document,
-        event_type="INVOICED",
+        event_type="BILLING_REQUESTED",
         previous_status=order.status,
         new_status=order.status,
         created_by_id=current_user.id,
-        event_metadata={"invoice_id": str(invoice.id), "invoice_number": invoice.invoice_number},
-        idempotency_key=f"sales-order:{order.id}:invoiced:{invoice.id}",
+        event_metadata={
+            "billing_request_id": str(billing_request.id),
+            "requested_amount": str(requested_amount),
+            "previous_billing_status": previous_billing_status,
+        },
+        idempotency_key=f"sales-order:{order.id}:billing-request:{billing_request.id}",
     )
     db.flush()
     return order
@@ -2183,9 +2497,11 @@ def process_pos_sale(
                 detail=f"A venda produziria saldo físico negativo para o SKU {product.sku}.",
             )
 
-        # 3. Registro de Auditoria / Kardex (StockMovement)
-        movement = StockMovement(
-            organization_id=organization_id,
+        # 3. Registro de Auditoria / Kardex (StockMovement) com documento canônico
+        from controlb.modules.inventory.service import record_stock_movement
+        record_stock_movement(
+            db,
+            organization_id,
             product_id=product.id,
             movement_type="out_sale",
             quantity=it.quantity,
@@ -2193,9 +2509,9 @@ def process_pos_sale(
             balance_after=product.current_stock,
             reference_doc=f"PDV-{str(sale.id)[:8].upper()}",
             notes=f"Venda Balcão PDV - Cliente: {sale.customer_name} ({sale.payment_method})",
-            created_by_id=current_user.id
+            created_by_id=current_user.id,
+            current_user=current_user,
         )
-        db.add(movement)
 
     sale.total_amount = total_gross
     _validate_discount_limit(
@@ -2204,6 +2520,24 @@ def process_pos_sale(
         payload.discount_amount,
     )
     sale.net_amount = max(Decimal("0.00"), total_gross - payload.discount_amount)
+
+    # Registro de documento canônico para a venda PDV
+    pos_doc = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="sales.pos_sale",
+            document_type="POS_SALE",
+            native_id=sale.id,
+            title=f"Venda PDV - {sale.customer_name}",
+            current_status="COMPLETED",
+            description=f"Venda Balcão PDV - {sale.customer_name} ({sale.payment_method}) - R$ {sale.net_amount}",
+            origin_module="SALES",
+            responsible_id=current_user.id,
+        ),
+        current_user=current_user,
+    )
+    sale.document_id = pos_doc.id
 
     saved_sale = repository.create_pos_sale(db, sale)
     logger.info(f"🛍️ [PDV SALE] Venda #{str(saved_sale.id)[:8]} concluída com sucesso: R$ {saved_sale.net_amount} via {saved_sale.payment_method} (Estoque físico baixado)")
@@ -2399,8 +2733,10 @@ def process_sales_return(
             if product:
                 prev_stock = product.current_stock or Decimal("0.0000")
                 product.current_stock = prev_stock + it.quantity
-                movement = StockMovement(
-                    organization_id=organization_id,
+                from controlb.modules.inventory.service import record_stock_movement
+                record_stock_movement(
+                    db,
+                    organization_id,
                     product_id=product.id,
                     movement_type="in_return",
                     quantity=it.quantity,
@@ -2408,11 +2744,30 @@ def process_sales_return(
                     balance_after=product.current_stock,
                     reference_doc=f"DEV-{str(sales_return.id)[:8].upper()}",
                     notes=f"Devolução/Troca Pós-Venda - Cliente: {payload.customer_name} ({payload.reason})",
-                    created_by_id=current_user.id
+                    created_by_id=current_user.id,
+                    current_user=current_user,
                 )
-                db.add(movement)
 
     sales_return.total_amount = tot
+
+    # Registro de documento canônico para a devolução
+    return_doc = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="sales.return",
+            document_type="SALES_RETURN",
+            native_id=sales_return.id,
+            title=f"Devolução/Troca - {payload.customer_name}",
+            current_status="COMPLETED",
+            description=f"{payload.return_type} - {payload.customer_name} ({payload.reason}) - R$ {tot}",
+            origin_module="SALES",
+            responsible_id=current_user.id,
+        ),
+        current_user=current_user,
+    )
+    sales_return.document_id = return_doc.id
+
     saved = repository.create_sales_return(db, sales_return)
     logger.info(f"🔄 [PÓS-VENDA] {saved.return_type} #{str(saved.id)[:8]} registrada para {saved.customer_name}: R$ {saved.total_amount}")
     return saved

@@ -73,7 +73,9 @@ def create_lead(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.create_lead(db, current_user.organization_id, payload)
+    return service.create_lead(
+        db, current_user.organization_id, payload, current_user=current_user
+    )
 
 
 @router.put("/leads/{lead_id}", response_model=schemas.LeadResponse, summary="Atualizar Lead")
@@ -83,7 +85,13 @@ def update_lead(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.update_lead(db, lead_id, current_user.organization_id, payload)
+    return service.update_lead(
+        db,
+        lead_id,
+        current_user.organization_id,
+        payload,
+        current_user=current_user,
+    )
 
 
 @router.delete("/leads/{lead_id}", status_code=status.HTTP_200_OK, summary="Excluir Lead")
@@ -92,7 +100,9 @@ def delete_lead(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.delete_lead(db, lead_id, current_user.organization_id)
+    return service.delete_lead(
+        db, lead_id, current_user.organization_id, current_user=current_user
+    )
 
 
 # ==============================================================================
@@ -123,7 +133,9 @@ def create_opportunity(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.create_opportunity(db, current_user.organization_id, payload)
+    return service.create_opportunity(
+        db, current_user.organization_id, payload, current_user=current_user
+    )
 
 
 @router.put("/opportunities/{opp_id}", response_model=schemas.OpportunityResponse, summary="Atualizar Oportunidade")
@@ -133,7 +145,13 @@ def update_opportunity(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.update_opportunity(db, opp_id, current_user.organization_id, payload)
+    return service.update_opportunity(
+        db,
+        opp_id,
+        current_user.organization_id,
+        payload,
+        current_user=current_user,
+    )
 
 
 @router.patch("/opportunities/{opp_id}/stage", response_model=schemas.OpportunityResponse, summary="Mover Oportunidade no Funil")
@@ -144,7 +162,14 @@ def update_opportunity_stage(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.update_opportunity_stage(db, opp_id, current_user.organization_id, stage, loss_reason)
+    return service.update_opportunity_stage(
+        db,
+        opp_id,
+        current_user.organization_id,
+        stage,
+        loss_reason,
+        current_user=current_user,
+    )
 
 
 @router.delete("/opportunities/{opp_id}", status_code=status.HTTP_200_OK, summary="Excluir Oportunidade")
@@ -153,7 +178,9 @@ def delete_opportunity(
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.get_current_user)
 ):
-    return service.delete_opportunity(db, opp_id, current_user.organization_id)
+    return service.delete_opportunity(
+        db, opp_id, current_user.organization_id, current_user=current_user
+    )
 
 
 # ==============================================================================

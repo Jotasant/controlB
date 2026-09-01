@@ -106,7 +106,39 @@ def delete_stage(db: Session, stage_id: uuid.UUID, organization_id: uuid.UUID) -
     return {"message": f"Etapa '{stage.name}' excluída com sucesso."}
 
 
-def create_lead(db: Session, organization_id: uuid.UUID, payload: schemas.LeadCreate) -> models.Lead:
+def _get_lead_document(
+    db: Session,
+    lead: models.Lead,
+    organization_id: uuid.UUID,
+):
+    """Resolve e valida o cabeçalho canônico vinculado ao Lead."""
+    from controlb.modules.documents import service as documents_service
+
+    if not lead.document_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O Lead não possui identidade documental e requer saneamento.",
+        )
+
+    document = documents_service.get_document(db, lead.document_id, organization_id)
+    if document.document_type != "LEAD" or document.native_id != lead.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O cabeçalho documental vinculado ao Lead é inconsistente.",
+        )
+
+    lead.name = document.title
+    lead.status = document.current_status
+    lead.assigned_to_id = document.responsible_id
+    return document
+
+
+def create_lead(
+    db: Session,
+    organization_id: uuid.UUID,
+    payload: schemas.LeadCreate,
+    current_user: User | None = None,
+) -> models.Lead:
     from controlb.modules.identity import service as identity_service, schemas as identity_schemas
     from controlb.modules.sales import service as sales_service, schemas as sales_schemas, repository as sales_repo
 
@@ -155,46 +187,41 @@ def create_lead(db: Session, organization_id: uuid.UUID, payload: schemas.LeadCr
         )
         customer_id = cust.id
 
-    lead = models.Lead(
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    lead_id = uuid.uuid4()
+    lead_document = documents_service.create_document(
+        db,
         organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="crm.lead",
+            document_type="LEAD",
+            native_id=lead_id,
+            title=payload.name.strip(),
+            current_status=payload.status,
+            description=payload.notes,
+            origin_module="CRM",
+            responsible_id=payload.assigned_to_id,
+        ),
+        current_user=current_user,
+    )
+
+    lead = models.Lead(
+        id=lead_id,
+        organization_id=organization_id,
+        document_id=lead_document.id,
         customer_id=customer_id,
-        name=payload.name.strip(),
+        name=lead_document.title,
         company_name=payload.company_name.strip() if payload.company_name else None,
         email=payload.email.strip() if payload.email else None,
         phone=payload.phone.strip() if payload.phone else None,
         source=payload.source,
-        status=payload.status,
+        status=lead_document.current_status,
         notes=payload.notes,
         assigned_to_id=payload.assigned_to_id
     )
-    created_lead = repository.create_lead(db, lead)
-
-    # Persistência e auditoria transversal no DocumentService
-    from controlb.modules.documents import service as documents_service
-    lead_doc = documents_service.ensure_document(
-        db,
-        organization_id=organization_id,
-        category="crm.lead",
-        document_type="LEAD",
-        native_id=created_lead.id,
-        document_number=created_lead.name,
-        title=f"Lead: {created_lead.name}",
-        current_status=created_lead.status,
-        origin_module="CRM",
-        created_by_id=created_lead.assigned_to_id,
-        issued_at=created_lead.created_at,
-    )
-    documents_service.record_event(
-        db,
-        organization_id=organization_id,
-        document=lead_doc,
-        event_type="CREATED",
-        new_status=created_lead.status,
-        created_by_id=created_lead.assigned_to_id,
-        idempotency_key=f"crm:lead:{created_lead.id}:created",
-    )
-
-    return created_lead
+    return repository.create_lead(db, lead)
 
 
 def list_leads(db: Session, organization_id: uuid.UUID, status: str | None = None, current_user: User | None = None) -> list[models.Lead]:
@@ -202,15 +229,24 @@ def list_leads(db: Session, organization_id: uuid.UUID, status: str | None = Non
     if current_user:
         from controlb.modules.identity import service as identity_service
         user_ids = identity_service.get_accessible_user_ids(db, current_user, module_category="SALES")
-    return repository.list_leads(db, organization_id, status, user_ids=user_ids)
+    leads = repository.list_leads(db, organization_id, status, user_ids=user_ids)
+    for lead in leads:
+        _get_lead_document(db, lead, organization_id)
+    return leads
 
 
-def update_lead(db: Session, lead_id: uuid.UUID, organization_id: uuid.UUID, payload: schemas.LeadUpdate) -> models.Lead:
+def update_lead(
+    db: Session,
+    lead_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    payload: schemas.LeadUpdate,
+    current_user: User | None = None,
+) -> models.Lead:
     lead = repository.get_lead_by_id(db, lead_id, organization_id)
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado.")
     
-    prev_status = lead.status
+    lead_document = _get_lead_document(db, lead, organization_id)
     if payload.name is not None:
         lead.name = payload.name.strip()
     if payload.company_name is not None:
@@ -230,37 +266,119 @@ def update_lead(db: Session, lead_id: uuid.UUID, organization_id: uuid.UUID, pay
     if payload.customer_id is not None:
         lead.customer_id = payload.customer_id
 
-    updated = repository.update_lead(db, lead)
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
 
-    if payload.status is not None and payload.status != prev_status:
-        from controlb.modules.documents import service as documents_service
-        lead_doc = documents_service.ensure_document(
+    document_changes: dict = {}
+    if payload.name is not None:
+        document_changes["title"] = lead.name
+    if payload.status is not None:
+        document_changes["current_status"] = lead.status
+    if payload.notes is not None:
+        document_changes["description"] = lead.notes
+    if payload.assigned_to_id is not None:
+        document_changes["responsible_id"] = lead.assigned_to_id
+
+    if document_changes:
+        documents_service.update_document(
             db,
-            organization_id=organization_id,
-            category="crm.lead",
-            document_type="LEAD",
-            native_id=updated.id,
-            document_number=updated.name,
-            title=f"Lead: {updated.name}",
-            current_status=updated.status,
-            origin_module="CRM",
-        )
-        documents_service.record_event(
-            db,
-            organization_id=organization_id,
-            document=lead_doc,
-            event_type="STATUS_CHANGED",
-            previous_status=prev_status,
-            new_status=updated.status,
+            lead_document.id,
+            organization_id,
+            document_schemas.DocumentUpdate(**document_changes),
+            current_user=current_user,
         )
 
-    return updated
+    lead.name = lead_document.title
+    lead.status = lead_document.current_status
+    lead.assigned_to_id = lead_document.responsible_id
+    return repository.update_lead(db, lead)
 
 
-def create_opportunity(db: Session, organization_id: uuid.UUID, payload: schemas.OpportunityCreate) -> models.Opportunity:
+def get_opportunity_document(
+    db: Session,
+    opportunity: models.Opportunity,
+    organization_id: uuid.UUID,
+):
+    """Resolve o cabeçalho canônico sem expor a persistência de Documents."""
+    from controlb.modules.documents import service as documents_service
+
+    if not opportunity.document_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A Oportunidade não possui identidade documental e requer saneamento.",
+        )
+
+    document = documents_service.get_document(
+        db, opportunity.document_id, organization_id
+    )
+    if document.document_type != "OPPORTUNITY" or document.native_id != opportunity.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O cabeçalho documental vinculado à Oportunidade é inconsistente.",
+        )
+
+    opportunity.title = document.title
+    opportunity.stage = document.current_status
+    opportunity.assigned_to_id = document.responsible_id
+    return document
+
+
+def transition_opportunity_stage(
+    db: Session,
+    opportunity: models.Opportunity,
+    organization_id: uuid.UUID,
+    new_stage: str,
+    *,
+    current_user: User | None = None,
+    event_type: str = "STAGE_CHANGED",
+    event_metadata: dict | None = None,
+    idempotency_key: str | None = None,
+    record_if_unchanged: bool = False,
+) -> models.Opportunity:
+    """Única porta para transições do funil, inclusive quando iniciadas por Vendas."""
+    from controlb.modules.documents import service as documents_service
+
+    document = get_opportunity_document(db, opportunity, organization_id)
+    previous_stage = document.current_status
+    normalized_stage = new_stage.strip().upper()
+    if normalized_stage == previous_stage and not record_if_unchanged:
+        return opportunity
+
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=document,
+        event_type=event_type,
+        previous_status=previous_stage,
+        new_status=normalized_stage,
+        created_by_id=current_user.id if current_user else None,
+        event_metadata=event_metadata,
+        idempotency_key=idempotency_key,
+    )
+    opportunity.stage = document.current_status
+    db.add(opportunity)
+    db.flush()
+    return opportunity
+
+
+def create_opportunity(
+    db: Session,
+    organization_id: uuid.UUID,
+    payload: schemas.OpportunityCreate,
+    current_user: User | None = None,
+) -> models.Opportunity:
     customer_id = payload.customer_id
     customer_name = payload.customer_name.strip() if payload.customer_name else ""
     contact_id = payload.contact_id
+    source_lead = None
+
+    if payload.lead_id:
+        source_lead = repository.get_lead_by_id(db, payload.lead_id, organization_id)
+        if not source_lead:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O Lead de origem não pertence à organização.",
+            )
 
     if customer_id:
         from controlb.modules.sales import repository as sales_repo
@@ -271,74 +389,67 @@ def create_opportunity(db: Session, organization_id: uuid.UUID, payload: schemas
             if not contact_id and cust.contact_id:
                 contact_id = cust.contact_id
 
-    opp = models.Opportunity(
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    opportunity_id = uuid.uuid4()
+    created_at = models.utcnow()
+    opportunity_document = documents_service.create_document(
+        db,
         organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="crm.opportunity",
+            document_type="OPPORTUNITY",
+            native_id=opportunity_id,
+            title=payload.title.strip(),
+            current_status=payload.stage,
+            priority=payload.priority,
+            description=payload.loss_reason,
+            origin_module="CRM",
+            responsible_id=payload.assigned_to_id,
+            issued_at=created_at,
+        ),
+        current_user=current_user,
+    )
+
+    opp = models.Opportunity(
+        id=opportunity_id,
+        organization_id=organization_id,
+        document_id=opportunity_document.id,
         lead_id=payload.lead_id,
         customer_id=customer_id,
         contact_id=contact_id,
-        title=payload.title.strip(),
+        title=opportunity_document.title,
         customer_name=customer_name or "Cliente Não Identificado",
         estimated_amount=payload.estimated_amount,
         probability_percent=payload.probability_percent,
         expected_closing_date=payload.expected_closing_date,
-        stage=payload.stage.upper(),
+        stage=opportunity_document.current_status,
         loss_reason=payload.loss_reason,
-        assigned_to_id=payload.assigned_to_id
-    )
-    created_opp = repository.create_opportunity(db, opp)
-
-    # Persistência e amarração transversal no DocumentService
-    from controlb.modules.documents import service as documents_service
-    opp_doc = documents_service.ensure_document(
-        db,
-        organization_id=organization_id,
-        category="crm.opportunity",
-        document_type="OPPORTUNITY",
-        native_id=created_opp.id,
-        document_number=created_opp.title,
-        title=created_opp.title,
-        current_status=created_opp.stage,
-        origin_module="CRM",
-        created_by_id=created_opp.assigned_to_id,
-        issued_at=created_opp.created_at,
-    )
-    documents_service.record_event(
-        db,
-        organization_id=organization_id,
-        document=opp_doc,
-        event_type="CREATED",
-        new_status=created_opp.stage,
-        created_by_id=created_opp.assigned_to_id,
-        idempotency_key=f"crm:opp:{created_opp.id}:created",
+        assigned_to_id=opportunity_document.responsible_id,
+        created_at=created_at,
+        updated_at=created_at,
     )
 
-    if created_opp.lead_id:
-        lead_doc = documents_service.ensure_document(
-            db,
-            organization_id=organization_id,
-            category="crm.lead",
-            document_type="LEAD",
-            native_id=created_opp.lead_id,
-            document_number=f"Lead #{str(created_opp.lead_id)[:8]}",
-            title=f"Lead #{str(created_opp.lead_id)[:8]}",
-            current_status="QUALIFIED",
-            origin_module="CRM",
-        )
+    if source_lead:
+        lead_doc = _get_lead_document(db, source_lead, organization_id)
         documents_service.relate_documents(
             db,
             organization_id=organization_id,
             parent_document=lead_doc,
-            child_document=opp_doc,
+            child_document=opportunity_document,
             relation_type="originated_from",
+            created_by_id=current_user.id if current_user else None,
         )
 
-    return created_opp
+    return repository.create_opportunity(db, opp)
 
 
 def get_opportunity(db: Session, opp_id: uuid.UUID, organization_id: uuid.UUID) -> models.Opportunity:
     opp = repository.get_opportunity_by_id(db, opp_id, organization_id)
     if not opp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oportunidade não encontrada.")
+    get_opportunity_document(db, opp, organization_id)
     return opp
 
 
@@ -347,15 +458,26 @@ def list_opportunities(db: Session, organization_id: uuid.UUID, stage: str | Non
     if current_user:
         from controlb.modules.identity import service as identity_service
         user_ids = identity_service.get_accessible_user_ids(db, current_user, module_category="SALES")
-    return repository.list_opportunities(db, organization_id, stage, user_ids=user_ids)
+    opportunities = repository.list_opportunities(
+        db, organization_id, stage, user_ids=user_ids
+    )
+    for opportunity in opportunities:
+        get_opportunity_document(db, opportunity, organization_id)
+    return opportunities
 
 
-def update_opportunity(db: Session, opp_id: uuid.UUID, organization_id: uuid.UUID, payload: schemas.OpportunityUpdate) -> models.Opportunity:
+def update_opportunity(
+    db: Session,
+    opp_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    payload: schemas.OpportunityUpdate,
+    current_user: User | None = None,
+) -> models.Opportunity:
     opp = repository.get_opportunity_by_id(db, opp_id, organization_id)
     if not opp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oportunidade não encontrada.")
     
-    prev_stage = opp.stage
+    opportunity_document = get_opportunity_document(db, opp, organization_id)
     if payload.title is not None:
         opp.title = payload.title.strip()
     if payload.customer_name is not None:
@@ -370,89 +492,131 @@ def update_opportunity(db: Session, opp_id: uuid.UUID, organization_id: uuid.UUI
         opp.probability_percent = payload.probability_percent
     if payload.expected_closing_date is not None:
         opp.expected_closing_date = payload.expected_closing_date
-    if payload.stage is not None:
-        opp.stage = payload.stage.upper()
     if payload.loss_reason is not None:
         opp.loss_reason = payload.loss_reason
     if payload.assigned_to_id is not None:
         opp.assigned_to_id = payload.assigned_to_id
 
-    updated = repository.update_opportunity(db, opp)
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
 
-    if payload.stage is not None and payload.stage.upper() != prev_stage:
-        from controlb.modules.documents import service as documents_service
-        opp_doc = documents_service.ensure_document(
+    document_changes: dict = {}
+    if payload.title is not None:
+        document_changes["title"] = opp.title
+    if payload.loss_reason is not None:
+        document_changes["description"] = opp.loss_reason
+    if payload.assigned_to_id is not None:
+        document_changes["responsible_id"] = opp.assigned_to_id
+    if payload.priority is not None:
+        document_changes["priority"] = payload.priority
+    if document_changes:
+        documents_service.update_document(
             db,
-            organization_id=organization_id,
-            category="crm.opportunity",
-            document_type="OPPORTUNITY",
-            native_id=updated.id,
-            document_number=updated.title,
-            title=updated.title,
-            current_status=updated.stage,
-            origin_module="CRM",
-        )
-        documents_service.record_event(
-            db,
-            organization_id=organization_id,
-            document=opp_doc,
-            event_type="STAGE_CHANGED",
-            previous_status=prev_stage,
-            new_status=updated.stage,
-            event_metadata={"loss_reason": payload.loss_reason} if payload.loss_reason else None,
+            opportunity_document.id,
+            organization_id,
+            document_schemas.DocumentUpdate(**document_changes),
+            current_user=current_user,
         )
 
-    return updated
+    if payload.stage is not None:
+        transition_opportunity_stage(
+            db,
+            opp,
+            organization_id,
+            payload.stage,
+            current_user=current_user,
+            event_metadata=(
+                {"loss_reason": payload.loss_reason} if payload.loss_reason else None
+            ),
+        )
+
+    opp.title = opportunity_document.title
+    opp.stage = opportunity_document.current_status
+    opp.assigned_to_id = opportunity_document.responsible_id
+    return repository.update_opportunity(db, opp)
 
 
-def update_opportunity_stage(db: Session, opp_id: uuid.UUID, organization_id: uuid.UUID, stage: str, loss_reason: str | None = None) -> models.Opportunity:
+def update_opportunity_stage(
+    db: Session,
+    opp_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    stage: str,
+    loss_reason: str | None = None,
+    current_user: User | None = None,
+) -> models.Opportunity:
     opp = repository.get_opportunity_by_id(db, opp_id, organization_id)
     if not opp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oportunidade não encontrada.")
-    prev_stage = opp.stage
-    opp.stage = stage.upper()
+    opportunity_document = get_opportunity_document(db, opp, organization_id)
     if loss_reason:
         opp.loss_reason = loss_reason
-    updated = repository.update_opportunity(db, opp)
-
-    if stage.upper() != prev_stage:
+        from controlb.modules.documents import schemas as document_schemas
         from controlb.modules.documents import service as documents_service
-        opp_doc = documents_service.ensure_document(
+
+        documents_service.update_document(
             db,
-            organization_id=organization_id,
-            category="crm.opportunity",
-            document_type="OPPORTUNITY",
-            native_id=updated.id,
-            document_number=updated.title,
-            title=updated.title,
-            current_status=updated.stage,
-            origin_module="CRM",
+            opportunity_document.id,
+            organization_id,
+            document_schemas.DocumentUpdate(description=loss_reason),
+            current_user=current_user,
         )
-        documents_service.record_event(
-            db,
-            organization_id=organization_id,
-            document=opp_doc,
-            event_type="STAGE_CHANGED",
-            previous_status=prev_stage,
-            new_status=updated.stage,
-            event_metadata={"loss_reason": loss_reason} if loss_reason else None,
-        )
-
-    return updated
+    transition_opportunity_stage(
+        db,
+        opp,
+        organization_id,
+        stage,
+        current_user=current_user,
+        event_metadata={"loss_reason": loss_reason} if loss_reason else None,
+    )
+    return repository.update_opportunity(db, opp)
 
 
-def delete_opportunity(db: Session, opp_id: uuid.UUID, organization_id: uuid.UUID):
+def delete_opportunity(
+    db: Session,
+    opp_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+):
     opp = repository.get_opportunity_by_id(db, opp_id, organization_id)
     if not opp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Oportunidade não encontrada.")
+    opportunity_document = get_opportunity_document(db, opp, organization_id)
+    from controlb.modules.documents import service as documents_service
+
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=opportunity_document,
+        event_type="DELETED",
+        previous_status=opp.stage,
+        new_status="DELETED",
+        created_by_id=current_user.id if current_user else None,
+    )
     repository.delete_opportunity(db, opp)
     return {"message": "Oportunidade excluída com sucesso."}
 
 
-def delete_lead(db: Session, lead_id: uuid.UUID, organization_id: uuid.UUID):
+def delete_lead(
+    db: Session,
+    lead_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+):
     lead = repository.get_lead_by_id(db, lead_id, organization_id)
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado.")
+    lead_document = _get_lead_document(db, lead, organization_id)
+    from controlb.modules.documents import service as documents_service
+
+    documents_service.record_event(
+        db,
+        organization_id=organization_id,
+        document=lead_document,
+        event_type="DELETED",
+        previous_status=lead.status,
+        new_status="DELETED",
+        created_by_id=current_user.id if current_user else None,
+    )
     repository.delete_lead(db, lead)
     return {"message": "Lead excluído com sucesso."}
 
@@ -747,7 +911,18 @@ def convert_lead_to_customer(
         )
     )
 
-    lead.status = "CONVERTED"
+    lead_document = _get_lead_document(db, lead, organization_id)
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    documents_service.update_document(
+        db,
+        lead_document.id,
+        organization_id,
+        document_schemas.DocumentUpdate(current_status="CONVERTED"),
+        current_user=current_user,
+    )
+    lead.status = lead_document.current_status
     db.commit()
     return customer
 
@@ -816,6 +991,4 @@ def create_quote_from_opportunity(
     )
 
     quote = sales_service.create_sales_quote(db, organization_id, current_user, quote_payload)
-    opp.stage = "PROPOSAL"
-    db.flush()
     return quote

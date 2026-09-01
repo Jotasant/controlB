@@ -11,30 +11,46 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Package, Tags, History, Plus, Search, RefreshCw,
-  Edit, Trash2, SlidersHorizontal, AlertTriangle, ArrowDownRight,
+  Trash2, SlidersHorizontal, AlertTriangle, ArrowDownRight,
   ArrowUpRight, Check, Loader2, Sparkles, DollarSign,
   ChevronRight, CheckCircle2, ShieldCheck, FileText, Paperclip,
   UploadCloud, X, Scale, FileSpreadsheet, TrendingUp, TrendingDown,
   CheckCircle, ArrowUpDown, ArrowUp, ArrowDown, Download,
-  CheckSquare
+  CheckSquare, Warehouse, Zap
 } from 'lucide-react';
 
 import { inventoryService, cacheManager, formatApiError } from '@/services/api';
-import { Product, ProductCategory, StockMovement, InventoryImportSummaryResponse } from '@/types';
+import {
+  Product,
+  ProductCategory,
+  StockMovement,
+  InventoryImportSummaryResponse,
+  InventoryImportBatch,
+  InventoryImportBatchListItem,
+  StagnantInventoryReport
+} from '@/types';
 import { formatCurrency, formatQuantity, formatPriceInput, formatQuantityInput } from '@/utils/formatters';
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
+import { InventoryStoragePanel } from './InventoryStoragePanel';
+import { BulkActionsBar } from '@/components/BulkActionsBar';
+import { ListPagination } from '@/components/ListPagination';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { useListPagination } from '@/hooks/useListPagination';
+import { DocumentLink, RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
 import './Inventory.scss';
 
-
-
-type InventoryMenuOption = 'produtos' | 'categorias' | 'movimentacoes' | 'auditoria';
+const ALLOWED_INVENTORY_MENUS = ['produtos', 'categorias', 'armazenagem', 'movimentacoes', 'auditoria', 'integracoes'] as const;
+type InventoryMenuOption = typeof ALLOWED_INVENTORY_MENUS[number];
 type StockStatusFilter = 'todos' | 'criticos' | 'zerados' | 'regulares';
 
 export const Inventory: React.FC = () => {
-  const [activeMenu, setActiveMenu] = useState<InventoryMenuOption>('produtos');
+  const [searchParams] = useSearchParams();
+  const initialInventoryMenu = isRequestedView(searchParams, ALLOWED_INVENTORY_MENUS, 'produtos');
+  const [activeMenu, setActiveMenu] = useState<InventoryMenuOption>(initialInventoryMenu);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchField, setSearchField] = useState<'all' | 'name' | 'sku' | 'external_code' | 'barcode' | 'ncm' | 'brand' | 'location'>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('');
@@ -42,6 +58,7 @@ export const Inventory: React.FC = () => {
 
   // Seleção em Massa & Exportação
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const categorySelection = useBulkSelection<ProductCategory>();
 
   // Ordenação Dinâmica (order_by) por Tabela
   const [prodSortField, setProdSortField] = useState<string>('name');
@@ -60,7 +77,19 @@ export const Inventory: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+  const [focusedMovementId, setFocusedMovementId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Estados de Auditoria de Lotes e Estagnação
+  const [auditSubTab, setAuditSubTab] = useState<'balanco' | 'lotes' | 'estagnado'>('balanco');
+  const [importBatches, setImportBatches] = useState<InventoryImportBatchListItem[]>([]);
+  const [stagnantReport, setStagnantReport] = useState<StagnantInventoryReport | null>(null);
+  const [selectedBatchDetail, setSelectedBatchDetail] = useState<InventoryImportBatch | null>(null);
+  const [loadingBatchDetail, setLoadingBatchDetail] = useState(false);
+  const [batchModalFilter, setBatchModalFilter] = useState<'all' | 'prices' | 'sales' | 'stagnant' | 'entries'>('all');
+  const [batchModalSearch, setBatchModalSearch] = useState('');
+  const [batchModalPage, setBatchModalPage] = useState(1);
+  const batchModalPageSize = 50;
 
   // Modais de Criação & Edição
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -121,6 +150,118 @@ export const Inventory: React.FC = () => {
   const [stockAdjustNotes, setStockAdjustNotes] = useState('');
   const [stockAdjustAuditor, setStockAdjustAuditor] = useState('');
 
+  // Carregamento de Lotes e Estagnação
+  const loadBatchesAndStagnation = async (forceRefresh = false) => {
+    try {
+      const [batchesData, stagnantData] = await Promise.all([
+        inventoryService.getImportBatches(50, 0, forceRefresh).catch(() => []),
+        inventoryService.getStagnantInventoryReport(forceRefresh).catch(() => null)
+      ]);
+      setImportBatches(Array.isArray(batchesData) ? batchesData : []);
+      setStagnantReport(stagnantData);
+    } catch (err: any) {
+      console.error("Erro ao carregar lotes e relatório de estagnação:", err);
+    }
+  };
+
+  const handleOpenBatchDetail = async (batchId: string) => {
+    setLoadingBatchDetail(true);
+    try {
+      const detail = await inventoryService.getImportBatchDetail(batchId, true);
+      setSelectedBatchDetail(detail);
+      setBatchModalFilter('all');
+      setBatchModalSearch('');
+      setBatchModalPage(1);
+    } catch (err: any) {
+      alert("Erro ao carregar detalhes do lote de importação.");
+    } finally {
+      setLoadingBatchDetail(false);
+    }
+  };
+
+  const exportBatchAuditToCsv = (batch: InventoryImportBatch) => {
+    const escapeCsvLocal = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const headers = [
+      'Código',
+      'Código de Barras (EAN)',
+      'SKU',
+      'Produto',
+      'NCM',
+      'Unidade',
+      'Saldo Anterior',
+      'Novo Saldo',
+      'Variação Saldo',
+      'Preço Custo Ant.',
+      'Preço Custo Novo',
+      'Variação Custo (%)',
+      'Preço Venda Ant.',
+      'Preço Venda Novo',
+      'Variação Venda (%)',
+      'Status Auditoria',
+      'Impacto Financeiro (R$)'
+    ];
+
+    const rows = batch.items.map(it => [
+      escapeCsvLocal(it.code),
+      escapeCsvLocal(it.barcode || ''),
+      escapeCsvLocal(it.sku || ''),
+      escapeCsvLocal(it.name),
+      escapeCsvLocal(it.ncm || ''),
+      escapeCsvLocal(it.unit_of_measure),
+      String(it.previous_stock).replace('.', ','),
+      String(it.new_stock).replace('.', ','),
+      String(it.delta_stock).replace('.', ','),
+      it.previous_cost_price != null ? String(it.previous_cost_price).replace('.', ',') : '',
+      String(it.new_cost_price).replace('.', ','),
+      it.cost_variation_percent != null ? `${it.cost_variation_percent}%` : '0%',
+      it.previous_sale_price != null ? String(it.previous_sale_price).replace('.', ',') : '',
+      String(it.new_sale_price).replace('.', ','),
+      it.sale_variation_percent != null ? `${it.sale_variation_percent}%` : '0%',
+      escapeCsvLocal(
+        it.action_type === 'created' ? 'Novo Cadastro' :
+        it.action_type === 'sale_detected' ? 'Venda (Saída)' :
+        it.action_type === 'entry_detected' ? 'Reposição (Entrada)' :
+        it.action_type === 'stagnant_unchanged' ? 'Estoque Estagnado' : 'Saldo Zero'
+      ),
+      it.action_type === 'sale_detected' ? String(it.estimated_sales_revenue).replace('.', ',') :
+      it.action_type === 'stagnant_unchanged' ? String(it.stagnant_value).replace('.', ',') : '0,00'
+    ]);
+
+    const csvContent = "\uFEFF" + [headers.join(';'), ...rows.map(r => r.join(';'))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `auditoria_lote_${batch.batch_number}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleGenerateReplenishmentFromBatch = (batch: InventoryImportBatch) => {
+    const itemsToReplenish = batch.items.filter(it => it.action_type === 'sale_detected' || Number(it.new_stock) <= 0);
+    if (itemsToReplenish.length === 0) {
+      alert("Não há itens esgotados ou com vendas apuradas neste lote que necessitem de reposição imediata.");
+      return;
+    }
+    
+    if (window.confirm(`Foram identificados ${itemsToReplenish.length} produtos com saída ou estoque zerado neste lote. Deseja abrir o módulo de Compras para gerar a reposição?`)) {
+      window.location.href = `/purchasing?view=pedidos&origin=audit_batch_${batch.batch_number}`;
+    }
+  };
+
+  const handleNavigateToKardexForBatch = (batch: InventoryImportBatch) => {
+    setSelectedBatchDetail(null);
+    setActiveMenu('movimentacoes');
+    setSearchTerm(batch.inventory_date || batch.batch_number);
+  };
+
   // Carregamento Inicial
   useEffect(() => {
     loadInventoryData();
@@ -144,6 +285,7 @@ export const Inventory: React.FC = () => {
       setProducts(Array.isArray(prodData) ? prodData : []);
       setCategories(Array.isArray(catData) ? catData : []);
       setStockMovements(Array.isArray(movData) ? movData : []);
+      void loadBatchesAndStagnation(forceRefresh);
     } catch (err: any) {
       console.error("Erro ao carregar dados do módulo de estoque:", err);
     } finally {
@@ -568,9 +710,23 @@ export const Inventory: React.FC = () => {
 
     try {
       setIsSaving(true);
+      let outboundReason: 'loss_damage' | 'internal_consumption' | 'supplier_return' | 'inventory_adjustment' | undefined;
+      if (stockAdjustType === 'manual_loss') {
+        if (stockAdjustReason.includes('Consumo Interno')) {
+          outboundReason = 'internal_consumption';
+        } else if (stockAdjustReason.includes('Devolução')) {
+          outboundReason = 'supplier_return';
+        } else if (stockAdjustReason.includes('Ajuste') || stockAdjustReason.includes('Operacional') || stockAdjustReason.includes('Descarte')) {
+          outboundReason = 'inventory_adjustment';
+        } else {
+          outboundReason = 'loss_damage';
+        }
+      }
+
       await inventoryService.adjustInventoryStock({
         product_id: stockAdjustProduct.id,
         adjustment_type: stockAdjustType,
+        outbound_reason: outboundReason,
         quantity: qty,
         unit_cost: parseFloat(stockAdjustCost) || 0,
         invoice_number: stockAdjustInvoice.trim() || undefined,
@@ -591,6 +747,46 @@ export const Inventory: React.FC = () => {
       setIsSaving(false);
     }
   };
+
+  useRecordDeepLink({
+    types: ['PRODUCT'],
+    records: products,
+    onOpen: (prod) => {
+      setActiveMenu('produtos');
+      handleEditProduct(prod);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['STOCK_MOVEMENT'],
+    records: stockMovements,
+    onOpen: (movement) => {
+      setActiveMenu('movimentacoes');
+      setSearchTerm('');
+      setFocusedMovementId(movement.id);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['INVENTORY_RECEIPT'],
+    records: stockMovements,
+    getIds: (movement) => [movement.receipt_id],
+    onOpen: (movement) => {
+      setActiveMenu('movimentacoes');
+      setSearchTerm('');
+      setFocusedMovementId(movement.id);
+    },
+  });
+
+  useRecordDeepLink({
+    types: ['INVENTORY_IMPORT_BATCH'],
+    records: importBatches,
+    onOpen: (batch) => {
+      setActiveMenu('auditoria');
+      setAuditSubTab('lotes');
+      void handleOpenBatchDetail(batch.id);
+    },
+  });
 
 
 
@@ -649,7 +845,7 @@ export const Inventory: React.FC = () => {
   };
 
   // Exportação para Planilha CSV formatada
-  const exportProductsToCsv = (itemsToExport: Product[], filenameSuffix: string = 'catalogo') => {
+  const exportProductsToCsv = (itemsToExport: Product[] = products, filenameSuffix: string = 'catalogo') => {
     if (!itemsToExport || itemsToExport.length === 0) {
       alert("Nenhum produto disponível para exportação.");
       return;
@@ -869,11 +1065,14 @@ export const Inventory: React.FC = () => {
     return 0;
   });
 
-  const filteredMovements = (stockMovements || []).filter(m =>
-    (m.product_name && m.product_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (m.sku && m.sku.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (m.reference_doc && m.reference_doc.toLowerCase().includes(searchTerm.toLowerCase()))
-  ).sort((a, b) => {
+  const filteredMovements = (stockMovements || []).filter(m => {
+    if (focusedMovementId) return m.id === focusedMovementId;
+    return (
+      (m.product_name && m.product_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (m.sku && m.sku.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (m.reference_doc && m.reference_doc.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
+  }).sort((a, b) => {
     let valA: any = '';
     let valB: any = '';
     if (movSortField === 'created_at') {
@@ -899,6 +1098,23 @@ export const Inventory: React.FC = () => {
     if (valA > valB) return movSortDir === 'asc' ? 1 : -1;
     return 0;
   });
+  const productPagination = useListPagination(filteredProducts);
+  const categoryPagination = useListPagination(filteredCategories);
+  const movementPagination = useListPagination(filteredMovements);
+  const auditProductPagination = useListPagination(filteredProducts);
+  const divergencePagination = useListPagination(totalDivergenceMovements);
+  const arePageProductsSelected = productPagination.pageItems.length > 0 && productPagination.pageItems.every(product => selectedProductIds.has(product.id));
+
+  const handleBulkDeleteCategories = async () => {
+    const ids = categorySelection.selectedIdList;
+    if (ids.length === 0 || !window.confirm(`Excluir ${ids.length} categoria(s) selecionada(s)? Categorias vinculadas a produtos serão preservadas pela regra do cadastro.`)) return;
+    const results = await Promise.allSettled(ids.map(id => inventoryService.deleteCategory(id)));
+    const succeeded = results.filter(result => result.status === 'fulfilled').length;
+    const failed = results.length - succeeded;
+    categorySelection.clearSelection();
+    await loadInventoryData(true);
+    window.alert(failed ? `${succeeded} categoria(s) excluída(s); ${failed} possuem vínculos ou não puderam ser removidas.` : `${succeeded} categoria(s) excluída(s).`);
+  };
 
   return (
     <div className="inventory-page">
@@ -944,8 +1160,19 @@ export const Inventory: React.FC = () => {
             </button>
 
             <button
+              className={`nav-item ${activeMenu === 'armazenagem' ? 'active' : ''}`}
+              onClick={() => { setActiveMenu('armazenagem'); setSearchTerm(''); }}
+            >
+              <div className="nav-item-content">
+                <Warehouse size={16} />
+                <span>Armazenagem Física</span>
+              </div>
+              <span className="nav-badge">Locais</span>
+            </button>
+
+            <button
               className={`nav-item ${activeMenu === 'movimentacoes' ? 'active' : ''}`}
-              onClick={() => { setActiveMenu('movimentacoes'); setSearchTerm(''); }}
+              onClick={() => { setActiveMenu('movimentacoes'); setFocusedMovementId(null); setSearchTerm(''); }}
             >
               <div className="nav-item-content">
                 <History size={16} />
@@ -964,6 +1191,19 @@ export const Inventory: React.FC = () => {
               </div>
               <span className={`nav-badge ${totalDivergenceMovements.length > 0 ? 'critical-badge' : ''}`}>
                 {totalDivergenceMovements.length > 0 ? `${totalDivergenceMovements.length} div.` : '100%'}
+              </span>
+            </button>
+
+            <button
+              className={`nav-item ${activeMenu === 'integracoes' ? 'active' : ''}`}
+              onClick={() => { setActiveMenu('integracoes'); setSearchTerm(''); }}
+            >
+              <div className="nav-item-content">
+                <RefreshCw size={16} />
+                <span>Integrações Diretas</span>
+              </div>
+              <span className="nav-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
+                1 ativa
               </span>
             </button>
           </nav>
@@ -995,15 +1235,19 @@ export const Inventory: React.FC = () => {
                 <span className="current">
                   {activeMenu === 'produtos' && 'Catálogo de Produtos & Insumos'}
                   {activeMenu === 'categorias' && 'Categorias de Produtos'}
+                  {activeMenu === 'armazenagem' && 'Localizações, Saldos & Transferências'}
                   {activeMenu === 'movimentacoes' && 'Histórico de Movimentações de Estoque'}
                   {activeMenu === 'auditoria' && 'Auditoria & Inventário Físico'}
+                  {activeMenu === 'integracoes' && 'Canais de Integração & Sincronização'}
                 </span>
               </div>
               <h1 className="section-title">
                 {activeMenu === 'produtos' && 'Catálogo de Produtos, Insumos & Almoxarifado'}
                 {activeMenu === 'categorias' && 'Categorias e Grupos de Produtos'}
+                {activeMenu === 'armazenagem' && 'Armazenagem Física & Transferências Internas'}
                 {activeMenu === 'movimentacoes' && 'Extrato & Auditoria de Movimentações de Estoque'}
                 {activeMenu === 'auditoria' && 'Painel de Auditoria & Balanço Físico de Estoque'}
+                {activeMenu === 'integracoes' && 'Canais de Integração & Sincronização de Estoque'}
               </h1>
             </div>
 
@@ -1032,7 +1276,7 @@ export const Inventory: React.FC = () => {
                 <span>Importar Planilha</span>
               </button>
 
-              {activeMenu !== 'movimentacoes' && activeMenu !== 'auditoria' && (
+              {(activeMenu === 'produtos' || activeMenu === 'categorias') && (
                 <button className="btn-primary" onClick={handleOpenCreateModal}>
                   <Plus size={16} />
                   <span>
@@ -1044,6 +1288,11 @@ export const Inventory: React.FC = () => {
             </div>
           </div>
 
+          {activeMenu === 'armazenagem' ? (
+            <InventoryStoragePanel products={products} />
+          ) : (
+          <>
+          {activeMenu !== 'integracoes' && <>
           {/* DASHBOARD KPIS (Cards de Resumo no topo) */}
           {activeMenu === 'auditoria' ? (
             <div className="inventory-kpis-grid">
@@ -1161,10 +1410,13 @@ export const Inventory: React.FC = () => {
                     'Pesquisar por localização física...'
                   }
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={(e) => {
+                    setFocusedMovementId(null);
+                    setSearchTerm(e.target.value);
+                  }}
                 />
                 {searchTerm && (
-                  <button type="button" className="btn-clear-search" onClick={() => setSearchTerm('')} title="Limpar busca">
+                  <button type="button" className="btn-clear-search" onClick={() => { setFocusedMovementId(null); setSearchTerm(''); }} title="Limpar busca">
                     <X size={14} />
                   </button>
                 )}
@@ -1233,6 +1485,7 @@ export const Inventory: React.FC = () => {
               {activeMenu === 'auditoria' && `${filteredProducts.length} itens no inventário`}
             </div>
           </div>
+          </>}
 
           {/* BARRA DE AÇÕES EM MASSA FLUTUANTE / INTEGRADA */}
           {activeMenu === 'produtos' && selectedProductIds.size > 0 && (
@@ -1300,21 +1553,22 @@ export const Inventory: React.FC = () => {
                     </button>
                   </div>
                 ) : (
+                  <>
                   <table className="data-table">
                     <thead>
                       <tr>
                         <th style={{ width: '40px', textAlign: 'center' }}>
                           <input
                             type="checkbox"
-                            checked={Boolean(filteredProducts.length && selectedProductIds.size === filteredProducts.length)}
+                            checked={arePageProductsSelected}
                             onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedProductIds(new Set(filteredProducts.map(p => p.id)));
-                              } else {
-                                setSelectedProductIds(new Set());
-                              }
+                              setSelectedProductIds(previous => {
+                                const next = new Set(previous);
+                                productPagination.pageItems.forEach(product => e.target.checked ? next.add(product.id) : next.delete(product.id));
+                                return next;
+                              });
                             }}
-                            title={selectedProductIds.size === filteredProducts.length ? "Desmarcar todos" : "Selecionar todos os listados"}
+                            title={arePageProductsSelected ? "Desmarcar esta página" : "Selecionar esta página"}
                           />
                         </th>
                         <th className="th-sortable" onClick={() => handleProdSort('name')}>
@@ -1352,7 +1606,7 @@ export const Inventory: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredProducts.map((prod) => {
+                      {productPagination.pageItems.map((prod) => {
                         const isSelected = selectedProductIds.has(prod.id);
                         const cur = Number(prod.current_stock || 0);
                         const min = Number(prod.min_stock || 0);
@@ -1362,7 +1616,7 @@ export const Inventory: React.FC = () => {
                         const stockPercent = Math.min(100, Math.max(0, (cur / max) * 100));
 
                         return (
-                          <tr key={prod.id} className={`${isZero ? 'row-zero' : isLow ? 'row-low' : ''} ${isSelected ? 'row-selected' : ''}`}>
+                          <tr key={prod.id} className={`${isZero ? 'row-zero' : isLow ? 'row-low' : ''} ${isSelected ? 'row-selected' : ''} ui-record-row`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input, label')) handleEditProduct(prod); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleEditProduct(prod); } }}>
                             <td style={{ textAlign: 'center' }}>
                               <input
                                 type="checkbox"
@@ -1379,7 +1633,9 @@ export const Inventory: React.FC = () => {
                             </td>
                             <td>
                               <div className="product-title-cell">
-                                <strong className="product-name">{prod.name}</strong>
+                                <RecordLink type="PRODUCT" id={prod.id}>
+                                  <strong className="product-name">{prod.name}</strong>
+                                </RecordLink>
                                 <div className="tags-row">
                                   <span className="sku-tag">SKU: {prod.sku}</span>
                                   {(prod.external_code || prod.toolspharma_code) && (
@@ -1449,13 +1705,6 @@ export const Inventory: React.FC = () => {
                             <td>
                               <div className="actions-cell">
                                 <button
-                                  className="action-btn edit"
-                                  onClick={() => handleEditProduct(prod)}
-                                  title="Editar produto"
-                                >
-                                  <Edit size={14} />
-                                </button>
-                                <button
                                   className="action-btn delete"
                                   onClick={() => handleDeleteProduct(prod)}
                                   title="Excluir produto"
@@ -1469,6 +1718,8 @@ export const Inventory: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                  <ListPagination {...productPagination} onPageChange={productPagination.setPage} onPageSizeChange={productPagination.setPageSize} />
+                  </>
                 )}
               </>
             )}
@@ -1476,6 +1727,7 @@ export const Inventory: React.FC = () => {
             {/* TABELA DE CATEGORIAS */}
             {activeMenu === 'categorias' && (
               <>
+                <BulkActionsBar selectedCount={categorySelection.selectedCount} resourceName={{ singular: 'categoria', plural: 'categorias' }} onClear={categorySelection.clearSelection} onDelete={() => void handleBulkDeleteCategories()} deleteLabel="Excluir selecionadas" />
                 {loading ? (
                   <div className="table-empty">
                     <Loader2 size={32} className="spinning" />
@@ -1491,9 +1743,11 @@ export const Inventory: React.FC = () => {
                     </button>
                   </div>
                 ) : (
+                  <>
                   <table className="data-table">
                     <thead>
                       <tr>
+                        <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar categorias desta página" checked={categorySelection.isAllSelected(categoryPagination.pageItems)} onChange={() => categorySelection.toggleSelectAll(categoryPagination.pageItems)} /></th>
                         <th className="th-sortable" onClick={() => handleCatSort('code')}>
                           <div className="th-content">
                             <span>Código / Prefixo</span>
@@ -1511,20 +1765,14 @@ export const Inventory: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredCategories.map((cat) => (
-                        <tr key={cat.id}>
+                      {categoryPagination.pageItems.map((cat) => (
+                        <tr key={cat.id} className={`ui-record-row ${categorySelection.isSelected(cat.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={(event) => { if (!(event.target as HTMLElement).closest('button, a, input')) handleEditCategory(cat); }} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleEditCategory(cat); } }}>
+                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar categoria ${cat.name}`} checked={categorySelection.isSelected(cat.id)} onClick={(event) => event.stopPropagation()} onChange={() => categorySelection.toggleSelect(cat.id)} /></td>
                           <td><span className="code-tag">{cat.code || '-'}</span></td>
                           <td><strong>{cat.name}</strong></td>
                           <td>{cat.description || '-'}</td>
                           <td>
                             <div className="actions-cell">
-                              <button
-                                className="action-btn edit"
-                                onClick={() => handleEditCategory(cat)}
-                                title="Editar categoria"
-                              >
-                                <Edit size={14} />
-                              </button>
                               <button
                                 className="action-btn delete"
                                 onClick={() => handleDeleteCategory(cat)}
@@ -1538,6 +1786,8 @@ export const Inventory: React.FC = () => {
                       ))}
                     </tbody>
                   </table>
+                  <ListPagination {...categoryPagination} onPageChange={categoryPagination.setPage} onPageSizeChange={categoryPagination.setPageSize} />
+                  </>
                 )}
               </>
             )}
@@ -1557,6 +1807,7 @@ export const Inventory: React.FC = () => {
                     <p>As entradas e saídas físicas do almoxarifado serão registradas aqui automaticamente conforme compras e ajustes ocorrem.</p>
                   </div>
                 ) : (
+                  <>
                   <table className="data-table">
                     <thead>
                       <tr>
@@ -1600,10 +1851,10 @@ export const Inventory: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredMovements.map((mov) => {
+                      {movementPagination.pageItems.map((mov) => {
                         const isPositive = mov.movement_type.startsWith('in_');
                         return (
-                          <tr key={mov.id}>
+                          <tr key={mov.id} className={focusedMovementId === mov.id ? 'ui-record-row is-focused' : undefined}>
                             <td>
                               <div className="time-cell">
                                 <strong>{new Date(mov.created_at).toLocaleDateString('pt-BR')}</strong>
@@ -1611,7 +1862,9 @@ export const Inventory: React.FC = () => {
                               </div>
                             </td>
                             <td>
-                              <strong>{mov.product_name || mov.product?.name || 'Produto'}</strong>
+                              <RecordLink type="PRODUCT" id={mov.product_id}>
+                                <strong>{mov.product_name || mov.product?.name || 'Produto'}</strong>
+                              </RecordLink>
                               <span className="sub-label">SKU: {mov.sku || mov.product?.sku || '-'}</span>
                             </td>
                             <td>
@@ -1623,6 +1876,11 @@ export const Inventory: React.FC = () => {
                               {mov.movement_type === 'in_invoice' && (
                                 <span className="movement-badge in-purchase">
                                   <ArrowDownRight size={13} /> Entrada por NF-e
+                                </span>
+                              )}
+                              {mov.movement_type === 'in_return_customer' && (
+                                <span className="movement-badge in-adj" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
+                                  <ArrowDownRight size={13} /> Devolução de Cliente (+)
                                 </span>
                               )}
                               {mov.movement_type === 'in_adjustment' && (
@@ -1638,6 +1896,16 @@ export const Inventory: React.FC = () => {
                               {mov.movement_type === 'out_sale' && (
                                 <span className="movement-badge out-sale">
                                   <ArrowUpRight size={13} /> Saída por Venda
+                                </span>
+                              )}
+                              {mov.movement_type === 'out_internal_consumption' && (
+                                <span className="movement-badge out-loss" style={{ background: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}>
+                                  <ArrowUpRight size={13} /> Consumo Interno / Uso (-)
+                                </span>
+                              )}
+                              {mov.movement_type === 'out_return_supplier' && (
+                                <span className="movement-badge out-adj" style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#6366f1', borderColor: 'rgba(99, 102, 241, 0.3)' }}>
+                                  <ArrowUpRight size={13} /> Devolução a Fornecedor (-)
                                 </span>
                               )}
                               {mov.movement_type === 'out_adjustment' && (
@@ -1669,7 +1937,9 @@ export const Inventory: React.FC = () => {
                             </td>
                             <td>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <span className="code-tag">{mov.reference_doc || '-'}</span>
+                                <DocumentLink documentId={mov.document_id} showIcon={false}>
+                                  <span className="code-tag">{mov.reference_doc || 'Abrir origem'}</span>
+                                </DocumentLink>
                                 {mov.invoice_attachment && (
                                   <a
                                     href={mov.invoice_attachment}
@@ -1689,247 +1959,860 @@ export const Inventory: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                  <ListPagination {...movementPagination} onPageChange={movementPagination.setPage} onPageSizeChange={movementPagination.setPageSize} />
+                  </>
                 )}
               </>
             )}
 
             {/* ================================================================= */}
-            {/* VIEW: AUDITORIA & INVENTÁRIO FÍSICO                              */}
+            {/* VIEW: AUDITORIA, LOTES DE IMPORTAÇÃO & CAPITAL ESTAGNADO        */}
             {/* ================================================================= */}
             {activeMenu === 'auditoria' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                {/* SEÇÃO 1: PAINEL DE BALANÇO & AFERIÇÃO FÍSICO-SISTÊMICA */}
-                <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
-                  <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
-                        <Scale size={16} style={{ color: '#10b981' }} />
-                        Balanço Físico e Aferição de Saldo por SKU
-                      </h3>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.15rem 0 0' }}>
-                        Realize contagens cíclicas, conciliações de prateleira e apuração de quebras/sobras com auditoria formal.
-                      </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                {/* SUB-TABS NAVIGATION DE AUDITORIA */}
+                <div style={{ display: 'flex', gap: '0.6rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setAuditSubTab('balanco')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '6px',
+                      border: '1px solid',
+                      borderColor: auditSubTab === 'balanco' ? '#10b981' : 'var(--border-subtle)',
+                      background: auditSubTab === 'balanco' ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-surface)',
+                      color: auditSubTab === 'balanco' ? '#10b981' : 'var(--text-secondary)',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Scale size={15} />
+                    <span>Balanço Físico por SKU</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuditSubTab('lotes');
+                      void loadBatchesAndStagnation();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '6px',
+                      border: '1px solid',
+                      borderColor: auditSubTab === 'lotes' ? '#3b82f6' : 'var(--border-subtle)',
+                      background: auditSubTab === 'lotes' ? 'rgba(59, 130, 246, 0.12)' : 'var(--bg-surface)',
+                      color: auditSubTab === 'lotes' ? '#3b82f6' : 'var(--text-secondary)',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <FileSpreadsheet size={15} />
+                    <span>Histórico de Lotes Importados ({importBatches.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuditSubTab('estagnado');
+                      void loadBatchesAndStagnation();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '6px',
+                      border: '1px solid',
+                      borderColor: auditSubTab === 'estagnado' ? '#f59e0b' : 'var(--border-subtle)',
+                      background: auditSubTab === 'estagnado' ? 'rgba(245, 158, 11, 0.12)' : 'var(--bg-surface)',
+                      color: auditSubTab === 'estagnado' ? '#f59e0b' : 'var(--text-secondary)',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <AlertTriangle size={15} />
+                    <span>Radar de Estoque Estagnado & Capital Parado</span>
+                  </button>
+                </div>
+
+                {/* ============================================================= */}
+                {/* SUB-ABA 1: BALANÇO FÍSICO POR SKU                             */}
+                {/* ============================================================= */}
+                {auditSubTab === 'balanco' && (
+                  <>
+                    {/* SEÇÃO 1: PAINEL DE BALANÇO & AFERIÇÃO FÍSICO-SISTÊMICA */}
+                    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+                      <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+                            <Scale size={16} style={{ color: '#10b981' }} />
+                            Balanço Físico e Aferição de Saldo por SKU
+                          </h3>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.15rem 0 0' }}>
+                            Realize contagens cíclicas, conciliações de prateleira e apuração de quebras/sobras com auditoria formal.
+                          </p>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                          {filteredProducts.length} itens cadastrados
+                        </span>
+                      </div>
+
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th className="th-sortable" onClick={() => handleAuditSort('name')}>
+                              <div className="th-content">
+                                <span>Produto / SKU</span>
+                                {auditSortField === 'name' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                              </div>
+                            </th>
+                            <th>Categoria</th>
+                            <th className="th-sortable" onClick={() => handleAuditSort('storage_location')}>
+                              <div className="th-content">
+                                <span>Localização</span>
+                                {auditSortField === 'storage_location' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                              </div>
+                            </th>
+                            <th className="th-sortable" onClick={() => handleAuditSort('current_stock')}>
+                              <div className="th-content">
+                                <span>Saldo Sistema</span>
+                                {auditSortField === 'current_stock' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
+                              </div>
+                            </th>
+                            <th>Status Auditoria</th>
+                            <th>Última Auditoria</th>
+                            <th style={{ textAlign: 'right' }}>Ação de Auditoria</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredProducts.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="state-empty" style={{ textAlign: 'center', padding: '2rem' }}>
+                                Nenhum produto localizado para os filtros informados.
+                              </td>
+                            </tr>
+                          ) : (
+                            auditProductPagination.pageItems.map(prod => {
+                              const prodCat = categories.find(c => c.id === prod.category_id);
+                              const lastReconcil = stockMovements.find(
+                                m => m.product_id === prod.id && (m.movement_type === 'in_reconciliation' || m.movement_type === 'out_reconciliation' || m.movement_type === 'in_adjustment' || m.movement_type === 'out_adjustment')
+                              );
+                              const isAudited = Boolean(lastReconcil);
+
+                              return (
+                                <tr key={prod.id}>
+                                  <td>
+                                    <div className="product-title-cell">
+                                      <RecordLink
+                                        type="PRODUCT"
+                                        id={prod.id}
+                                        className="product-name"
+                                      >
+                                        {prod.name}
+                                      </RecordLink>
+                                      <div className="tags-row">
+                                        <span className="sku-tag">{prod.sku}</span>
+                                        {prod.brand && <span className="brand-tag">{prod.brand}</span>}
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span className="category-pill">{prodCat?.name || 'Geral'}</span>
+                                  </td>
+                                  <td>
+                                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                      {prod.storage_location || 'Almoxarifado Central'}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <strong style={{ fontSize: '0.9rem', color: Number(prod.current_stock || 0) <= 0 ? '#ef4444' : 'var(--text-primary)' }}>
+                                      {formatQuantity(prod.current_stock)} {prod.unit_of_measure}
+                                    </strong>
+                                  </td>
+                                  <td>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.2rem 0.55rem', borderRadius: '4px', fontSize: '0.725rem', fontWeight: 600, background: isAudited ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)', color: isAudited ? '#10b981' : '#f59e0b', border: isAudited ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(245, 158, 11, 0.25)' }}>
+                                      {isAudited ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                                      <span>{isAudited ? 'Auditado' : 'Pendente'}</span>
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {lastReconcil ? (
+                                      <div style={{ display: 'flex', flexDirection: 'column', fontSize: '0.75rem' }}>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{new Date(lastReconcil.created_at).toLocaleDateString('pt-BR')}</span>
+                                        <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{lastReconcil.notes ? lastReconcil.notes.substring(0, 30) : 'Contagem física'}</span>
+                                      </div>
+                                    ) : (
+                                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Sem histórico</span>
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    <button
+                                      type="button"
+                                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', fontSize: '0.78rem', fontWeight: 600, borderRadius: '6px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}
+                                      title="Realizar Contagem e Conciliação de Saldo"
+                                      onClick={() => handleOpenStockAdjustModal(prod, 'reconciliation')}
+                                    >
+                                      <ShieldCheck size={14} />
+                                      <span>Auditar Saldo</span>
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                      <ListPagination {...auditProductPagination} onPageChange={auditProductPagination.setPage} onPageSizeChange={auditProductPagination.setPageSize} />
                     </div>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                      {filteredProducts.length} itens cadastrados
-                    </span>
-                  </div>
 
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th className="th-sortable" onClick={() => handleAuditSort('name')}>
-                          <div className="th-content">
-                            <span>Produto / SKU</span>
-                            {auditSortField === 'name' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
-                          </div>
-                        </th>
-                        <th>Categoria</th>
-                        <th className="th-sortable" onClick={() => handleAuditSort('storage_location')}>
-                          <div className="th-content">
-                            <span>Localização</span>
-                            {auditSortField === 'storage_location' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
-                          </div>
-                        </th>
-                        <th className="th-sortable" onClick={() => handleAuditSort('current_stock')}>
-                          <div className="th-content">
-                            <span>Saldo Sistema</span>
-                            {auditSortField === 'current_stock' ? (auditSortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="th-sort-idle" />}
-                          </div>
-                        </th>
-                        <th>Status Auditoria</th>
-                        <th>Última Auditoria</th>
-                        <th style={{ textAlign: 'right' }}>Ação de Auditoria</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredProducts.length === 0 ? (
+                    {/* SEÇÃO 2: HISTÓRICO DE PARECERES & CONCILIAÇÕES */}
+                    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+                      <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+                            <FileText size={16} style={{ color: '#3b82f6' }} />
+                            Extrato de Pareceres e Divergências de Auditoria
+                          </h3>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.15rem 0 0' }}>
+                            Histórico auditável e imutável de todas as contagens, baixas técnicas e ajustes fiscais.
+                          </p>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                          {totalDivergenceMovements.length} pareceres registrados
+                        </span>
+                      </div>
+
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Data / Hora</th>
+                            <th>Produto</th>
+                            <th>Tipo de Divergência</th>
+                            <th>Qtd Ajustada</th>
+                            <th>Saldo Resultante</th>
+                            <th>Parecer & Justificativa Registrada</th>
+                            <th>Documento</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {totalDivergenceMovements.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="state-empty" style={{ textAlign: 'center', padding: '2rem' }}>
+                                Nenhum parecer de auditoria física registrado até o momento.
+                              </td>
+                            </tr>
+                          ) : (
+                            divergencePagination.pageItems.map(mov => {
+                              const isPositive = mov.movement_type.startsWith('in_');
+                              return (
+                                <tr key={mov.id}>
+                                  <td>
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                      <strong style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>{new Date(mov.created_at).toLocaleDateString('pt-BR')}</strong>
+                                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{new Date(mov.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <div className="product-title-cell">
+                                      <span className="product-name" style={{ fontWeight: 600 }}>{mov.product_name || mov.product?.name || 'Produto'}</span>
+                                      <div className="tags-row">
+                                        <span className="sku-tag">{mov.sku || mov.product?.sku || '-'}</span>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    {mov.movement_type === 'in_reconciliation' && (
+                                      <span className="movement-badge in-adj" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
+                                        <Check size={13} /> Sobra de Inventário (+)
+                                      </span>
+                                    )}
+                                    {mov.movement_type === 'out_reconciliation' && (
+                                      <span className="movement-badge out-adj" style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+                                        <AlertTriangle size={13} /> Quebra / Falta (-)
+                                      </span>
+                                    )}
+                                    {mov.movement_type === 'out_loss' && (
+                                      <span className="movement-badge out-loss">
+                                        <AlertTriangle size={13} /> Perda / Avaria (-)
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <strong className={isPositive ? 'qty-pos' : 'qty-neg'}>
+                                      {isPositive ? '+' : '-'}{Number(mov.quantity)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
+                                    </strong>
+                                  </td>
+                                  <td>
+                                    <span className="balance-tag">
+                                      {Number(mov.balance_after)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <div style={{ maxWidth: '320px', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.3 }}>
+                                      {mov.notes || 'Ajuste de inventário físico'}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                      <DocumentLink documentId={mov.document_id} showIcon={false}>
+                                        <span className="code-tag">{mov.reference_doc || 'Abrir origem'}</span>
+                                      </DocumentLink>
+                                      {mov.invoice_attachment && (
+                                        <a
+                                          href={mov.invoice_attachment}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          download={`NF_${mov.reference_doc || 'Doc'}`}
+                                          title="Baixar Nota Fiscal Anexada"
+                                          style={{ color: 'var(--primary-color)', display: 'inline-flex' }}
+                                        >
+                                          <Paperclip size={13} />
+                                        </a>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                      <ListPagination {...divergencePagination} onPageChange={divergencePagination.setPage} onPageSizeChange={divergencePagination.setPageSize} />
+                    </div>
+                  </>
+                )}
+
+                {/* ============================================================= */}
+                {/* SUB-ABA 2: HISTÓRICO DE LOTES IMPORTADOS                      */}
+                {/* ============================================================= */}
+                {auditSubTab === 'lotes' && (
+                  <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+                    <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+                          <FileSpreadsheet size={16} style={{ color: '#3b82f6' }} />
+                          Histórico de Cargas & Auditorias de Planilha (.xlsx)
+                        </h3>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.15rem 0 0' }}>
+                          Registro cronológico de todas as importações com apuração automática de vendas, variações de preço e capital parado.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => setIsImportModalOpen(true)}
+                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                      >
+                        <UploadCloud size={14} />
+                        <span>Nova Importação</span>
+                      </button>
+                    </div>
+
+                    <table className="data-table">
+                      <thead>
                         <tr>
-                          <td colSpan={7} className="state-empty" style={{ textAlign: 'center', padding: '2rem' }}>
-                            Nenhum produto localizado para os filtros informados.
-                          </td>
+                          <th>Lote / Código</th>
+                          <th>Data da Posição</th>
+                          <th>Importado em</th>
+                          <th>Arquivo</th>
+                          <th>Total Lidos</th>
+                          <th>Vendas Apuradas</th>
+                          <th>Variação de Custos</th>
+                          <th>Estoque Estagnado</th>
+                          <th style={{ textAlign: 'right' }}>Ação</th>
                         </tr>
-                      ) : (
-                        filteredProducts.map(prod => {
-                          const prodCat = categories.find(c => c.id === prod.category_id);
-                          const lastReconcil = stockMovements.find(
-                            m => m.product_id === prod.id && (m.movement_type === 'in_reconciliation' || m.movement_type === 'out_reconciliation' || m.movement_type === 'in_adjustment' || m.movement_type === 'out_adjustment')
-                          );
-                          const isAudited = Boolean(lastReconcil);
-
-                          return (
-                            <tr key={prod.id}>
+                      </thead>
+                      <tbody>
+                        {importBatches.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="state-empty" style={{ textAlign: 'center', padding: '2.5rem' }}>
+                              <FileSpreadsheet size={36} style={{ opacity: 0.3, marginBottom: '0.5rem' }} />
+                              <p style={{ margin: 0 }}>Nenhum lote de importação registrado até o momento.</p>
+                              <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => setIsImportModalOpen(true)}
+                                style={{ marginTop: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                              >
+                                <UploadCloud size={14} />
+                                <span>Importar Primeira Planilha</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ) : (
+                          importBatches.map(batch => (
+                            <tr
+                              key={batch.id}
+                              className="clickable-table-row ui-record-row"
+                              onClick={() => handleOpenBatchDetail(batch.id)}
+                              tabIndex={0}
+                              role="button"
+                              onKeyDown={(e) => {
+                                if (['Enter', ' '].includes(e.key)) {
+                                  e.preventDefault();
+                                  handleOpenBatchDetail(batch.id);
+                                }
+                              }}
+                            >
                               <td>
-                                <div className="product-title-cell">
-                                  <span className="product-name" style={{ fontWeight: 600 }}>{prod.name}</span>
-                                  <div className="tags-row">
-                                    <span className="sku-tag">{prod.sku}</span>
-                                    {prod.brand && <span className="brand-tag">{prod.brand}</span>}
-                                  </div>
-                                </div>
-                              </td>
-                              <td>
-                                <span className="category-pill">{prodCat?.name || 'Geral'}</span>
-                              </td>
-                              <td>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                  {prod.storage_location || 'Almoxarifado Central'}
-                                </span>
-                              </td>
-                              <td>
-                                <strong style={{ fontSize: '0.9rem', color: Number(prod.current_stock || 0) <= 0 ? '#ef4444' : 'var(--text-primary)' }}>
-                                  {formatQuantity(prod.current_stock)} {prod.unit_of_measure}
+                                <strong style={{ color: '#3b82f6', fontFamily: 'monospace' }}>
+                                  #{batch.batch_number}
                                 </strong>
                               </td>
                               <td>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.2rem 0.55rem', borderRadius: '4px', fontSize: '0.725rem', fontWeight: 600, background: isAudited ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)', color: isAudited ? '#10b981' : '#f59e0b', border: isAudited ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(245, 158, 11, 0.25)' }}>
-                                  {isAudited ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
-                                  <span>{isAudited ? 'Auditado' : 'Pendente'}</span>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                                  {batch.inventory_date || '-'}
                                 </span>
                               </td>
                               <td>
-                                {lastReconcil ? (
-                                  <div style={{ display: 'flex', flexDirection: 'column', fontSize: '0.75rem' }}>
-                                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{new Date(lastReconcil.created_at).toLocaleDateString('pt-BR')}</span>
-                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{lastReconcil.notes ? lastReconcil.notes.substring(0, 30) : 'Contagem física'}</span>
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 500 }}>
+                                    {new Date(batch.created_at).toLocaleDateString('pt-BR')}
+                                  </span>
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                    {new Date(batch.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                              </td>
+                              <td>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                                  {batch.filename || 'estoque.xlsx'}
+                                </span>
+                              </td>
+                              <td>
+                                <strong>{batch.total_products_read}</strong>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>
+                                  +{batch.created_products_count} novos
+                                </span>
+                              </td>
+                              <td>
+                                {batch.sales_identified_count > 0 ? (
+                                  <div>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#10b981' }}>
+                                      {batch.sales_identified_count} itens ({batch.total_sales_quantity} un)
+                                    </span>
+                                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>
+                                      {formatCurrency(batch.total_sales_estimated_revenue)}
+                                    </span>
                                   </div>
                                 ) : (
-                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Sem histórico</span>
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>-</span>
                                 )}
+                              </td>
+                              <td>
+                                {batch.cost_increases_count > 0 || batch.cost_decreases_count > 0 ? (
+                                  <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                                    {batch.cost_increases_count > 0 && (
+                                      <span style={{ fontSize: '0.72rem', background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444', padding: '0.15rem 0.4rem', borderRadius: '3px', fontWeight: 600 }}>
+                                        ↑ {batch.cost_increases_count}
+                                      </span>
+                                    )}
+                                    {batch.cost_decreases_count > 0 && (
+                                      <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', padding: '0.15rem 0.4rem', borderRadius: '3px', fontWeight: 600 }}>
+                                        ↓ {batch.cost_decreases_count}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Estável</span>
+                                )}
+                              </td>
+                              <td>
+                                <div>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f59e0b' }}>
+                                    {batch.stagnant_products_count} itens
+                                  </span>
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>
+                                    {formatCurrency(batch.total_stagnant_capital)} parados
+                                  </span>
+                                </div>
                               </td>
                               <td style={{ textAlign: 'right' }}>
                                 <button
                                   type="button"
-                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', fontSize: '0.78rem', fontWeight: 600, borderRadius: '6px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}
-                                  title="Realizar Contagem e Conciliação de Saldo"
-                                  onClick={() => handleOpenStockAdjustModal(prod, 'reconciliation')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenBatchDetail(batch.id);
+                                  }}
+                                  disabled={loadingBatchDetail}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    padding: '0.35rem 0.75rem',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 600,
+                                    borderRadius: '5px',
+                                    background: 'var(--bg-app)',
+                                    color: '#3b82f6',
+                                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                                    cursor: 'pointer'
+                                  }}
                                 >
-                                  <ShieldCheck size={14} />
-                                  <span>Auditar Saldo</span>
+                                  <Search size={13} />
+                                  <span>Raio-X do Lote</span>
                                 </button>
                               </td>
                             </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* SEÇÃO 2: HISTÓRICO DE PARECERES & CONCILIAÇÕES */}
-                <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
-                  <div style={{ padding: '0.85rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
-                        <FileText size={16} style={{ color: '#3b82f6' }} />
-                        Extrato de Pareceres e Divergências de Auditoria
-                      </h3>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.15rem 0 0' }}>
-                        Histórico auditável e imutável de todas as contagens, baixas técnicas e ajustes fiscais.
-                      </p>
-                    </div>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                      {totalDivergenceMovements.length} pareceres registrados
-                    </span>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
+                )}
 
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Data / Hora</th>
-                        <th>Produto</th>
-                        <th>Tipo de Divergência</th>
-                        <th>Qtd Ajustada</th>
-                        <th>Saldo Resultante</th>
-                        <th>Parecer & Justificativa Registrada</th>
-                        <th>Documento</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {totalDivergenceMovements.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="state-empty" style={{ textAlign: 'center', padding: '2rem' }}>
-                            Nenhum parecer de auditoria física registrado até o momento.
-                          </td>
-                        </tr>
-                      ) : (
-                        totalDivergenceMovements.map(mov => {
-                          const isPositive = mov.movement_type.startsWith('in_');
-                          return (
-                            <tr key={mov.id}>
-                              <td>
-                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                  <strong style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>{new Date(mov.created_at).toLocaleDateString('pt-BR')}</strong>
-                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{new Date(mov.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                                </div>
-                              </td>
-                              <td>
-                                <div className="product-title-cell">
-                                  <span className="product-name" style={{ fontWeight: 600 }}>{mov.product_name || mov.product?.name || 'Produto'}</span>
-                                  <div className="tags-row">
-                                    <span className="sku-tag">{mov.sku || mov.product?.sku || '-'}</span>
-                                  </div>
-                                </div>
-                              </td>
-                              <td>
-                                {mov.movement_type === 'in_reconciliation' && (
-                                  <span className="movement-badge in-adj" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
-                                    <Check size={13} /> Sobra de Inventário (+)
-                                  </span>
-                                )}
-                                {mov.movement_type === 'out_reconciliation' && (
-                                  <span className="movement-badge out-adj" style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
-                                    <AlertTriangle size={13} /> Quebra / Falta (-)
-                                  </span>
-                                )}
-                                {mov.movement_type === 'out_loss' && (
-                                  <span className="movement-badge out-loss">
-                                    <AlertTriangle size={13} /> Perda / Avaria (-)
-                                  </span>
-                                )}
-                              </td>
-                              <td>
-                                <strong className={isPositive ? 'qty-pos' : 'qty-neg'}>
-                                  {isPositive ? '+' : '-'}{Number(mov.quantity)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
-                                </strong>
-                              </td>
-                              <td>
-                                <span className="balance-tag">
-                                  {Number(mov.balance_after)} {mov.unit_of_measure || mov.product?.unit_of_measure || 'UN'}
-                                </span>
-                              </td>
-                              <td>
-                                <div style={{ maxWidth: '320px', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.3 }}>
-                                  {mov.notes || 'Ajuste de inventário físico'}
-                                </div>
-                              </td>
-                              <td>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                  <span className="code-tag">{mov.reference_doc || '-'}</span>
-                                  {mov.invoice_attachment && (
-                                    <a
-                                      href={mov.invoice_attachment}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      download={`NF_${mov.reference_doc || 'Doc'}`}
-                                      title="Baixar Nota Fiscal Anexada"
-                                      style={{ color: 'var(--primary-color)', display: 'inline-flex' }}
-                                    >
-                                      <Paperclip size={13} />
-                                    </a>
-                                  )}
-                                </div>
+                {/* ============================================================= */}
+                {/* SUB-ABA 3: RADAR DE ESTOQUE ESTAGNADO & CAPITAL PARADO        */}
+                {/* ============================================================= */}
+                {auditSubTab === 'estagnado' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {/* KPI CARDS DO CAPITAL ESTAGNADO */}
+                    <div className="summary-kpis-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                      <div className="summary-card highlight-stagnant" style={{ borderLeft: '4px solid #f59e0b', background: 'var(--bg-surface)' }}>
+                        <span className="kpi-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#f59e0b' }}>
+                          <AlertTriangle size={15} />
+                          Produtos Estagnados (Sem Venda)
+                        </span>
+                        <strong className="kpi-num" style={{ color: '#f59e0b' }}>
+                          {stagnantReport?.total_stagnant_products || 0} SKUs
+                        </strong>
+                        <span className="kpi-sub">Com saldo positivo em prateleira</span>
+                      </div>
+
+                      <div className="summary-card" style={{ borderLeft: '4px solid #3b82f6', background: 'var(--bg-surface)' }}>
+                        <span className="kpi-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#3b82f6' }}>
+                          <Package size={15} />
+                          Unidades Físicas Paradas
+                        </span>
+                        <strong className="kpi-num" style={{ color: 'var(--text-primary)' }}>
+                          {formatQuantity(stagnantReport?.total_stagnant_units || 0)} un
+                        </strong>
+                        <span className="kpi-sub">Estoque imobilizado</span>
+                      </div>
+
+                      <div className="summary-card highlight-values" style={{ borderLeft: '4px solid #ef4444', background: 'var(--bg-surface)' }}>
+                        <span className="kpi-title" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#ef4444' }}>
+                          <DollarSign size={15} />
+                          Capital Imobilizado Total (Custo)
+                        </span>
+                        <strong className="kpi-num" style={{ color: '#ef4444' }}>
+                          {formatCurrency(stagnantReport?.total_stagnant_capital || 0)}
+                        </strong>
+                        <span className="kpi-sub">Dinheiro retido sem giro recente</span>
+                      </div>
+                    </div>
+
+                    {/* AGRUPAMENTO POR CATEGORIA */}
+                    {stagnantReport?.stagnant_by_category && stagnantReport.stagnant_by_category.length > 0 && (
+                      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+                        <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)' }}>
+                          <h4 style={{ fontSize: '0.9rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                            Capital Estagnado por Categoria
+                          </h4>
+                        </div>
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Categoria</th>
+                              <th>Qtd de SKUs Parados</th>
+                              <th>Unidades Paradas</th>
+                              <th>Capital Imobilizado (R$)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stagnantReport.stagnant_by_category.map((cat, idx) => (
+                              <tr key={idx}>
+                                <td>
+                                  <span className="category-pill">{cat.category_name}</span>
+                                </td>
+                                <td>{cat.products_count} produtos</td>
+                                <td>{formatQuantity(cat.total_units)} un</td>
+                                <td>
+                                  <strong style={{ color: '#f59e0b' }}>
+                                    {formatCurrency(cat.total_capital)}
+                                  </strong>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* TOP PRODUTOS MAIS ESTAGNADOS */}
+                    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+                      <div style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <h4 style={{ fontSize: '0.9rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                            Ranking de Produtos com Maior Capital Retido
+                          </h4>
+                          <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: '0.1rem 0 0' }}>
+                            Produtos ordenados por maior valor financeiro parado sem movimentação de venda.
+                          </p>
+                        </div>
+                      </div>
+
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Produto / SKU</th>
+                            <th>Categoria</th>
+                            <th>Saldo Físico</th>
+                            <th>Custo Unit.</th>
+                            <th>Preço Venda</th>
+                            <th>Capital Imobilizado</th>
+                            <th>Dias sem Saída</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(!stagnantReport?.top_stagnant_products || stagnantReport.top_stagnant_products.length === 0) ? (
+                            <tr>
+                              <td colSpan={7} className="state-empty" style={{ textAlign: 'center', padding: '2rem' }}>
+                                Nenhum produto com estoque estagnado identificado.
                               </td>
                             </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
+                          ) : (
+                            stagnantReport.top_stagnant_products.slice(0, 50).map(prod => (
+                              <tr key={prod.product_id}>
+                                <td>
+                                  <div className="product-title-cell">
+                                    <RecordLink
+                                      type="PRODUCT"
+                                      id={prod.product_id}
+                                      className="product-name"
+                                    >
+                                      {prod.name}
+                                    </RecordLink>
+                                    <div className="tags-row">
+                                      <span className="sku-tag">{prod.sku || prod.code || '-'}</span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className="category-pill">{prod.category_name || 'Geral'}</span>
+                                </td>
+                                <td>
+                                  <strong>{formatQuantity(prod.current_stock)} {prod.unit_of_measure}</strong>
+                                </td>
+                                <td>{formatCurrency(prod.cost_price)}</td>
+                                <td>{formatCurrency(prod.sale_price)}</td>
+                                <td>
+                                  <strong style={{ color: '#ef4444', fontSize: '0.9rem' }}>
+                                    {formatCurrency(prod.stagnant_capital)}
+                                  </strong>
+                                </td>
+                                <td>
+                                  {prod.days_without_sale != null ? (
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: prod.days_without_sale > 30 ? '#ef4444' : '#f59e0b' }}>
+                                      {prod.days_without_sale} dias
+                                    </span>
+                                  ) : (
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Sem histórico</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ============================================================= */}
+            {/* 6. HUB DE INTEGRAÇÕES DIRETAS (ERP, VENDAS, FISCAL & API)     */}
+            {/* ============================================================= */}
+            {activeMenu === 'integracoes' && (
+              <div className="inventory-integrations-panel">
+                <div className="integrations-header">
+                  <div className="integrations-title">
+                    <RefreshCw size={20} className="icon-pulse" />
+                    <div>
+                      <h2>Canais externos e fluxos conectados</h2>
+                      <p>
+                        Gerencie entradas e saídas de dados do estoque, acompanhe execuções e identifique quais fluxos são externos ou internos.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="integrations-badge-status">
+                    <span className="dot-pulse"></span>
+                    <span>1 canal operacional</span>
+                  </div>
+                </div>
+
+                <div className="integrations-grid">
+                  {/* Canal 1: Planilhas & Auditoria */}
+                  <div className="integration-card active-card">
+                    <div className="card-top">
+                      <div className="card-icon excel-icon">
+                        <FileSpreadsheet size={22} />
+                      </div>
+                      <span className="card-badge connected">Conectado / Ativo</span>
+                    </div>
+                    <h3>Auditoria por Planilha Excel (.xlsx)</h3>
+                    <p>
+                      Processamento e apuração de saldos, conciliação automática de vendas diárias e cálculo de impacto financeiro por SKU.
+                    </p>
+                    <div className="card-metrics">
+                      <div className="metric-col">
+                        <span>Lotes Processados</span>
+                        <strong>{importBatches.length} arquivos</strong>
+                      </div>
+                      <div className="metric-col">
+                        <span>Última Importação</span>
+                        <strong>{importBatches[0] ? new Date(importBatches[0].created_at).toLocaleDateString('pt-BR') : 'Nenhuma'}</strong>
+                      </div>
+                    </div>
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn-card-action primary"
+                        onClick={() => setIsImportModalOpen(true)}
+                      >
+                        <UploadCloud size={14} />
+                        <span>Carregar Nova Planilha</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-card-action secondary"
+                        onClick={() => { setActiveMenu('auditoria'); setAuditSubTab('lotes'); }}
+                      >
+                        <History size={14} />
+                        <span>Ver Histórico de Lotes</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Canal 2: Integração com Compras & Fornecedores */}
+                  <div className="integration-card internal-flow-card">
+                    <div className="card-top">
+                      <div className="card-icon purchase-icon">
+                        <Package size={22} />
+                      </div>
+                      <span className="card-badge internal">Fluxo interno</span>
+                    </div>
+                    <h3>Compras → Estoque</h3>
+                    <p>
+                      Encaminha itens abaixo do mínimo para reposição e recebe mercadorias de pedidos de compra no Kardex.
+                    </p>
+                    <div className="card-metrics">
+                      <div className="metric-col">
+                        <span>Itens Críticos</span>
+                        <strong style={{ color: '#ef4444' }}>{belowMinStockItems.length} SKUs</strong>
+                      </div>
+                      <div className="metric-col">
+                        <span>Giro de Reposição</span>
+                        <strong>Regra interna</strong>
+                      </div>
+                    </div>
+                    <div className="card-actions">
+                      <a
+                        href="/compras?view=sugestoes"
+                        className="btn-card-action primary"
+                      >
+                        <Package size={14} />
+                        <span>Abrir sugestões de compra</span>
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Canal 3: Integração Fiscal & Notas Fiscais (NFe / XML) */}
+                  <div className="integration-card internal-flow-card">
+                    <div className="card-top">
+                      <div className="card-icon fiscal-icon">
+                        <ShieldCheck size={22} />
+                      </div>
+                      <span className="card-badge internal">Fluxo interno</span>
+                    </div>
+                    <h3>Fiscal → Kardex</h3>
+                    <p>
+                      Vincula documentos fiscais cadastrados, NCM e anexos às entradas de estoque; não representa conexão direta com a SEFAZ.
+                    </p>
+                    <div className="card-metrics">
+                      <div className="metric-col">
+                        <span>Itens com NCM</span>
+                        <strong>{products.filter(p => Boolean(p.ncm)).length} cadastrados</strong>
+                      </div>
+                      <div className="metric-col">
+                        <span>Anexos no Kardex</span>
+                        <strong>Habilitado</strong>
+                      </div>
+                    </div>
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn-card-action secondary"
+                        onClick={() => { setActiveMenu('movimentacoes'); setSearchTerm(''); }}
+                      >
+                        <History size={14} />
+                        <span>Auditar Movimentações Fiscais</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Canal 4: API REST & Webhooks Externos */}
+                  <div className="integration-card">
+                    <div className="card-top">
+                      <div className="card-icon api-icon">
+                        <Zap size={22} />
+                      </div>
+                      <span className="card-badge available">Disponível</span>
+                    </div>
+                    <h3>API REST & exportações</h3>
+                    <p>
+                      Interface autenticada para sistemas externos consultarem cadastros e executarem operações permitidas.
+                    </p>
+                    <div className="card-metrics">
+                      <div className="metric-col">
+                        <span>Contrato</span>
+                        <strong style={{ color: '#3b82f6' }}>OpenAPI</strong>
+                      </div>
+                      <div className="metric-col">
+                        <span>Autenticação</span>
+                        <strong>Bearer token</strong>
+                      </div>
+                    </div>
+                    <div className="card-actions">
+                      <a
+                        href="/docs"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn-card-action primary"
+                      >
+                        <FileText size={14} />
+                        <span>Abrir documentação</span>
+                      </a>
+                      <button
+                        type="button"
+                        className="btn-card-action secondary"
+                        onClick={() => exportProductsToCsv(products, 'completo')}
+                      >
+                        <Download size={14} />
+                        <span>Exportar Base de Produtos</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
           </div>
+          </>
+          )}
         </main>
       </div>
 
@@ -2504,6 +3387,7 @@ export const Inventory: React.FC = () => {
                     <option value="Avaria / Quebra de Produto">Avaria / Quebra de Produto</option>
                     <option value="Vencimento / Validade Expirada">Vencimento / Validade Expirada</option>
                     <option value="Consumo Interno / Uso Operacional">Consumo Interno / Uso Operacional</option>
+                    <option value="Devolução a Fornecedor">Devolução a Fornecedor</option>
                     <option value="Descarte Técnico / Quarentena">Descarte Técnico / Quarentena</option>
                     <option value="Extravio / Divergência de Transporte">Extravio / Divergência de Transporte</option>
                     <option value="Outro Motivo Operacional">Outro Motivo Operacional</option>
@@ -2777,7 +3661,7 @@ export const Inventory: React.FC = () => {
               </div>
 
               {/* Grid de KPIs da Carga */}
-              <div className="summary-kpis-grid">
+              <div className="summary-kpis-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                 <div className="summary-card">
                   <span className="kpi-title">Itens Processados</span>
                   <strong className="kpi-num">{importSummary.total_products_read}</strong>
@@ -2786,26 +3670,44 @@ export const Inventory: React.FC = () => {
 
                 <div className="summary-card highlight-created">
                   <span className="kpi-title">Novos Produtos</span>
-                  <strong className="kpi-num ok">{importSummary.created_products_count}</strong>
+                  <strong className="kpi-num ok">+{importSummary.created_products_count}</strong>
                   <span className="kpi-sub">{importSummary.updated_products_count} atualizados</span>
                 </div>
 
                 <div className="summary-card highlight-sales">
-                  <span className="kpi-title">Vendas Identificadas (Saídas)</span>
+                  <span className="kpi-title">Vendas Identificadas</span>
                   <strong className="kpi-num sale">{importSummary.sales_identified_count} itens</strong>
-                  <span className="kpi-sub">Total: {importSummary.total_sales_quantity} unidades</span>
+                  <span className="kpi-sub">
+                    {importSummary.total_sales_quantity} un • {formatCurrency(importSummary.total_sales_estimated_revenue)}
+                  </span>
+                </div>
+
+                <div className="summary-card" style={{ borderLeft: '4px solid #ef4444' }}>
+                  <span className="kpi-title">Variações de Custo</span>
+                  <strong className="kpi-num" style={{ color: '#ef4444' }}>
+                    {importSummary.cost_increases_count > 0 ? `↑ ${importSummary.cost_increases_count} aumentos` : 'Estável'}
+                  </strong>
+                  <span className="kpi-sub">{importSummary.cost_decreases_count} quedas de preço</span>
+                </div>
+
+                <div className="summary-card" style={{ borderLeft: '4px solid #f59e0b' }}>
+                  <span className="kpi-title">Estoque Estagnado</span>
+                  <strong className="kpi-num" style={{ color: '#f59e0b' }}>
+                    {importSummary.stagnant_products_count} itens
+                  </strong>
+                  <span className="kpi-sub">{formatCurrency(importSummary.total_stagnant_capital)} parados</span>
                 </div>
 
                 <div className="summary-card highlight-entries">
-                  <span className="kpi-title">Entradas / Reposições</span>
+                  <span className="kpi-title">Reposições de Estoque</span>
                   <strong className="kpi-num entry">{importSummary.entries_identified_count} itens</strong>
-                  <span className="kpi-sub">Total: {importSummary.total_entries_quantity} unidades</span>
+                  <span className="kpi-sub">{importSummary.total_entries_quantity} un adicionadas</span>
                 </div>
 
                 <div className="summary-card highlight-values">
                   <span className="kpi-title">Patrimônio em Custo</span>
                   <strong className="kpi-num">{formatCurrency(importSummary.total_cost_value)}</strong>
-                  <span className="kpi-sub">Valor de Venda: {formatCurrency(importSummary.total_sale_value)}</span>
+                  <span className="kpi-sub">Venda: {formatCurrency(importSummary.total_sale_value)}</span>
                 </div>
               </div>
 
@@ -2813,7 +3715,7 @@ export const Inventory: React.FC = () => {
               {importSummary.sample_items && importSummary.sample_items.length > 0 && (
                 <div className="sample-items-section">
                   <div className="sample-header">
-                    <h4>Auditoria de Itens & Movimentações Geradas</h4>
+                    <h4>Auditoria de Amostra & Movimentações Geradas</h4>
                     <div className="sample-search">
                       <Search size={14} />
                       <input
@@ -2834,8 +3736,8 @@ export const Inventory: React.FC = () => {
                           <th>Novo Saldo</th>
                           <th>Diferença</th>
                           <th>Ação Registrada</th>
-                          <th>Custo</th>
-                          <th>Venda</th>
+                          <th>Preço Custo</th>
+                          <th>Preço Venda</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2863,10 +3765,29 @@ export const Inventory: React.FC = () => {
                                 {item.action_type === 'created' && <span className="action-pill created">Novo Cadastro</span>}
                                 {item.action_type === 'sale_detected' && <span className="action-pill sale">Venda (Saída)</span>}
                                 {item.action_type === 'entry_detected' && <span className="action-pill entry">Reposição (Entrada)</span>}
-                                {item.action_type === 'unchanged' && <span className="action-pill unchanged">Saldo Inalterado</span>}
+                                {item.action_type === 'stagnant_unchanged' && <span className="action-pill" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>Estoque Estagnado</span>}
+                                {(item.action_type === 'zero_stock_unchanged' || item.action_type === 'unchanged') && <span className="action-pill unchanged">Saldo Zero</span>}
                               </td>
-                              <td>{formatCurrency(item.cost_price)}</td>
-                              <td>{formatCurrency(item.sale_price)}</td>
+                              <td>
+                                <div>
+                                  <strong>{formatCurrency(item.new_cost_price)}</strong>
+                                  {item.cost_variation_percent != null && Number(item.cost_variation_percent) !== 0 ? (
+                                    <span style={{ fontSize: '0.7rem', display: 'block', color: item.cost_variation_percent > 0 ? '#ef4444' : '#10b981', fontWeight: 600 }}>
+                                      {item.cost_variation_percent > 0 ? `+${item.cost_variation_percent}%` : `${item.cost_variation_percent}%`}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td>
+                                <div>
+                                  <strong>{formatCurrency(item.new_sale_price)}</strong>
+                                  {item.sale_variation_percent != null && Number(item.sale_variation_percent) !== 0 ? (
+                                    <span style={{ fontSize: '0.7rem', display: 'block', color: item.sale_variation_percent > 0 ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+                                      {item.sale_variation_percent > 0 ? `+${item.sale_variation_percent}%` : `${item.sale_variation_percent}%`}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </td>
                             </tr>
                           ))}
                       </tbody>
@@ -2881,11 +3802,13 @@ export const Inventory: React.FC = () => {
                   className="btn btn-primary"
                   onClick={() => {
                     setIsImportModalOpen(false);
-                    setActiveMenu('produtos');
+                    setActiveMenu('auditoria');
+                    setAuditSubTab('lotes');
+                    void loadBatchesAndStagnation(true);
                   }}
                 >
                   <Check size={16} />
-                  <span>Concluir e Ver Catálogo de Produtos</span>
+                  <span>Concluir e Ver Histórico de Auditoria</span>
                 </button>
               </div>
             </div>
@@ -2893,6 +3816,361 @@ export const Inventory: React.FC = () => {
         </div>
       </Modal>
 
+      {/* =====================================================================
+          MODAL RAIO-X DE AUDITORIA DO LOTE DE IMPORTAÇÃO
+      ===================================================================== */}
+      {/* =====================================================================
+          MODAL RAIO-X DE AUDITORIA DO LOTE DE IMPORTAÇÃO (REDESENHADO)
+      ===================================================================== */}
+      {selectedBatchDetail && (() => {
+        const filteredAuditItems = selectedBatchDetail.items.filter(it => {
+          if (batchModalFilter === 'prices') {
+            const hasCostVar = it.cost_variation_percent != null && Number(it.cost_variation_percent) !== 0;
+            const hasSaleVar = it.sale_variation_percent != null && Number(it.sale_variation_percent) !== 0;
+            if (!hasCostVar && !hasSaleVar) return false;
+          } else if (batchModalFilter === 'sales') {
+            if (it.action_type !== 'sale_detected') return false;
+          } else if (batchModalFilter === 'stagnant') {
+            if (it.action_type !== 'stagnant_unchanged') return false;
+          } else if (batchModalFilter === 'entries') {
+            if (it.action_type !== 'entry_detected' && it.action_type !== 'created') return false;
+          }
+          if (batchModalSearch.trim()) {
+            const term = batchModalSearch.toLowerCase();
+            return (
+              it.name.toLowerCase().includes(term) ||
+              it.code.toLowerCase().includes(term) ||
+              Boolean(it.barcode && it.barcode.toLowerCase().includes(term)) ||
+              Boolean(it.ncm && it.ncm.toLowerCase().includes(term))
+            );
+          }
+          return true;
+        });
+
+        const totalAuditPages = Math.max(1, Math.ceil(filteredAuditItems.length / batchModalPageSize));
+        const currentAuditPage = Math.min(batchModalPage, totalAuditPages);
+        const paginatedAuditItems = filteredAuditItems.slice(
+          (currentAuditPage - 1) * batchModalPageSize,
+          currentAuditPage * batchModalPageSize
+        );
+
+        const pricesVarCount = selectedBatchDetail.items.filter(
+          i => (i.cost_variation_percent != null && Number(i.cost_variation_percent) !== 0) || (i.sale_variation_percent != null && Number(i.sale_variation_percent) !== 0)
+        ).length;
+
+        return (
+          <Modal
+            isOpen={Boolean(selectedBatchDetail)}
+            onClose={() => setSelectedBatchDetail(null)}
+            title={`Raio-X de Auditoria: Lote #${selectedBatchDetail.batch_number}`}
+            subtitle={`Arquivo: ${selectedBatchDetail.filename || 'relatorio.xlsx'} • Data do Estoque: ${selectedBatchDetail.inventory_date || 'Geral'} • Processado em: ${new Date(selectedBatchDetail.created_at).toLocaleString('pt-BR')}`}
+            size="xl"
+          >
+            <div className="audit-raiox-container">
+              {/* 1. GRID DE KPI CARDS EXECUTIVOS */}
+              <div className="audit-kpi-grid">
+                <div className="audit-kpi-card sales-card">
+                  <div className="kpi-header">
+                    <span className="kpi-label"><TrendingDown size={14} /> Vendas Apuradas</span>
+                    <div className="kpi-icon-wrap"><TrendingDown size={14} /></div>
+                  </div>
+                  <div className="kpi-main-val">+{formatCurrency(selectedBatchDetail.total_sales_estimated_revenue)}</div>
+                  <div className="kpi-subtitle">
+                    <strong>{selectedBatchDetail.sales_identified_count} itens</strong> • {formatQuantity(selectedBatchDetail.total_sales_quantity)} un apuradas
+                  </div>
+                </div>
+
+                <div className="audit-kpi-card costs-card">
+                  <div className="kpi-header">
+                    <span className="kpi-label"><AlertTriangle size={14} /> Variações de Custo</span>
+                    <div className="kpi-icon-wrap"><ArrowUpDown size={14} /></div>
+                  </div>
+                  <div className="kpi-main-val">
+                    {selectedBatchDetail.cost_increases_count + selectedBatchDetail.cost_decreases_count} reajustes
+                  </div>
+                  <div className="kpi-subtitle">
+                    <span style={{ color: '#ef4444', fontWeight: 700 }}>↑ {selectedBatchDetail.cost_increases_count} aumentos</span>
+                    <span>•</span>
+                    <span style={{ color: '#10b981', fontWeight: 700 }}>↓ {selectedBatchDetail.cost_decreases_count} quedas</span>
+                  </div>
+                </div>
+
+                <div className="audit-kpi-card stagnant-card">
+                  <div className="kpi-header">
+                    <span className="kpi-label"><DollarSign size={14} /> Estoque Estagnado</span>
+                    <div className="kpi-icon-wrap"><DollarSign size={14} /></div>
+                  </div>
+                  <div className="kpi-main-val">{formatCurrency(selectedBatchDetail.total_stagnant_capital)}</div>
+                  <div className="kpi-subtitle">
+                    <strong>{selectedBatchDetail.stagnant_products_count} itens</strong> imobilizados sem giro
+                  </div>
+                </div>
+
+                <div className="audit-kpi-card entries-card">
+                  <div className="kpi-header">
+                    <span className="kpi-label"><TrendingUp size={14} /> Reposições de Saldo</span>
+                    <div className="kpi-icon-wrap"><TrendingUp size={14} /></div>
+                  </div>
+                  <div className="kpi-main-val">+{formatQuantity(selectedBatchDetail.total_entries_quantity)} un</div>
+                  <div className="kpi-subtitle">
+                    <strong>{selectedBatchDetail.entries_identified_count} itens</strong> adicionados ao físico
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. BARRA DE AÇÕES & INTEGRAÇÕES DIRETAS DO LOTE */}
+              <div className="audit-direct-actions-bar">
+                <div className="direct-actions-title">
+                  <Sparkles size={16} />
+                  <span>Ações & Integrações Diretas:</span>
+                </div>
+                <div className="direct-actions-buttons">
+                  <button
+                    type="button"
+                    className="btn-direct-action btn-replenish"
+                    onClick={() => handleGenerateReplenishmentFromBatch(selectedBatchDetail)}
+                    title="Abrir módulo de Compras para repor itens vendidos ou zerados neste lote"
+                  >
+                    <Package size={13} />
+                    <span>Reposição em Compras</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-direct-action btn-kardex"
+                    onClick={() => handleNavigateToKardexForBatch(selectedBatchDetail)}
+                    title="Visualizar a trilha de movimentações gerada pelo lote no Kardex"
+                  >
+                    <History size={13} />
+                    <span>Trilha no Kardex</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-direct-action btn-export"
+                    onClick={() => exportBatchAuditToCsv(selectedBatchDetail)}
+                    title="Exportar auditoria analítica completa em formato CSV / Excel"
+                  >
+                    <Download size={13} />
+                    <span>Exportar Auditoria (CSV)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. FILTROS E BUSCA INTERNA DO LOTE */}
+              <div className="audit-controls-bar">
+                <div className="audit-filter-pills">
+                  <button
+                    type="button"
+                    className={`audit-pill-btn pill-all ${batchModalFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => { setBatchModalFilter('all'); setBatchModalPage(1); }}
+                  >
+                    <span>Todos</span>
+                    <span className="count-badge">{selectedBatchDetail.items.length}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`audit-pill-btn pill-prices ${batchModalFilter === 'prices' ? 'active' : ''}`}
+                    onClick={() => { setBatchModalFilter('prices'); setBatchModalPage(1); }}
+                  >
+                    <span>🔴 Variações de Preço</span>
+                    <span className="count-badge">{pricesVarCount}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`audit-pill-btn pill-sales ${batchModalFilter === 'sales' ? 'active' : ''}`}
+                    onClick={() => { setBatchModalFilter('sales'); setBatchModalPage(1); }}
+                  >
+                    <span>🟢 Vendas no Período</span>
+                    <span className="count-badge">{selectedBatchDetail.sales_identified_count}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`audit-pill-btn pill-stagnant ${batchModalFilter === 'stagnant' ? 'active' : ''}`}
+                    onClick={() => { setBatchModalFilter('stagnant'); setBatchModalPage(1); }}
+                  >
+                    <span>🟡 Estoque Estagnado</span>
+                    <span className="count-badge">{selectedBatchDetail.stagnant_products_count}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`audit-pill-btn pill-entries ${batchModalFilter === 'entries' ? 'active' : ''}`}
+                    onClick={() => { setBatchModalFilter('entries'); setBatchModalPage(1); }}
+                  >
+                    <span>🔵 Reposições</span>
+                    <span className="count-badge">{selectedBatchDetail.entries_identified_count}</span>
+                  </button>
+                </div>
+
+                <div className="audit-search-input-wrap">
+                  <Search size={14} className="search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por produto, código, EAN..."
+                    value={batchModalSearch}
+                    onChange={(e) => {
+                      setBatchModalSearch(e.target.value);
+                      setBatchModalPage(1);
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* 4. TABELA DE ITENS AUDITADOS COM PAGINAÇÃO */}
+              <div className="audit-table-wrapper">
+                <table className="audit-data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '32%' }}>Código / Produto</th>
+                      <th style={{ width: '10%', textAlign: 'center' }}>Saldo Ant.</th>
+                      <th style={{ width: '10%', textAlign: 'center' }}>Novo Saldo</th>
+                      <th style={{ width: '10%', textAlign: 'center' }}>Variação</th>
+                      <th style={{ width: '13%' }}>Preço Custo</th>
+                      <th style={{ width: '13%' }}>Preço Venda</th>
+                      <th style={{ width: '12%' }}>Status Auditoria</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedAuditItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                          Nenhum item corresponde ao filtro ou termo de busca selecionado.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedAuditItems.map((it, idx) => (
+                        <tr key={idx}>
+                          <td>
+                            <div className="audit-product-cell">
+                              <span className="prod-name">{it.name}</span>
+                              <div className="prod-tags-row">
+                                <span className="code-chip">CÓD: {it.code}</span>
+                                {it.barcode && (
+                                  <span className="barcode-chip" title="Código de barras EAN">
+                                    <Tags size={10} />
+                                    <span>EAN: {it.barcode}</span>
+                                  </span>
+                                )}
+                                {it.ncm && (
+                                  <span className="ncm-chip" title="NCM Fiscal">
+                                    NCM: {it.ncm}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <span>{formatQuantity(it.previous_stock)} {it.unit_of_measure}</span>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <strong>{formatQuantity(it.new_stock)} {it.unit_of_measure}</strong>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <span className={`stock-delta-pill ${Number(it.delta_stock) > 0 ? 'pos' : Number(it.delta_stock) < 0 ? 'neg' : 'zero'}`}>
+                              {Number(it.delta_stock) > 0 ? `+${it.delta_stock}` : it.delta_stock}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="price-compare-cell">
+                              <span className="price-line">
+                                {it.previous_cost_price != null ? formatCurrency(it.previous_cost_price) : '-'} → <strong>{formatCurrency(it.new_cost_price)}</strong>
+                              </span>
+                              {it.cost_variation_percent != null && Number(it.cost_variation_percent) !== 0 ? (
+                                <span className={`price-var-pill ${it.cost_variation_percent > 0 ? 'up' : 'down'}`}>
+                                  {it.cost_variation_percent > 0 ? `↑ +${it.cost_variation_percent}%` : `↓ ${it.cost_variation_percent}%`}
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="price-compare-cell">
+                              <span className="price-line">
+                                {it.previous_sale_price != null ? formatCurrency(it.previous_sale_price) : '-'} → <strong>{formatCurrency(it.new_sale_price)}</strong>
+                              </span>
+                              {it.sale_variation_percent != null && Number(it.sale_variation_percent) !== 0 ? (
+                                <span className={`price-var-pill ${it.sale_variation_percent > 0 ? 'sale-up' : 'sale-down'}`}>
+                                  {it.sale_variation_percent > 0 ? `↑ +${it.sale_variation_percent}%` : `↓ ${it.sale_variation_percent}%`}
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td>
+                            {it.action_type === 'created' && (
+                              <span className="status-audit-badge status-created">
+                                <Sparkles size={11} /> Novo Cadastro
+                              </span>
+                            )}
+                            {it.action_type === 'sale_detected' && (
+                              <span className="status-audit-badge status-sale" title={`Receita apurada: +${formatCurrency(it.estimated_sales_revenue)}`}>
+                                <TrendingDown size={11} /> Venda Apurada
+                              </span>
+                            )}
+                            {it.action_type === 'entry_detected' && (
+                              <span className="status-audit-badge status-entry" title={`Entrada física de +${it.delta_stock} un`}>
+                                <TrendingUp size={11} /> Reposição (+)
+                              </span>
+                            )}
+                            {it.action_type === 'stagnant_unchanged' && (
+                              <span className="status-audit-badge status-stagnant" title={`Capital parado: ${formatCurrency(it.stagnant_value)}`}>
+                                <AlertTriangle size={11} /> Estagnado
+                              </span>
+                            )}
+                            {(it.action_type === 'zero_stock_unchanged' || it.action_type === 'unchanged') && (
+                              <span className="status-audit-badge status-zero">
+                                Saldo Zero
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 5. BARRA DE PAGINAÇÃO DO MODAL */}
+              <div className="audit-pagination-bar">
+                <span>
+                  Exibindo <strong>{paginatedAuditItems.length > 0 ? (currentAuditPage - 1) * batchModalPageSize + 1 : 0}</strong> a{' '}
+                  <strong>{Math.min(currentAuditPage * batchModalPageSize, filteredAuditItems.length)}</strong> de{' '}
+                  <strong>{filteredAuditItems.length}</strong> itens auditados
+                </span>
+                <div className="pagination-buttons">
+                  <button
+                    type="button"
+                    onClick={() => setBatchModalPage(p => Math.max(1, p - 1))}
+                    disabled={currentAuditPage <= 1}
+                  >
+                    ← Anterior
+                  </button>
+                  <span style={{ alignSelf: 'center', padding: '0 0.5rem', fontWeight: 600 }}>
+                    Página {currentAuditPage} de {totalAuditPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setBatchModalPage(p => Math.min(totalAuditPages, p + 1))}
+                    disabled={currentAuditPage >= totalAuditPages}
+                  >
+                    Próxima →
+                  </button>
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setSelectedBatchDetail(null)}
+                >
+                  Fechar Detalhes
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {/* =====================================================================
           MODAL DE CONFIRMAÇÃO & EXCLUSÃO ESTILIZADO (Substitui window.confirm)
@@ -2915,4 +4193,3 @@ export const Inventory: React.FC = () => {
 };
 
 export default Inventory;
-
