@@ -193,6 +193,19 @@ def create_payment_instrument(db: Session, instrument: PaymentInstrument) -> Pay
     return instrument
 
 
+def get_payment_instrument_by_id(db: Session, instrument_id: uuid.UUID, payable_id: uuid.UUID) -> PaymentInstrument | None:
+    stmt = select(PaymentInstrument).where(
+        PaymentInstrument.id == instrument_id,
+        PaymentInstrument.payable_id == payable_id
+    )
+    return db.scalars(stmt).first()
+
+
+def delete_payment_instrument(db: Session, instrument: PaymentInstrument) -> None:
+    db.delete(instrument)
+    db.flush()
+
+
 def create_payment(db: Session, payment: Payment) -> Payment:
     db.add(payment)
     db.flush()

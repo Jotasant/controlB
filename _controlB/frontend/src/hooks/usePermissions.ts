@@ -35,17 +35,22 @@ export const usePermissions = () => {
       });
   }, []);
 
+  // Usuário administrador possui acesso total por definição
+  const isAdmin = user?.role_name?.toLowerCase() === 'administrador' || 
+                  user?.role_name?.toLowerCase() === 'admin' || 
+                  permissions.includes('*:*');
+
   // Função utilitária para checar uma ou mais permissões
   const hasPermission = (code: string): boolean => {
-    return permissions.includes('*:*') || permissions.includes(code);
+    return isAdmin || permissions.includes(code);
   };
 
   const hasAnyPermission = (codes: string[]): boolean => {
-    return permissions.includes('*:*') || codes.some(code => permissions.includes(code));
+    return isAdmin || codes.some(code => permissions.includes(code));
   };
 
   const hasAllPermissions = (codes: string[]): boolean => {
-    return permissions.includes('*:*') || codes.every(code => permissions.includes(code));
+    return isAdmin || codes.every(code => permissions.includes(code));
   };
 
   return {

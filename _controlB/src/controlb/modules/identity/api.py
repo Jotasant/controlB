@@ -109,6 +109,16 @@ def get_users(
     return repository.get_all_users(db, current_user.organization_id)
 
 
+@router.get("/users/{user_id}", response_model=schemas.UserResponse)
+def get_user(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("users:view"))
+):
+    """Retorna um usuário da organização atual para a página de formulário."""
+    return service.get_user(db, user_id, current_user.organization_id)
+
+
 @router.put("/users/{user_id}", response_model=schemas.UserResponse)
 def update_user_profile(
     user_id: uuid.UUID,
@@ -163,6 +173,16 @@ def get_roles(
     return repository.get_all_roles(db)
 
 
+@router.get("/role/{role_id}", response_model=schemas.RoleResponse)
+def get_role(
+    role_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("roles:view"))
+):
+    """Retorna um cargo para a página de formulário."""
+    return service.get_role(db, role_id)
+
+
 @router.put("/role/{role_id}", response_model=schemas.RoleResponse)
 def update_role(
     role_id: uuid.UUID,
@@ -215,6 +235,16 @@ def get_organizations(
 ):
     """Retorna todas as organizações cadastradas (Exige permissão: organizations:view)."""
     return repository.get_all_organizations(db)
+
+
+@router.get("/organization/{org_id}", response_model=schemas.OrganizationResponse)
+def get_organization(
+    org_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.require_permission("organizations:view"))
+):
+    """Retorna uma organização para a página de formulário."""
+    return service.get_organization(db, org_id)
 
 
 @router.put("/organization/{org_id}", response_model=schemas.OrganizationResponse)
@@ -428,4 +458,3 @@ def remove_team_member(
     if team.leader:
         item.leader_name = team.leader.full_name
     return item
-

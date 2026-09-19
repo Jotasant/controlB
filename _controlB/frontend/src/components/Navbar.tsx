@@ -14,7 +14,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, Sun, Moon, ChevronDown, User,
   LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart, Package,
-  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store, Files
+  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store, Files, Kanban
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
@@ -82,7 +82,7 @@ export const Navbar: React.FC = () => {
   ]);
 
   // Verifica se está dentro de alguma rota de módulo para destacar o menu "Módulos"
-  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras', '/documentos'].some(path =>
+  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras', '/documentos', '/projetos'].some(path =>
     location.pathname.startsWith(path)
   );
 
@@ -96,6 +96,28 @@ export const Navbar: React.FC = () => {
     'products:view',
     'purchasing:view'
   ]);
+
+  // 🛡️ Regras RBAC Granulares por Módulo
+  const canAccessCRM = hasAnyPermission(['crm:view', 'crm:manage']);
+  const canAccessSales = hasAnyPermission(['sales:view', 'sales:manage']);
+  const canAccessPOS = hasAnyPermission(['sales:pos', 'sales:view', 'sales:manage']);
+  const canAccessBilling = hasAnyPermission(['billing:view', 'billing:manage']);
+  const canAccessFinance = hasAnyPermission([
+    'finance:view', 'finance:payables', 'finance:receivables', 'finance:treasury', 'finance:reconcile'
+  ]);
+  const canAccessInventory = hasAnyPermission([
+    'products:view', 'products:manage', 'inventory:move', 'inventory:audit'
+  ]);
+  const canAccessPurchasing = hasAnyPermission([
+    'purchasing:view', 'purchasing:request', 'purchasing:quote', 'purchasing:order', 'purchasing:receive'
+  ]);
+  const canAccessProjects = hasAnyPermission([
+    'projects:view', 'projects:create', 'work_orders:view', 'tasks:view'
+  ]);
+
+  // O menu "Módulos" só é renderizado se o usuário tiver acesso a ao menos um módulo
+  const canAccessAnyModule = canAccessCRM || canAccessSales || canAccessPOS ||
+    canAccessBilling || canAccessFinance || canAccessInventory || canAccessPurchasing || canAccessDocuments || canAccessProjects;
 
   return (
     <header className="slim-navbar">
@@ -117,127 +139,159 @@ export const Navbar: React.FC = () => {
           </NavLink>
         )}
 
-        {/* 🗂️ Menu Principal: Módulos (CRM, Vendas, PDV, Faturamento, Financeiro, Estoque, Compras) */}
-        <div className="dropdown-wrapper" ref={modulesRef}>
-          <button
-            type="button"
-            className={`nav-link dropdown-btn ${isModulesOpen || isModuleActive ? 'active' : ''}`}
-            onClick={() => setIsModulesOpen(!isModulesOpen)}
-          >
-            <Layers size={14} />
-            <span>Módulos</span>
-            <ChevronDown size={12} className={`arrow-icon ${isModulesOpen ? 'rotated' : ''}`} />
-          </button>
+        {/* 🗂️ Menu Principal: Módulos (Renderizado apenas se tiver acesso a ao menos 1 módulo) */}
+        {canAccessAnyModule && (
+          <div className="dropdown-wrapper" ref={modulesRef}>
+            <button
+              type="button"
+              className={`nav-link dropdown-btn ${isModulesOpen || isModuleActive ? 'active' : ''}`}
+              onClick={() => setIsModulesOpen(!isModulesOpen)}
+            >
+              <Layers size={14} />
+              <span>Módulos</span>
+              <ChevronDown size={12} className={`arrow-icon ${isModulesOpen ? 'rotated' : ''}`} />
+            </button>
 
-          {isModulesOpen && (
-            <div className="dropdown-popover modules-popover">
-              {/* 👥 Módulo de CRM */}
-              <NavLink
-                to="/crm"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <Users size={16} className="icon-module icon-crm" />
-                <div className="item-text">
-                  <span className="title">CRM & Relacionamento</span>
-                  <span className="desc">Leads, oportunidades e pipeline</span>
-                </div>
-              </NavLink>
+            {isModulesOpen && (
+              <div className="dropdown-popover modules-popover">
+                {/* 👥 Módulo de CRM */}
+                {canAccessCRM && (
+                  <NavLink
+                    to="/crm"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <Users size={16} className="icon-module icon-crm" />
+                    <div className="item-text">
+                      <span className="title">CRM & Relacionamento</span>
+                      <span className="desc">Leads, oportunidades e pipeline</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {/* 🛍️ Módulo de Vendas */}
-              <NavLink
-                to="/vendas"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <ShoppingBag size={16} className="icon-module icon-sales" />
-                <div className="item-text">
-                  <span className="title">Vendas & Cotações</span>
-                  <span className="desc">Orçamentos, propostas e pedidos</span>
-                </div>
-              </NavLink>
+                {/* 🛍️ Módulo de Vendas */}
+                {canAccessSales && (
+                  <NavLink
+                    to="/vendas"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <ShoppingBag size={16} className="icon-module icon-sales" />
+                    <div className="item-text">
+                      <span className="title">Vendas & Cotações</span>
+                      <span className="desc">Orçamentos, propostas e pedidos</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {/* 🏪 Frente de Caixa (PDV) */}
-              <NavLink
-                to="/pdv"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <Store size={16} className="icon-module icon-pos" />
-                <div className="item-text">
-                  <span className="title">Frente de Caixa (PDV)</span>
-                  <span className="desc">Venda balcão e cupom não-fiscal</span>
-                </div>
-              </NavLink>
+                {/* 🏪 Frente de Caixa (PDV) */}
+                {canAccessPOS && (
+                  <NavLink
+                    to="/pdv"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <Store size={16} className="icon-module icon-pos" />
+                    <div className="item-text">
+                      <span className="title">Frente de Caixa (PDV)</span>
+                      <span className="desc">Venda balcão e cupom não-fiscal</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {/* 🧾 Módulo de Faturamento */}
-              <NavLink
-                to="/faturamento"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <ReceiptText size={16} className="icon-module icon-billing" />
-                <div className="item-text">
-                  <span className="title">Faturamento & Notas</span>
-                  <span className="desc">Faturas comerciais e NF-e/NFC-e</span>
-                </div>
-              </NavLink>
+                {/* 🧾 Módulo de Faturamento */}
+                {canAccessBilling && (
+                  <NavLink
+                    to="/faturamento"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <ReceiptText size={16} className="icon-module icon-billing" />
+                    <div className="item-text">
+                      <span className="title">Faturamento & Notas</span>
+                      <span className="desc">Faturas comerciais e NF-e/NFC-e</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {/* 💰 Módulo Financeiro */}
-              <NavLink
-                to="/financeiro"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <Landmark size={16} className="icon-module icon-finance" />
-                <div className="item-text">
-                  <span className="title">Gestão Financeira</span>
-                  <span className="desc">Contas a pagar/receber e bancos</span>
-                </div>
-              </NavLink>
+                {/* 💰 Módulo Financeiro */}
+                {canAccessFinance && (
+                  <NavLink
+                    to="/financeiro"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <Landmark size={16} className="icon-module icon-finance" />
+                    <div className="item-text">
+                      <span className="title">Gestão Financeira</span>
+                      <span className="desc">Contas a pagar/receber e bancos</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {/* 📦 Módulo de Estoque */}
-              <NavLink
-                to="/estoque"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <Package size={16} className="icon-module icon-inventory" />
-                <div className="item-text">
-                  <span className="title">Estoque & Almoxarifado</span>
-                  <span className="desc">Saldos físicos e movimentações</span>
-                </div>
-              </NavLink>
+                {/* 📦 Módulo de Estoque */}
+                {canAccessInventory && (
+                  <NavLink
+                    to="/estoque"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <Package size={16} className="icon-module icon-inventory" />
+                    <div className="item-text">
+                      <span className="title">Estoque & Almoxarifado</span>
+                      <span className="desc">Saldos físicos e movimentações</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {/* 🛒 Módulo de Compras */}
-              <NavLink
-                to="/compras"
-                className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                onClick={() => setIsModulesOpen(false)}
-              >
-                <ShoppingCart size={16} className="icon-module icon-purchasing" />
-                <div className="item-text">
-                  <span className="title">Compras & Suprimentos</span>
-                  <span className="desc">Solicitações, cotações e ordens</span>
-                </div>
-              </NavLink>
+                {/* 🛒 Módulo de Compras */}
+                {canAccessPurchasing && (
+                  <NavLink
+                    to="/compras"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <ShoppingCart size={16} className="icon-module icon-purchasing" />
+                    <div className="item-text">
+                      <span className="title">Compras & Suprimentos</span>
+                      <span className="desc">Solicitações, cotações e ordens</span>
+                    </div>
+                  </NavLink>
+                )}
 
-              {canAccessDocuments && (
-                <NavLink
-                  to="/documentos"
-                  className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
-                  onClick={() => setIsModulesOpen(false)}
-                >
-                  <Files size={16} className="icon-module" />
-                  <div className="item-text">
-                    <span className="title">Central de Documentos</span>
-                    <span className="desc">Pesquisa, vínculos e rastreabilidade</span>
-                  </div>
-                </NavLink>
-              )}
-            </div>
-          )}
-        </div>
+                {/* 📄 Central de Documentos */}
+                {canAccessDocuments && (
+                  <NavLink
+                    to="/documentos"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <Files size={16} className="icon-module" />
+                    <div className="item-text">
+                      <span className="title">Central de Documentos</span>
+                      <span className="desc">Pesquisa, vínculos e rastreabilidade</span>
+                    </div>
+                  </NavLink>
+                )}
+
+                {/* 📋 Projetos & Operações */}
+                {canAccessProjects && (
+                  <NavLink
+                    to="/projetos"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <Kanban size={16} className="icon-module icon-projects" />
+                    <div className="item-text">
+                      <span className="title">Projetos & Operações</span>
+                      <span className="desc">Projetos, serviços, produção e atividades</span>
+                    </div>
+                  </NavLink>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Menu Pai: Configurações com Dropdown (Ocultado se o usuário não tiver permissão) */}
         {canAccessSettings && (

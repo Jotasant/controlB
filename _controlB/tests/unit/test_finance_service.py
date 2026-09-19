@@ -526,3 +526,107 @@ def test_finance_dashboard_metrics(db: Session, current_org):
     assert summary.total_available_balance >= Decimal("0.00")
     assert summary.payables_today >= Decimal("0.00")
     assert summary.receivables_today >= Decimal("0.00")
+
+
+def test_payable_reopen_and_delete_lifecycle(db: Session, current_org, current_user):
+    # 1. Cria payable avulso
+    payable = service.create_payable_expense(
+        db,
+        current_org.id,
+        current_user,
+        schemas.PayableCreate(
+            description="Conta Teste Cancelamento",
+            favored_name="Fornecedor Cancelar",
+            original_amount=Decimal("150.00"),
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=15),
+        )
+    )[0]
+    assert payable.status == "PENDING_APPROVAL"
+
+    # 2. Cancela a conta
+    cancelled = service.update_payable(
+        db,
+        current_org.id,
+        payable.id,
+        current_user,
+        schemas.PayableUpdate(status="CANCELLED")
+    )
+    assert cancelled.status == "CANCELLED"
+
+    # 3. Reabre a conta cancelada
+    reopened = service.reopen_payable(db, current_org.id, payable.id, current_user)
+    assert reopened.status == "PENDING_APPROVAL"
+
+    # 4. Cancela novamente e exclui
+    service.update_payable(
+        db,
+        current_org.id,
+        payable.id,
+        current_user,
+        schemas.PayableUpdate(status="CANCELLED")
+    )
+    service.delete_payable(db, current_org.id, payable.id, current_user)
+    assert repository.get_payable_by_id(db, payable.id, current_org.id) is None
+
+
+def test_payable_installments_with_boletos_and_atomic_fiscal_doc(db: Session, current_org, current_user):
+    # Cria despesa em 3 parcelas com dados de boleto e nova nota fiscal anexada
+    payables = service.create_payable_expense(
+        db,
+        current_org.id,
+        current_user,
+        schemas.PayableCreate(
+            description="Contrato TI 3x",
+            favored_name="Provedor Cloud",
+            original_amount=Decimal("3000.00"),
+            issue_date=date.today(),
+            due_date=date.today() + timedelta(days=30),
+            installments_count=3,
+            installment_frequency_days=30,
+            instrument=schemas.PaymentInstrumentCreate(
+                instrument_type="BOLETO",
+                digitable_line="34191.79001 01043.510047 91020.150008 5 91230000100000",
+                barcode="34195912300001000007900101043510049102015000",
+                file_attachment="data:application/pdf;base64,JVBERi0xLjQK..."
+            ),
+            new_fiscal_document=schemas.FiscalDocumentCreate(
+                direction="INBOUND",
+                document_type="NFE",
+                document_number="NF-998877",
+                issuer_name="Provedor Cloud Ltda",
+                issue_date=date.today(),
+                total_amount=Decimal("3000.00"),
+                file_attachment="data:application/xml;base64,PD94bWwgdmVyc2lvbj0..."
+            )
+        )
+    )
+
+    assert len(payables) == 3
+    for idx, p in enumerate(payables, start=1):
+        assert p.installment_number == idx
+        assert p.total_installments == 3
+        assert p.original_amount == Decimal("1000.00")
+        assert p.fiscal_document_id is not None
+        # Verifica que cada parcela tem seu próprio instrumento de boleto
+        assert len(p.instruments) >= 1
+        inst = p.instruments[0]
+        assert inst.instrument_type == "BOLETO"
+        assert inst.amount == Decimal("1000.00")
+        assert inst.file_attachment == "data:application/pdf;base64,JVBERi0xLjQK..."
+        assert inst.due_date == p.due_date
+
+    # Teste de adicionar/atualizar instrumento na parcela 2
+    updated_inst = service.create_or_update_payable_instrument(
+        db,
+        current_org.id,
+        payables[1].id,
+        schemas.PaymentInstrumentCreate(
+            instrument_type="BOLETO",
+            digitable_line="23793.38128 60000.123456 12345.678901 1 92000000100000",
+            amount=Decimal("1000.00"),
+            due_date=payables[1].due_date
+        )
+    )
+    assert updated_inst.digitable_line.startswith("23793")
+

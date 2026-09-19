@@ -39,6 +39,7 @@ import { ListPagination } from '@/components/ListPagination';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useListPagination } from '@/hooks/useListPagination';
 import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
+import { useToast } from '@/components/Toast/ToastContext';
 import './Purchasing.scss';
 
 const ALLOWED_PURCHASING_MENUS = [
@@ -67,6 +68,7 @@ const PRESET_SEGMENTS = [
 ];
 
 export const Purchasing: React.FC = () => {
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const initialMenu = isRequestedView(searchParams, ALLOWED_PURCHASING_MENUS, 'solicitacoes');
   const [activeMenu, setActiveMenu] = useState<PurchasingMenuOption>(initialMenu);
@@ -415,8 +417,9 @@ export const Purchasing: React.FC = () => {
       await loadAllPurchasingData();
       setActiveMenu('cotacoes');
       handleOpenAddQuoteModal(quot);
+      toast.success("Processo de cotação aberto com sucesso!");
     } catch (err: any) {
-      alert(err?.response?.data?.detail || "Erro ao abrir processo de cotação.");
+      toast.error(formatApiError(err, "Erro ao abrir processo de cotação."));
     } finally {
       setIsSaving(false);
     }
@@ -488,6 +491,7 @@ export const Purchasing: React.FC = () => {
       await purchasingService.addSupplierQuote(activeQuotationForQuote.id, payload);
       await loadAllPurchasingData();
       setIsAddQuoteModalOpen(false);
+      toast.success("Proposta do fornecedor salva com sucesso!");
     } catch (err: any) {
       setModalError(formatApiError(err, "Erro ao salvar proposta do fornecedor."));
     } finally {
@@ -502,7 +506,7 @@ export const Purchasing: React.FC = () => {
       const matrix = await purchasingService.getQuotationComparison(quot.id);
       setComparisonMatrix(matrix);
     } catch (err: any) {
-      alert(formatApiError(err, "Erro ao gerar mapa comparativo."));
+      toast.error(formatApiError(err, "Erro ao gerar mapa comparativo."));
       setIsComparisonModalOpen(false);
     } finally {
       setLoadingComparison(false);
@@ -510,65 +514,101 @@ export const Purchasing: React.FC = () => {
   };
 
 
-  const handleSelectWinnerQuote = async (quotationId: string, quoteId: string) => {
-    if (!confirm("Deseja homologar esta proposta como vencedora e gerar a Ordem de Compra oficial?")) {
-      return;
-    }
-
-    try {
-      setIsSaving(true);
-      await purchasingService.selectWinnerQuote(quotationId, quoteId, "Homologado pelo Comprador");
-      await loadAllPurchasingData();
-      setIsComparisonModalOpen(false);
-      setActiveMenu('ordens');
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || "Erro ao homologar proposta vencedora.");
-    } finally {
-      setIsSaving(false);
-    }
+  const handleSelectWinnerQuote = (quotationId: string, quoteId: string) => {
+    openConfirmModal({
+      title: 'Homologar Proposta Vencedora',
+      subtitle: 'Emissão de Ordem de Compra',
+      message: 'Deseja homologar esta proposta como vencedora e gerar a Ordem de Compra oficial?',
+      confirmText: 'Homologar e Gerar Ordem',
+      type: 'success',
+      onConfirm: async () => {
+        try {
+          setIsSaving(true);
+          await purchasingService.selectWinnerQuote(quotationId, quoteId, "Homologado pelo Comprador");
+          closeConfirmModal();
+          await loadAllPurchasingData();
+          setIsComparisonModalOpen(false);
+          setActiveMenu('ordens');
+          toast.success("Proposta homologada e Ordem de Compra gerada com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao homologar proposta vencedora."));
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    });
   };
 
-  const handleCancelRequest = async (requestId: string) => {
-    if (!confirm("Deseja realmente cancelar esta solicitação de compra e eventuais cotações vinculadas?")) return;
-    try {
-      setIsSaving(true);
-      await purchasingService.cancelPurchaseRequest(requestId);
-      await loadAllPurchasingData();
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || "Erro ao cancelar solicitação de compra.");
-    } finally {
-      setIsSaving(false);
-    }
+  const handleCancelRequest = (requestId: string) => {
+    openConfirmModal({
+      title: 'Cancelar Solicitação de Compra',
+      subtitle: `Solicitação #${requestId.slice(0, 8)}`,
+      message: 'Deseja realmente cancelar esta solicitação de compra e eventuais cotações vinculadas?',
+      confirmText: 'Cancelar Solicitação',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          setIsSaving(true);
+          await purchasingService.cancelPurchaseRequest(requestId);
+          closeConfirmModal();
+          await loadAllPurchasingData();
+          toast.success("Solicitação de compra cancelada com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao cancelar solicitação de compra."));
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    });
   };
 
-  const handleCancelQuotation = async (quotationId: string) => {
-    if (!confirm("Deseja realmente cancelar este processo de cotação? A solicitação de compra voltará para o status 'Aprovada'.")) return;
-    try {
-      setIsSaving(true);
-      await purchasingService.cancelQuotation(quotationId);
-      await loadAllPurchasingData();
-      setIsComparisonModalOpen(false);
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || "Erro ao cancelar processo de cotação.");
-    } finally {
-      setIsSaving(false);
-    }
+  const handleCancelQuotation = (quotationId: string) => {
+    openConfirmModal({
+      title: 'Cancelar Processo de Cotação',
+      subtitle: `Cotação #${quotationId.slice(0, 8)}`,
+      message: "Deseja realmente cancelar este processo de cotação? A solicitação de compra voltará para o status 'Aprovada'.",
+      confirmText: 'Cancelar Cotação',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          setIsSaving(true);
+          await purchasingService.cancelQuotation(quotationId);
+          closeConfirmModal();
+          await loadAllPurchasingData();
+          setIsComparisonModalOpen(false);
+          toast.success("Processo de cotação cancelado com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao cancelar processo de cotação."));
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    });
   };
 
-  const handleReopenQuotation = async (quotationId: string) => {
-    if (!confirm("Deseja reabrir este processo de cotação? A homologação será desfeita e eventuais ordens de compra emitidas serão canceladas.")) return;
-    try {
-      setIsSaving(true);
-      await purchasingService.reopenQuotation(quotationId);
-      await loadAllPurchasingData();
-      // Recarrega matriz do modal
-      const matrix = await purchasingService.getQuotationComparison(quotationId);
-      setComparisonMatrix(matrix);
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || "Erro ao reabrir processo de cotação.");
-    } finally {
-      setIsSaving(false);
-    }
+  const handleReopenQuotation = (quotationId: string) => {
+    openConfirmModal({
+      title: 'Reabrir Processo de Cotação',
+      subtitle: `Cotação #${quotationId.slice(0, 8)}`,
+      message: 'Deseja reabrir este processo de cotação? A homologação será desfeita e eventuais ordens de compra emitidas serão canceladas.',
+      confirmText: 'Reabrir Cotação',
+      type: 'warning',
+      onConfirm: async () => {
+        try {
+          setIsSaving(true);
+          await purchasingService.reopenQuotation(quotationId);
+          closeConfirmModal();
+          await loadAllPurchasingData();
+          const matrix = await purchasingService.getQuotationComparison(quotationId);
+          setComparisonMatrix(matrix);
+          toast.success("Processo de cotação reaberto com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao reabrir processo de cotação."));
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    });
   };
 
   const handleDeleteSupplierQuote = (quotationId: string, quoteId: string) => {
@@ -1411,7 +1451,7 @@ export const Purchasing: React.FC = () => {
     );
 
     if (selectedItems.length === 0) {
-      alert("Selecione ao menos um produto da sugestão de reposição para avançar.");
+      toast.warning("Selecione ao menos um produto da sugestão de reposição para avançar.");
       return;
     }
 
@@ -1978,19 +2018,33 @@ export const Purchasing: React.FC = () => {
   const costCenterPagination = useListPagination(filteredCostCenters);
   const movementPagination = useListPagination(filteredMovements);
 
-  const runPurchasingBulkAction = async (
+  const runPurchasingBulkAction = (
     ids: string[],
     label: string,
     action: (id: string) => Promise<unknown>,
     clearSelection: () => void,
   ) => {
-    if (ids.length === 0 || !window.confirm(`${label} ${ids.length} registro(s) selecionado(s)?`)) return;
-    const results = await Promise.allSettled(ids.map(action));
-    const succeeded = results.filter(result => result.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    clearSelection();
-    await loadAllPurchasingData(true);
-    window.alert(failed ? `${succeeded} registro(s) processado(s); ${failed} possuem vínculos ou restrições.` : `${succeeded} registro(s) processado(s).`);
+    if (ids.length === 0) return;
+    openConfirmModal({
+      title: `${label} em Lote`,
+      subtitle: `${ids.length} ${ids.length === 1 ? 'registro selecionado' : 'registros selecionados'}`,
+      message: `Deseja realmente executar a ação "${label}" para os ${ids.length} registro(s) selecionado(s)?`,
+      confirmText: `Confirmar (${ids.length})`,
+      type: 'danger',
+      onConfirm: async () => {
+        const results = await Promise.allSettled(ids.map(action));
+        const succeeded = results.filter(result => result.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        clearSelection();
+        closeConfirmModal();
+        await loadAllPurchasingData(true);
+        if (failed > 0) {
+          toast.warning(`${succeeded} registro(s) processado(s); ${failed} possuem vínculos ou restrições.`);
+        } else {
+          toast.success(`${succeeded} registro(s) processado(s) com sucesso.`);
+        }
+      }
+    });
   };
 
   // Totalizadores
@@ -5083,7 +5137,7 @@ export const Purchasing: React.FC = () => {
                     const prod = products.find(p => p.id === prodId);
                     if (prod) {
                       if (quickOrderItems.some(it => it.product_id === prod.id)) {
-                        alert('Este produto já está na lista da ordem.');
+                        toast.warning('Este produto já está na lista da ordem.');
                         setSelectedProductToAdd('');
                         return;
                       }

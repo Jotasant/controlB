@@ -49,11 +49,14 @@ __all__ = [
     "require_any_permission",
     "oauth2_scheme",
     "create_new_user",
+    "get_user",
     "update_user",
     "delete_user",
     "create_new_organization",
+    "get_organization",
     "delete_organization",
     "create_new_role",
+    "get_role",
     "update_role",
     "delete_role",
 ]
@@ -62,6 +65,16 @@ __all__ = [
 # ==============================================================================
 # 1. REGRAS DE NEGÓCIO DE USUÁRIOS
 # ==============================================================================
+
+def get_user(db: Session, user_id: uuid.UUID, organization_id: uuid.UUID):
+    """Busca um usuário sem permitir leitura fora da organização atual."""
+    db_user = repository.get_user_by_id(db, id=user_id)
+    if not db_user or db_user.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado."
+        )
+    return db_user
 
 def create_new_user(db: Session, user_data: UserCreate):
     """Regra de negócio para criação de novo usuário."""
@@ -153,6 +166,16 @@ def delete_user(db: Session, user_id: uuid.UUID, current_user_id: uuid.UUID):
 # 2. REGRAS DE NEGÓCIO DE ORGANIZAÇÃO
 # ==============================================================================
 
+def get_organization(db: Session, organization_id: uuid.UUID):
+    """Busca uma organização por ID ou retorna 404."""
+    db_org = repository.get_organization_by_id(db, id=organization_id)
+    if not db_org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organização não encontrada."
+        )
+    return db_org
+
 def create_new_organization(db: Session, organization_data: OrganizationCreate):
     """Regra de negócio: Impede cadastro de organizações com nomes duplicados."""
     existing_organization = repository.get_organization_by_name(db, name=organization_data.name)
@@ -215,6 +238,16 @@ def bulk_delete_roles(db: Session, role_ids: list[uuid.UUID]):
 # ==============================================================================
 # 3. REGRAS DE NEGÓCIO DE CARGOS E PERMISSÕES (RBAC)
 # ==============================================================================
+
+def get_role(db: Session, role_id: uuid.UUID):
+    """Busca um cargo por ID ou retorna 404."""
+    db_role = repository.get_role_by_id(db, id=role_id)
+    if not db_role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cargo não encontrado."
+        )
+    return db_role
 
 def create_new_role(db: Session, role_data: RoleCreate):
     """Regra de negócio: Cria novo cargo e associa sua matriz de permissões."""

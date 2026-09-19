@@ -3,6 +3,9 @@
 from typing import Any
 
 DOCUMENT_VIEW_PERMISSIONS: dict[str, str] = {
+    "PROJECT": "projects:view",
+    "WORK_ORDER": "work_orders:view",
+    "TASK": "tasks:view",
     "SALES_QUOTE": "sales:view",
     "SALES_ORDER": "sales:view",
     "POS_SALE": "sales:view",

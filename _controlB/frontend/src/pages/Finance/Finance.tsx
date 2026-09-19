@@ -9,15 +9,17 @@ import {
   RefreshCw, CheckCircle2, Calendar, Search,
   FileText, Tag,
   Building2, Wallet, ArrowRightLeft, TrendingUp, BarChart3, Ban, Power,
-  Paperclip, Upload, X, ExternalLink, FileCheck
+  Paperclip, Upload, X, ExternalLink, FileCheck,
+  RotateCcw, Trash2, Copy, Barcode, Download
 } from 'lucide-react';
-import { financeService, purchasingService, salesService } from '@/services/api';
+import { financeService, purchasingService, salesService, formatApiError } from '@/services/api';
 import {
   Payable, Receivable, BankAccount, BankTransaction,
   FiscalDocument, FinancialCategory, FinanceDashboardSummary, CostCenter,
   Supplier, PurchaseOrder, Customer
 } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
+import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
 import {
   EditableFinanceRecord,
   FinanceRecordEditModal
@@ -27,6 +29,7 @@ import { ListPagination } from '@/components/ListPagination';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useListPagination } from '@/hooks/useListPagination';
 import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
+import { useToast } from '@/components/Toast/ToastContext';
 import './Finance.scss';
 
 const ALLOWED_FINANCE_TABS = [
@@ -46,6 +49,7 @@ const payableOriginLabels: Record<Payable['business_origin'], string> = {
 };
 
 export const Finance: React.FC = () => {
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const initialFinanceTab = isRequestedView(searchParams, ALLOWED_FINANCE_TABS, 'payables');
 
@@ -88,12 +92,81 @@ export const Finance: React.FC = () => {
   const [isTxModalOpen, setIsTxModalOpen] = useState<boolean>(false);
   const [isLinkFiscalModalOpen, setIsLinkFiscalModalOpen] = useState<boolean>(false);
   const [isAttachReceiptModalOpen, setIsAttachReceiptModalOpen] = useState<boolean>(false);
+  const [isBoletoModalOpen, setIsBoletoModalOpen] = useState<boolean>(false);
+  const [selectedPayableForBoleto, setSelectedPayableForBoleto] = useState<Payable | null>(null);
+  const [boletoForm, setBoletoForm] = useState({
+    instrument_type: 'BOLETO' as const,
+    digitable_line: '',
+    barcode: '',
+    pix_code: '',
+    document_number: '',
+    due_date: '',
+    amount: '',
+    file_attachment: ''
+  });
+
+  // Anexos em Nova Despesa Avulsa
+  const [expenseBoletoFile, setExpenseBoletoFile] = useState<{ name: string; dataUrl: string } | null>(null);
+  const [expenseFiscalFile, setExpenseFiscalFile] = useState<{ name: string; dataUrl: string } | null>(null);
+  const [expenseNewFiscalDoc, setExpenseNewFiscalDoc] = useState({
+    document_type: 'NFE' as 'NFE' | 'NFSE' | 'NFCE' | 'CTE' | 'OUTRO',
+    document_number: '',
+    series: '',
+    access_key: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Seleções para Ações
   const [selectedPayable, setSelectedPayable] = useState<Payable | null>(null);
   const [selectedReceivable, setSelectedReceivable] = useState<Receivable | null>(null);
   const [selectedTxForLink, setSelectedTxForLink] = useState<BankTransaction | null>(null);
   const [editingRecord, setEditingRecord] = useState<EditableFinanceRecord | null>(null);
+
+  // Modal de Confirmação Estilizado (Substitui window.confirm e window.alert)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    message: React.ReactNode;
+    confirmText?: string;
+    cancelText?: string;
+    type?: 'danger' | 'warning' | 'info' | 'success';
+    isLoading?: boolean;
+    errorMessage?: string | null;
+    onConfirm: () => Promise<void>;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: async () => { },
+  });
+
+  const openConfirmModal = (config: {
+    title: string;
+    subtitle?: string;
+    message: React.ReactNode;
+    confirmText?: string;
+    cancelText?: string;
+    type?: 'danger' | 'warning' | 'info' | 'success';
+    onConfirm: () => Promise<void>;
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title: config.title,
+      subtitle: config.subtitle,
+      message: config.message,
+      confirmText: config.confirmText || 'Confirmar',
+      cancelText: config.cancelText || 'Voltar',
+      type: config.type || 'danger',
+      isLoading: false,
+      errorMessage: null,
+      onConfirm: config.onConfirm,
+    });
+  };
+
+  const closeConfirmModal = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, errorMessage: null, isLoading: false }));
+  };
 
   // Form Vínculo de Nota Fiscal
   const [fiscalLinkMode, setFiscalLinkMode] = useState<'EXISTING' | 'NEW'>('EXISTING');
@@ -128,7 +201,7 @@ export const Finance: React.FC = () => {
     original_amount: '',
     issue_date: new Date().toISOString().split('T')[0],
     due_date: new Date().toISOString().split('T')[0],
-    expense_nature: 'OPEX' as Payable['expense_nature'],
+    expense_nature: 'NOT_APPLICABLE' as Payable['expense_nature'],
     obligation_type: 'OTHER' as Payable['obligation_type'],
     business_origin: 'MANUAL' as Payable['business_origin'],
     supplier_id: '',
@@ -298,9 +371,41 @@ export const Finance: React.FC = () => {
   };
 
   // Handlers de Ações
+  const handleCopyText = (text: string, label: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copiado!`);
+  };
+
   const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
+      const newFiscalDoc = expenseFiscalFile ? {
+        direction: 'INBOUND' as const,
+        document_type: expenseNewFiscalDoc.document_type,
+        document_number: expenseNewFiscalDoc.document_number || `NF-${Date.now().toString().slice(-6)}`,
+        series: expenseNewFiscalDoc.series || undefined,
+        access_key: expenseNewFiscalDoc.access_key || undefined,
+        issuer_name: expenseForm.favored_name,
+        issuer_cnpj_cpf: undefined,
+        issue_date: expenseForm.issue_date,
+        total_amount: parseFloat(expenseForm.original_amount),
+        tax_amount: 0,
+        file_attachment: expenseFiscalFile.dataUrl,
+        notes: `Documento fiscal anexado no lançamento: ${expenseFiscalFile.name}`
+      } : undefined;
+
+      const instrumentData = (expenseForm.digitable_line || expenseBoletoFile) ? {
+        instrument_type: 'BOLETO' as const,
+        digitable_line: expenseForm.digitable_line || undefined,
+        pix_code: expenseForm.pix_code || undefined,
+        due_date: expenseForm.due_date,
+        amount: parseFloat(expenseForm.original_amount),
+        file_attachment: expenseBoletoFile?.dataUrl || undefined
+      } : undefined;
+
       await financeService.createPayable({
         description: expenseForm.description,
         favored_name: expenseForm.favored_name,
@@ -318,21 +423,26 @@ export const Finance: React.FC = () => {
         cost_center_id: expenseForm.cost_center_id || undefined,
         installments_count: Number(expenseForm.installments_count) || 1,
         installment_frequency_days: Number(expenseForm.installment_frequency_days) || 30,
-        instrument: expenseForm.digitable_line ? {
-          instrument_type: 'BOLETO',
-          digitable_line: expenseForm.digitable_line,
-          pix_code: expenseForm.pix_code || undefined
-        } : undefined,
+        instrument: instrumentData,
+        new_fiscal_document: newFiscalDoc,
         notes: expenseForm.notes || undefined
       });
       setIsExpenseModalOpen(false);
+      setExpenseBoletoFile(null);
+      setExpenseFiscalFile(null);
+      setExpenseNewFiscalDoc({
+        document_type: 'NFE',
+        document_number: '',
+        series: '',
+        access_key: ''
+      });
       setExpenseForm({
         description: '',
         favored_name: '',
         original_amount: '',
         issue_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
-        expense_nature: 'OPEX',
+        expense_nature: 'NOT_APPLICABLE',
         obligation_type: 'OTHER',
         business_origin: 'MANUAL',
         supplier_id: '',
@@ -348,9 +458,158 @@ export const Finance: React.FC = () => {
         notes: ''
       });
       loadAllFinanceData();
+      toast.success("Despesa lançada com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao criar despesa.");
+      toast.error(formatApiError(err, "Erro ao criar despesa."));
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+
+  const handleReopenPayable = (p: Payable) => {
+    openConfirmModal({
+      title: 'Reabrir Conta a Pagar',
+      subtitle: `Conta ${p.payable_number} · ${p.favored_name}`,
+      message: 'Deseja realmente reabrir esta conta a pagar? O status retornará para Pendente de Aprovação, permitindo sua tramitação e pagamento.',
+      confirmText: 'Reabrir Conta',
+      type: 'info',
+      onConfirm: async () => {
+        try {
+          await financeService.reopenPayable(p.id);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Conta a pagar reaberta com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao reabrir conta a pagar."));
+        }
+      }
+    });
+  };
+
+  const handleDeletePayable = (p: Payable) => {
+    openConfirmModal({
+      title: 'Excluir Conta a Pagar',
+      subtitle: `Conta ${p.payable_number} · ${p.favored_name}`,
+      message: 'Atenção: deseja excluir permanentemente esta conta a pagar? Esta operação removerá o registro e os instrumentos vinculados.',
+      confirmText: 'Excluir Definitivamente',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await financeService.deletePayable(p.id);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Conta a pagar excluída com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao excluir conta a pagar."));
+        }
+      }
+    });
+  };
+
+  const handleReopenReceivable = (r: Receivable) => {
+    openConfirmModal({
+      title: 'Reabrir Título a Receber',
+      subtitle: `Título ${r.receivable_number} · ${r.customer_name}`,
+      message: 'Deseja reabrir este título a receber? O status retornará para Pendente, permitindo o registro de recebimentos.',
+      confirmText: 'Reabrir Título',
+      type: 'info',
+      onConfirm: async () => {
+        try {
+          await financeService.reopenReceivable(r.id);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Título a receber reaberto com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao reabrir título a receber."));
+        }
+      }
+    });
+  };
+
+  const handleDeleteReceivable = (r: Receivable) => {
+    openConfirmModal({
+      title: 'Excluir Título a Receber',
+      subtitle: `Título ${r.receivable_number} · ${r.customer_name}`,
+      message: 'Atenção: deseja excluir permanentemente este título a receber? Esta ação não pode ser desfeita.',
+      confirmText: 'Excluir Definitivamente',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await financeService.deleteReceivable(r.id);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Título a receber excluído com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao excluir título a receber."));
+        }
+      }
+    });
+  };
+
+  const handleOpenBoletoModal = (p: Payable) => {
+    setSelectedPayableForBoleto(p);
+    const inst = p.instruments?.find(i => i.instrument_type === 'BOLETO') || p.instruments?.[0];
+    setBoletoForm({
+      instrument_type: 'BOLETO',
+      digitable_line: inst?.digitable_line || '',
+      barcode: inst?.barcode || '',
+      pix_code: inst?.pix_code || '',
+      document_number: inst?.document_number || '',
+      due_date: inst?.due_date || p.due_date,
+      amount: inst?.amount?.toString() || p.outstanding_amount.toString(),
+      file_attachment: inst?.file_attachment || ''
+    });
+    setIsBoletoModalOpen(true);
+  };
+
+  const handleSaveBoleto = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPayableForBoleto || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await financeService.createOrUpdatePayableInstrument(selectedPayableForBoleto.id, {
+        instrument_type: 'BOLETO',
+        digitable_line: boletoForm.digitable_line || undefined,
+        barcode: boletoForm.barcode || undefined,
+        pix_code: boletoForm.pix_code || undefined,
+        document_number: boletoForm.document_number || undefined,
+        due_date: boletoForm.due_date || undefined,
+        amount: boletoForm.amount ? parseFloat(boletoForm.amount) : undefined,
+        file_attachment: boletoForm.file_attachment || undefined
+      });
+      setIsBoletoModalOpen(false);
+      setSelectedPayableForBoleto(null);
+      loadAllFinanceData();
+      toast.success("Boleto atualizado com sucesso!");
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Erro ao salvar boleto."));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteBoleto = () => {
+    if (!selectedPayableForBoleto) return;
+    const inst = selectedPayableForBoleto.instruments?.find(i => i.instrument_type === 'BOLETO') || selectedPayableForBoleto.instruments?.[0];
+    if (!inst) return;
+    openConfirmModal({
+      title: 'Excluir Boleto da Parcela',
+      subtitle: `Conta ${selectedPayableForBoleto.payable_number}`,
+      message: 'Deseja remover o boleto cadastrado para esta parcela? A linha digitável e o anexo serão removidos.',
+      confirmText: 'Excluir Boleto',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await financeService.deletePayableInstrument(selectedPayableForBoleto.id, inst.id);
+          setIsBoletoModalOpen(false);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Boleto removido com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao remover boleto."));
+        }
+      }
+    });
   };
 
   const handleExpensePurchaseOrderChange = (purchaseOrderId: string) => {
@@ -388,7 +647,8 @@ export const Finance: React.FC = () => {
 
   const handleRegisterPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPayable) return;
+    if (!selectedPayable || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await financeService.registerPayment(selectedPayable.id, {
         amount: parseFloat(paymentForm.amount),
@@ -405,13 +665,18 @@ export const Finance: React.FC = () => {
       setIsPaymentModalOpen(false);
       setSelectedPayable(null);
       loadAllFinanceData();
+      toast.success("Pagamento registrado com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao registrar pagamento.");
+      toast.error(formatApiError(err, "Erro ao registrar pagamento."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCreateReceivable = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await financeService.createReceivable({
         customer_id: receivableForm.customer_id || undefined,
@@ -441,8 +706,11 @@ export const Finance: React.FC = () => {
         notes: ''
       });
       loadAllFinanceData();
+      toast.success("Título a receber criado com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao criar título a receber.");
+      toast.error(formatApiError(err, "Erro ao criar título a receber."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -461,7 +729,8 @@ export const Finance: React.FC = () => {
 
   const handleRegisterReceipt = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedReceivable) return;
+    if (!selectedReceivable || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await financeService.registerReceipt(selectedReceivable.id, {
         amount: parseFloat(receiptForm.amount),
@@ -474,13 +743,18 @@ export const Finance: React.FC = () => {
       setIsReceiptModalOpen(false);
       setSelectedReceivable(null);
       loadAllFinanceData();
+      toast.success("Recebimento registrado com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao registrar recebimento.");
+      toast.error(formatApiError(err, "Erro ao registrar recebimento."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await financeService.createBankAccount({
         bank_name: accountForm.bank_name,
@@ -500,13 +774,18 @@ export const Finance: React.FC = () => {
         opening_balance: '0.00'
       });
       loadAllFinanceData();
+      toast.success("Conta bancária cadastrada com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao cadastrar conta bancária.");
+      toast.error(formatApiError(err, "Erro ao cadastrar conta bancária."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await financeService.createCategory({
         name: categoryForm.name,
@@ -522,13 +801,18 @@ export const Finance: React.FC = () => {
         description: ''
       });
       loadAllFinanceData();
+      toast.success("Categoria criada com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao criar categoria.");
+      toast.error(formatApiError(err, "Erro ao criar categoria."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCreateTx = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await financeService.createBankTransaction({
         bank_account_id: txForm.bank_account_id,
@@ -548,8 +832,11 @@ export const Finance: React.FC = () => {
         document_number: ''
       });
       loadAllFinanceData();
+      toast.success("Movimentação lançada com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Erro ao lançar movimentação.");
+      toast.error(formatApiError(err, "Erro ao lançar movimentação."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -576,11 +863,12 @@ export const Finance: React.FC = () => {
 
   const handleSubmitLinkFiscal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTxForLink) return;
+    if (!selectedTxForLink || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       if (fiscalLinkMode === 'EXISTING') {
         if (!existingFiscalDocId) {
-          alert('Selecione uma nota fiscal para vincular.');
+          toast.warning('Selecione uma nota fiscal para vincular.');
           return;
         }
         await financeService.linkTransactionFiscalDocument(selectedTxForLink.id, {
@@ -588,7 +876,7 @@ export const Finance: React.FC = () => {
         });
       } else {
         if (!newFiscalDocForm.document_number || !newFiscalDocForm.issuer_name) {
-          alert('Preencha os campos obrigatórios da nota fiscal.');
+          toast.warning('Preencha os campos obrigatórios da nota fiscal.');
           return;
         }
         await financeService.linkTransactionFiscalDocument(selectedTxForLink.id, {
@@ -610,20 +898,33 @@ export const Finance: React.FC = () => {
       }
       setIsLinkFiscalModalOpen(false);
       loadAllFinanceData();
+      toast.success("Documento fiscal vinculado com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Erro ao vincular nota fiscal.');
+      toast.error(formatApiError(err, 'Erro ao vincular nota fiscal.'));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleUnlinkFiscal = async (e: React.MouseEvent, tx: BankTransaction) => {
+  const handleUnlinkFiscal = (e: React.MouseEvent, tx: BankTransaction) => {
     e.stopPropagation();
-    if (!window.confirm('Deseja realmente desvincular o documento fiscal desta movimentação?')) return;
-    try {
-      await financeService.unlinkTransactionFiscalDocument(tx.id);
-      loadAllFinanceData();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Erro ao desvincular documento fiscal.');
-    }
+    openConfirmModal({
+      title: 'Desvincular Documento Fiscal',
+      subtitle: `Transação #${tx.id.slice(0, 8)}`,
+      message: 'Deseja realmente desvincular o documento fiscal desta movimentação bancária?',
+      confirmText: 'Desvincular',
+      type: 'warning',
+      onConfirm: async () => {
+        try {
+          await financeService.unlinkTransactionFiscalDocument(tx.id);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Documento fiscal desvinculado com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, 'Erro ao desvincular documento fiscal.'));
+        }
+      }
+    });
   };
 
   const handleOpenAttachReceiptModal = (tx: BankTransaction) => {
@@ -639,11 +940,12 @@ export const Finance: React.FC = () => {
 
   const handleSubmitAttachReceipt = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTxForLink) return;
+    if (!selectedTxForLink || isSubmitting) return;
     if (!txReceiptForm.file_name || !txReceiptForm.file_url) {
-      alert('Informe o nome e o arquivo/URL do comprovante.');
+      toast.warning('Informe o nome e o arquivo/URL do comprovante.');
       return;
     }
+    setIsSubmitting(true);
     try {
       await financeService.attachTransactionReceipt(selectedTxForLink.id, {
         file_name: txReceiptForm.file_name,
@@ -653,20 +955,33 @@ export const Finance: React.FC = () => {
       });
       setIsAttachReceiptModalOpen(false);
       loadAllFinanceData();
+      toast.success("Comprovante anexado com sucesso!");
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Erro ao anexar comprovante de pagamento.');
+      toast.error(formatApiError(err, 'Erro ao anexar comprovante de pagamento.'));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleRemoveReceipt = async (e: React.MouseEvent, tx: BankTransaction) => {
+  const handleRemoveReceipt = (e: React.MouseEvent, tx: BankTransaction) => {
     e.stopPropagation();
-    if (!window.confirm('Deseja remover o comprovante de pagamento desta movimentação?')) return;
-    try {
-      await financeService.removeTransactionReceipt(tx.id);
-      loadAllFinanceData();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Erro ao remover comprovante.');
-    }
+    openConfirmModal({
+      title: 'Remover Comprovante',
+      subtitle: `Transação #${tx.id.slice(0, 8)}`,
+      message: 'Deseja remover o comprovante de pagamento desta movimentação?',
+      confirmText: 'Remover Comprovante',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await financeService.removeTransactionReceipt(tx.id);
+          closeConfirmModal();
+          loadAllFinanceData();
+          toast.success("Comprovante removido com sucesso!");
+        } catch (err: any) {
+          toast.error(formatApiError(err, 'Erro ao remover comprovante.'));
+        }
+      }
+    });
   };
 
   // Filtragem
@@ -694,24 +1009,38 @@ export const Finance: React.FC = () => {
   const transactionPagination = useListPagination(transactions);
   const fiscalPagination = useListPagination(fiscalDocs);
   const categoryPagination = useListPagination(categories);
-  const cancellablePayablesOnPage = payablePagination.pageItems.filter(item => !['PAID', 'CANCELLED', 'RECONCILED'].includes(item.status));
-  const cancellableReceivablesOnPage = receivablePagination.pageItems.filter(item => !['RECEIVED', 'CANCELLED'].includes(item.status));
+  const selectablePayablesOnPage = payablePagination.pageItems.filter(item => !['PAID', 'RECONCILED'].includes(item.status));
+  const selectableReceivablesOnPage = receivablePagination.pageItems.filter(item => !['RECEIVED'].includes(item.status));
   const cancellableFiscalOnPage = fiscalPagination.pageItems.filter(item => ['DRAFT', 'PENDING'].includes(item.status.toUpperCase()));
   const activeCategoriesOnPage = categoryPagination.pageItems.filter(item => item.is_active);
 
-  const runBulkFinanceAction = async (
+  const runBulkFinanceAction = (
     ids: string[],
     label: string,
     action: (id: string) => Promise<unknown>,
     clearSelection: () => void,
   ) => {
-    if (ids.length === 0 || !window.confirm(`${label} ${ids.length} registro(s) selecionado(s)?`)) return;
-    const results = await Promise.allSettled(ids.map(action));
-    const succeeded = results.filter(result => result.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    clearSelection();
-    await loadAllFinanceData();
-    window.alert(failed ? `${succeeded} registro(s) processado(s); ${failed} não puderam ser alterados.` : `${succeeded} registro(s) processado(s) com sucesso.`);
+    if (ids.length === 0) return;
+    openConfirmModal({
+      title: `${label} em Lote`,
+      subtitle: `${ids.length} ${ids.length === 1 ? 'registro selecionado' : 'registros selecionados'}`,
+      message: `Deseja realmente executar a ação "${label}" para os ${ids.length} registro(s) selecionado(s)?`,
+      confirmText: `Confirmar (${ids.length})`,
+      type: 'danger',
+      onConfirm: async () => {
+        const results = await Promise.allSettled(ids.map(action));
+        const succeeded = results.filter(result => result.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        clearSelection();
+        closeConfirmModal();
+        await loadAllFinanceData();
+        if (failed > 0) {
+          toast.warning(`${succeeded} registro(s) processado(s); ${failed} não puderam ser alterados.`);
+        } else {
+          toast.success(`${succeeded} registro(s) processado(s) com sucesso.`);
+        }
+      }
+    });
   };
 
   useRecordDeepLink({
@@ -962,6 +1291,7 @@ export const Finance: React.FC = () => {
                     <option value="PARTIALLY_PAID">Parcialmente Pago</option>
                     <option value="PAID">Pagos</option>
                     <option value="OVERDUE">Vencidos</option>
+                    <option value="CANCELLED">Cancelados</option>
                   </select>
 
                   <select
@@ -992,12 +1322,14 @@ export const Finance: React.FC = () => {
 
               <BulkActionsBar selectedCount={payableSelection.selectedCount} resourceName={{ singular: 'conta', plural: 'contas' }} onClear={payableSelection.clearSelection}>
                 <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(payableSelection.selectedIdList, 'Cancelar', (id) => financeService.updatePayable(id, { status: 'CANCELLED' }), payableSelection.clearSelection)}><Ban size={14} /> Cancelar selecionadas</button>
+                <button type="button" className="bulk-btn" onClick={() => void runBulkFinanceAction(payableSelection.selectedIdList, 'Reabrir', (id) => financeService.reopenPayable(id), payableSelection.clearSelection)}><RotateCcw size={14} /> Reabrir selecionadas</button>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(payableSelection.selectedIdList, 'Excluir', (id) => financeService.deletePayable(id), payableSelection.clearSelection)}><Trash2 size={14} /> Excluir selecionadas</button>
               </BulkActionsBar>
               <div className="table-responsive">
                 <table className="finance-table">
                   <thead>
                     <tr>
-                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar contas canceláveis desta página" checked={payableSelection.isAllSelected(cancellablePayablesOnPage)} onChange={() => payableSelection.toggleSelectAll(cancellablePayablesOnPage)} /></th>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar contas desta página" checked={payableSelection.isAllSelected(selectablePayablesOnPage)} onChange={() => payableSelection.toggleSelectAll(selectablePayablesOnPage)} /></th>
                       <th>Favorecido / Descrição</th>
                       <th>Vencimento</th>
                       <th>Classificação</th>
@@ -1016,85 +1348,157 @@ export const Finance: React.FC = () => {
                         </td>
                       </tr>
                     ) : (
-                      payablePagination.pageItems.map((p) => (
-                        <tr
-                          key={p.id}
-                          className={`${p.status === 'OVERDUE' ? 'row-overdue' : ''} ${!['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) ? 'ui-record-row' : ''} ${payableSelection.isSelected(p.id) ? 'ui-record-row--selected' : ''}`}
-                          role={!['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) ? 'button' : undefined}
-                          tabIndex={!['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) ? 0 : undefined}
-                          onClick={() => !['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status) && setEditingRecord({ kind: 'payable', value: p })}
-                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && !['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status)) { event.preventDefault(); setEditingRecord({ kind: 'payable', value: p }); } }}
-                        >
-                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar conta ${p.payable_number}`} disabled={['PAID', 'CANCELLED', 'RECONCILED'].includes(p.status)} checked={payableSelection.isSelected(p.id)} onClick={(event) => event.stopPropagation()} onChange={() => payableSelection.toggleSelect(p.id)} /></td>
-                          <td>
-                            <div className="favored-cell">
-                              <RecordLink type="SUPPLIER" id={p.supplier_id} className="favored-name">
-                                {p.favored_name}
-                              </RecordLink>
-                              <span className="desc-text">{p.description}</span>
-                              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
-                                {p.purchase_order_id && (
-                                  <RecordLink type="PURCHASE_ORDER" id={p.purchase_order_id}>
-                                    PO #{p.purchase_order_id.slice(0, 8)}
-                                  </RecordLink>
-                                )}
-                                {p.fiscal_document_id && (
-                                  <span className="cat-badge" style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <FileText size={11} /> NF-e Vinculada
-                                  </span>
-                                )}
-                                {p.inventory_receipt_id && (
-                                  <span className="cat-badge" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <FileCheck size={11} /> Entrada Física
-                                  </span>
+                      payablePagination.pageItems.map((p) => {
+                        const isClickable = !['PAID', 'RECONCILED'].includes(p.status);
+                        const boletoInstrument = p.instruments?.find(i => i.instrument_type === 'BOLETO') || p.instruments?.[0];
+                        return (
+                          <tr
+                            key={p.id}
+                            className={`${p.status === 'OVERDUE' ? 'row-overdue' : ''} ${isClickable ? 'ui-record-row' : ''} ${payableSelection.isSelected(p.id) ? 'ui-record-row--selected' : ''}`}
+                            role={isClickable ? 'button' : undefined}
+                            tabIndex={isClickable ? 0 : undefined}
+                            onClick={() => isClickable && setEditingRecord({ kind: 'payable', value: p })}
+                            onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && isClickable) { event.preventDefault(); setEditingRecord({ kind: 'payable', value: p }); } }}
+                          >
+                            <td className="ui-selection-cell">
+                              <input
+                                className="ui-selection-checkbox"
+                                type="checkbox"
+                                aria-label={`Selecionar conta ${p.payable_number}`}
+                                disabled={['PAID', 'RECONCILED'].includes(p.status)}
+                                checked={payableSelection.isSelected(p.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={() => payableSelection.toggleSelect(p.id)}
+                              />
+                            </td>
+                            <td>
+                              <div className="favored-cell">
+                                <RecordLink type="SUPPLIER" id={p.supplier_id} className="favored-name">
+                                  {p.favored_name}
+                                </RecordLink>
+                                <span className="desc-text">{p.description}</span>
+                                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.25rem', alignItems: 'center' }}>
+                                  {p.purchase_order_id && (
+                                    <RecordLink type="PURCHASE_ORDER" id={p.purchase_order_id}>
+                                      PO #{p.purchase_order_id.slice(0, 8)}
+                                    </RecordLink>
+                                  )}
+                                  {p.fiscal_document_id && (
+                                    <span className="cat-badge" style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                      <FileText size={11} /> NF-e Vinculada
+                                    </span>
+                                  )}
+                                  {p.inventory_receipt_id && (
+                                    <span className="cat-badge" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                      <FileCheck size={11} /> Entrada Física
+                                    </span>
+                                  )}
+                                  {boletoInstrument && (
+                                    <span className="boleto-tag" title={boletoInstrument.digitable_line || 'Boleto Cadastrado'}>
+                                      <Barcode size={11} />
+                                      <span>Boleto: {boletoInstrument.digitable_line ? `${boletoInstrument.digitable_line.slice(0, 15)}...` : 'Cadastrado'}</span>
+                                      {boletoInstrument.digitable_line && (
+                                        <button
+                                          type="button"
+                                          className="btn-copy-mini"
+                                          title="Copiar Linha Digitável"
+                                          onClick={(e) => { e.stopPropagation(); handleCopyText(boletoInstrument.digitable_line!, 'Linha digitável'); }}
+                                        >
+                                          <Copy size={11} />
+                                        </button>
+                                      )}
+                                      {boletoInstrument.file_attachment && (
+                                        <a
+                                          href={boletoInstrument.file_attachment}
+                                          download={`boleto_${p.payable_number}.pdf`}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="btn-copy-mini"
+                                          title="Baixar PDF do Boleto"
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          <ExternalLink size={11} />
+                                        </a>
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td>
+                              <span className="date-cell">
+                                <Calendar size={12} />
+                                {fmtDate(p.due_date)}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="classification-pill">
+                                <span className={`nature-badge ${p.expense_nature.toLowerCase()}`}>
+                                  {p.expense_nature}
+                                </span>
+                                <span className="cat-badge">{payableTypeLabels[p.obligation_type]}</span>
+                                <span className="cat-badge">{payableOriginLabels[p.business_origin]}</span>
+                                {p.financial_category && (
+                                  <span className="cat-badge">{p.financial_category.name}</span>
                                 )}
                               </div>
-                            </div>
-                          </td>
-                          <td>
-                            <span className="date-cell">
-                              <Calendar size={12} />
-                              {fmtDate(p.due_date)}
-                            </span>
-                          </td>
-                          <td>
-                            <div className="classification-pill">
-                              <span className={`nature-badge ${p.expense_nature.toLowerCase()}`}>
-                                {p.expense_nature}
+                            </td>
+                            <td>
+                              <span className="parcel-tag">
+                                {p.installment_number}/{p.total_installments}
                               </span>
-                              <span className="cat-badge">{payableTypeLabels[p.obligation_type]}</span>
-                              <span className="cat-badge">{payableOriginLabels[p.business_origin]}</span>
-                              {p.financial_category && (
-                                <span className="cat-badge">{p.financial_category.name}</span>
+                            </td>
+                            <td>{fmtCurrency(p.original_amount)}</td>
+                            <td className="outstanding-val">{fmtCurrency(p.outstanding_amount)}</td>
+                            <td>{renderStatusBadge(p.status)}</td>
+                            <td className="td-actions">
+                              {p.status === 'CANCELLED' ? (
+                                <>
+                                  <button
+                                    className="btn-action-reopen"
+                                    onClick={(event) => { event.stopPropagation(); handleReopenPayable(p); }}
+                                    title="Reabrir Conta a Pagar"
+                                  >
+                                    <RotateCcw size={13} />
+                                    <span>Reabrir</span>
+                                  </button>
+                                  <button
+                                    className="btn-action-delete"
+                                    onClick={(event) => { event.stopPropagation(); handleDeletePayable(p); }}
+                                    title="Excluir Permanentemente"
+                                  >
+                                    <Trash2 size={13} />
+                                    <span>Excluir</span>
+                                  </button>
+                                </>
+                              ) : p.status !== 'PAID' ? (
+                                <>
+                                  <button
+                                    className="btn-action-boleto"
+                                    onClick={(event) => { event.stopPropagation(); handleOpenBoletoModal(p); }}
+                                    title="Gerenciar Boleto / Anexos da Parcela"
+                                  >
+                                    <Barcode size={13} />
+                                    <span>Boleto</span>
+                                  </button>
+                                  <button
+                                    className="btn-action-pay"
+                                    onClick={(event) => { event.stopPropagation(); handleOpenPaymentModal(p); }}
+                                    title="Efetuar Baixa / Pagamento"
+                                  >
+                                    <DollarSign size={13} />
+                                    <span>Pagar</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="paid-icon" title="Conta Liquidada">
+                                  <CheckCircle2 size={16} />
+                                </span>
                               )}
-                            </div>
-                          </td>
-                          <td>
-                            <span className="parcel-tag">
-                              {p.installment_number}/{p.total_installments}
-                            </span>
-                          </td>
-                          <td>{fmtCurrency(p.original_amount)}</td>
-                          <td className="outstanding-val">{fmtCurrency(p.outstanding_amount)}</td>
-                          <td>{renderStatusBadge(p.status)}</td>
-                          <td className="td-actions">
-                            {p.status !== 'PAID' && p.status !== 'CANCELLED' ? (
-                              <button
-                                className="btn-action-pay"
-                                onClick={(event) => { event.stopPropagation(); handleOpenPaymentModal(p); }}
-                                title="Efetuar Baixa / Pagamento"
-                              >
-                                <DollarSign size={13} />
-                                <span>Pagar</span>
-                              </button>
-                            ) : (
-                              <span className="paid-icon" title="Conta Liquidada">
-                                <CheckCircle2 size={16} />
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1127,18 +1531,21 @@ export const Finance: React.FC = () => {
                     <option value="PARTIALLY_RECEIVED">Parcialmente Recebido</option>
                     <option value="RECEIVED">Recebido</option>
                     <option value="OVERDUE">Vencido</option>
+                    <option value="CANCELLED">Cancelados</option>
                   </select>
                 </div>
               </div>
 
               <BulkActionsBar selectedCount={receivableSelection.selectedCount} resourceName={{ singular: 'título', plural: 'títulos' }} onClear={receivableSelection.clearSelection}>
                 <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(receivableSelection.selectedIdList, 'Cancelar', (id) => financeService.updateReceivable(id, { status: 'CANCELLED' }), receivableSelection.clearSelection)}><Ban size={14} /> Cancelar selecionados</button>
+                <button type="button" className="bulk-btn" onClick={() => void runBulkFinanceAction(receivableSelection.selectedIdList, 'Reabrir', (id) => financeService.reopenReceivable(id), receivableSelection.clearSelection)}><RotateCcw size={14} /> Reabrir selecionados</button>
+                <button type="button" className="bulk-btn bulk-btn--danger" onClick={() => void runBulkFinanceAction(receivableSelection.selectedIdList, 'Excluir', (id) => financeService.deleteReceivable(id), receivableSelection.clearSelection)}><Trash2 size={14} /> Excluir selecionados</button>
               </BulkActionsBar>
               <div className="table-responsive">
                 <table className="finance-table">
                   <thead>
                     <tr>
-                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar títulos canceláveis desta página" checked={receivableSelection.isAllSelected(cancellableReceivablesOnPage)} onChange={() => receivableSelection.toggleSelectAll(cancellableReceivablesOnPage)} /></th>
+                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar títulos desta página" checked={receivableSelection.isAllSelected(selectableReceivablesOnPage)} onChange={() => receivableSelection.toggleSelectAll(selectableReceivablesOnPage)} /></th>
                       <th>Cliente / Devedor</th>
                       <th>Descrição</th>
                       <th>Vencimento</th>
@@ -1156,53 +1563,89 @@ export const Finance: React.FC = () => {
                         </td>
                       </tr>
                     ) : (
-                      receivablePagination.pageItems.map((r) => (
-                        <tr
-                          key={r.id}
-                          className={`${!['RECEIVED', 'CANCELLED'].includes(r.status) ? 'ui-record-row' : ''} ${receivableSelection.isSelected(r.id) ? 'ui-record-row--selected' : ''}`}
-                          role={!['RECEIVED', 'CANCELLED'].includes(r.status) ? 'button' : undefined}
-                          tabIndex={!['RECEIVED', 'CANCELLED'].includes(r.status) ? 0 : undefined}
-                          onClick={() => !['RECEIVED', 'CANCELLED'].includes(r.status) && setEditingRecord({ kind: 'receivable', value: r })}
-                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && !['RECEIVED', 'CANCELLED'].includes(r.status)) { event.preventDefault(); setEditingRecord({ kind: 'receivable', value: r }); } }}
-                        >
-                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar título ${r.receivable_number}`} disabled={['RECEIVED', 'CANCELLED'].includes(r.status)} checked={receivableSelection.isSelected(r.id)} onClick={(event) => event.stopPropagation()} onChange={() => receivableSelection.toggleSelect(r.id)} /></td>
-                          <td>
-                            <RecordLink type="CUSTOMER" id={r.customer_id}>
-                              <strong>{r.customer_name}</strong>
-                            </RecordLink>
-                            {r.customer_document && <span className="doc-sub"> ({r.customer_document})</span>}
-                            {r.sales_order_id && (
-                              <div style={{ marginTop: '0.2rem' }}>
-                                <RecordLink type="SALES_ORDER" id={r.sales_order_id}>
-                                  Pedido #{r.sales_order_id.slice(0, 8)}
-                                </RecordLink>
-                              </div>
-                            )}
-                          </td>
-                          <td>{r.description}</td>
-                          <td>
-                            <span className="date-cell">
-                              <Calendar size={12} />
-                              {fmtDate(r.due_date)}
-                            </span>
-                          </td>
-                          <td>{fmtCurrency(r.original_amount)}</td>
-                          <td className="in-amount">{fmtCurrency(r.outstanding_amount)}</td>
-                          <td>{renderStatusBadge(r.status)}</td>
-                          <td className="td-actions">
-                            {r.status !== 'RECEIVED' && r.status !== 'CANCELLED' && (
-                              <button
-                                className="btn-action-receive"
-                                onClick={(event) => { event.stopPropagation(); handleOpenReceiptModal(r); }}
-                                title="Registrar Recebimento"
-                              >
-                                <CheckCircle2 size={13} />
-                                <span>Receber</span>
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))
+                      receivablePagination.pageItems.map((r) => {
+                        const isClickable = r.status !== 'RECEIVED';
+                        return (
+                          <tr
+                            key={r.id}
+                            className={`${isClickable ? 'ui-record-row' : ''} ${receivableSelection.isSelected(r.id) ? 'ui-record-row--selected' : ''}`}
+                            role={isClickable ? 'button' : undefined}
+                            tabIndex={isClickable ? 0 : undefined}
+                            onClick={() => isClickable && setEditingRecord({ kind: 'receivable', value: r })}
+                            onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && isClickable) { event.preventDefault(); setEditingRecord({ kind: 'receivable', value: r }); } }}
+                          >
+                            <td className="ui-selection-cell">
+                              <input
+                                className="ui-selection-checkbox"
+                                type="checkbox"
+                                aria-label={`Selecionar título ${r.receivable_number}`}
+                                disabled={r.status === 'RECEIVED'}
+                                checked={receivableSelection.isSelected(r.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={() => receivableSelection.toggleSelect(r.id)}
+                              />
+                            </td>
+                            <td>
+                              <RecordLink type="CUSTOMER" id={r.customer_id}>
+                                <strong>{r.customer_name}</strong>
+                              </RecordLink>
+                              {r.customer_document && <span className="doc-sub"> ({r.customer_document})</span>}
+                              {r.sales_order_id && (
+                                <div style={{ marginTop: '0.2rem' }}>
+                                  <RecordLink type="SALES_ORDER" id={r.sales_order_id}>
+                                    Pedido #{r.sales_order_id.slice(0, 8)}
+                                  </RecordLink>
+                                </div>
+                              )}
+                            </td>
+                            <td>{r.description}</td>
+                            <td>
+                              <span className="date-cell">
+                                <Calendar size={12} />
+                                {fmtDate(r.due_date)}
+                              </span>
+                            </td>
+                            <td>{fmtCurrency(r.original_amount)}</td>
+                            <td className="in-amount">{fmtCurrency(r.outstanding_amount)}</td>
+                            <td>{renderStatusBadge(r.status)}</td>
+                            <td className="td-actions">
+                              {r.status === 'CANCELLED' ? (
+                                <>
+                                  <button
+                                    className="btn-action-reopen"
+                                    onClick={(event) => { event.stopPropagation(); handleReopenReceivable(r); }}
+                                    title="Reabrir Título"
+                                  >
+                                    <RotateCcw size={13} />
+                                    <span>Reabrir</span>
+                                  </button>
+                                  <button
+                                    className="btn-action-delete"
+                                    onClick={(event) => { event.stopPropagation(); handleDeleteReceivable(r); }}
+                                    title="Excluir Permanentemente"
+                                  >
+                                    <Trash2 size={13} />
+                                    <span>Excluir</span>
+                                  </button>
+                                </>
+                              ) : r.status !== 'RECEIVED' ? (
+                                <button
+                                  className="btn-action-receive"
+                                  onClick={(event) => { event.stopPropagation(); handleOpenReceiptModal(r); }}
+                                  title="Registrar Recebimento"
+                                >
+                                  <CheckCircle2 size={13} />
+                                  <span>Receber</span>
+                                </button>
+                              ) : (
+                                <span className="paid-icon" title="Título Recebido">
+                                  <CheckCircle2 size={16} />
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1649,13 +2092,13 @@ export const Finance: React.FC = () => {
                 value={expenseForm.expense_nature}
                 onChange={(e) => setExpenseForm({ ...expenseForm, expense_nature: e.target.value as any })}
               >
-                <option value="OPEX">OPEX (Despesa Operacional)</option>
-                <option value="CAPEX">CAPEX (Investimento em Ativos)</option>
+                <option value="NOT_APPLICABLE">Não Aplicável</option>
                 <option value="FINANCIAL">Despesa Financeira</option>
                 <option value="TAX">Tributária</option>
                 <option value="PAYROLL">Folha de Pagamento</option>
                 <option value="TRANSFER">Transferência</option>
-                <option value="NOT_APPLICABLE">Não Aplicável</option>
+                <option value="OPEX">OPEX (Despesa Operacional)</option>
+                <option value="CAPEX">CAPEX (Investimento em Ativos)</option>
               </select>
             </div>
           </div>
@@ -1742,14 +2185,127 @@ export const Finance: React.FC = () => {
             />
           </div>
 
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label>Anexar Boleto Bancário (PDF)</label>
+              {expenseBoletoFile ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: 6, fontSize: '0.825rem' }}>
+                  <span style={{ color: '#c4b5fd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={expenseBoletoFile.name}>
+                    📄 {expenseBoletoFile.name}
+                  </span>
+                  <button type="button" onClick={() => setExpenseBoletoFile(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0 0.25rem' }}>
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                  <Upload size={14} />
+                  <span>Selecionar Boleto PDF</span>
+                  <input
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = (event) => {
+                        const dataUrl = event.target?.result as string;
+                        setExpenseBoletoFile({ name: file.name, dataUrl });
+                        toast.success("Boleto anexado!");
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Anexar Nota Fiscal (PDF ou XML)</label>
+              {expenseFiscalFile ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 6, fontSize: '0.825rem' }}>
+                  <span style={{ color: '#93c5fd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={expenseFiscalFile.name}>
+                    📄 {expenseFiscalFile.name}
+                  </span>
+                  <button type="button" onClick={() => setExpenseFiscalFile(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0 0.25rem' }}>
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                  <Upload size={14} />
+                  <span>Selecionar Nota (PDF/XML)</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.xml,application/pdf,text/xml,application/xml"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = (event) => {
+                        const dataUrl = event.target?.result as string;
+                        setExpenseFiscalFile({ name: file.name, dataUrl });
+                        const baseName = file.name.replace(/\.[^/.]+$/, "");
+                        setExpenseNewFiscalDoc(prev => ({
+                          ...prev,
+                          document_number: prev.document_number || baseName
+                        }));
+                        toast.success("Documento fiscal anexado!");
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+          </div>
+
+          {expenseFiscalFile && (
+            <div className="form-row" style={{ background: 'rgba(59, 130, 246, 0.05)', padding: '0.5rem', borderRadius: 6, marginBottom: '0.75rem', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+              <div className="form-group flex-1">
+                <label style={{ fontSize: '0.75rem' }}>Tipo Documento Fiscal</label>
+                <select
+                  value={expenseNewFiscalDoc.document_type}
+                  onChange={(e) => setExpenseNewFiscalDoc({ ...expenseNewFiscalDoc, document_type: e.target.value as any })}
+                >
+                  <option value="NFE">NF-e (Mercadorias)</option>
+                  <option value="NFSE">NFS-e (Serviços)</option>
+                  <option value="NFCE">NFC-e (Consumidor)</option>
+                  <option value="CTE">CT-e (Transporte)</option>
+                  <option value="OUTRO">Outro</option>
+                </select>
+              </div>
+              <div className="form-group flex-1">
+                <label style={{ fontSize: '0.75rem' }}>Número da NF</label>
+                <input
+                  type="text"
+                  placeholder="Ex: 12345"
+                  value={expenseNewFiscalDoc.document_number}
+                  onChange={(e) => setExpenseNewFiscalDoc({ ...expenseNewFiscalDoc, document_number: e.target.value })}
+                />
+              </div>
+              <div className="form-group flex-1">
+                <label style={{ fontSize: '0.75rem' }}>Série (opcional)</label>
+                <input
+                  type="text"
+                  placeholder="1"
+                  value={expenseNewFiscalDoc.series}
+                  onChange={(e) => setExpenseNewFiscalDoc({ ...expenseNewFiscalDoc, series: e.target.value })}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="form-group"><label>Observações</label><textarea rows={3} value={expenseForm.notes} onChange={(e) => setExpenseForm({ ...expenseForm, notes: e.target.value })} /></div>
 
           <div className="modal-footer">
             <button type="button" className="btn-secondary" onClick={() => setIsExpenseModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
-              Confirmar Lançamento
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Salvando...' : 'Confirmar Lançamento'}
             </button>
           </div>
         </form>
@@ -1776,6 +2332,39 @@ export const Finance: React.FC = () => {
                 Saldo Devedor: {fmtCurrency(selectedPayable.outstanding_amount)}
               </div>
             </div>
+
+            {selectedPayable.instruments?.[0]?.digitable_line && (
+              <div style={{ background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: 6, padding: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '0.725rem', color: '#a78bfa', fontWeight: 600, textTransform: 'uppercase' }}>Linha Digitável do Boleto</div>
+                  <div style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#fff', marginTop: '0.2rem' }}>{selectedPayable.instruments[0].digitable_line}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                    onClick={() => handleCopyText(selectedPayable.instruments![0].digitable_line!, 'Linha digitável')}
+                    title="Copiar linha digitável"
+                  >
+                    <Copy size={12} /> Copiar
+                  </button>
+                  {selectedPayable.instruments[0].file_attachment && (
+                    <a
+                      href={selectedPayable.instruments[0].file_attachment}
+                      download={`boleto_${selectedPayable.payable_number}.pdf`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                      title="Baixar PDF do Boleto"
+                    >
+                      <ExternalLink size={12} /> Ver Boleto
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="form-row">
               <div className="form-group flex-1">
@@ -1836,9 +2425,152 @@ export const Finance: React.FC = () => {
               <button type="button" className="btn-secondary" onClick={() => setIsPaymentModalOpen(false)}>
                 Cancelar (ESC)
               </button>
-              <button type="submit" className="btn-primary">
-                Confirmar Pagamento
+              <button type="submit" className="btn-primary" disabled={isSubmitting}>
+                {isSubmitting ? 'Processando...' : 'Confirmar Pagamento'}
               </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* MODAL 2.5: GERENCIAR BOLETO DA PARCELA */}
+      <Modal
+        isOpen={isBoletoModalOpen && !!selectedPayableForBoleto}
+        onClose={() => setIsBoletoModalOpen(false)}
+        title={`Boleto Bancário - Conta ${selectedPayableForBoleto?.payable_number}`}
+        subtitle={`Parcela ${selectedPayableForBoleto?.installment_number}/${selectedPayableForBoleto?.total_installments} · ${selectedPayableForBoleto?.favored_name}`}
+        size="md"
+      >
+        {selectedPayableForBoleto && (
+          <form onSubmit={handleSaveBoleto} className="wizard-form">
+            <div className="form-group">
+              <label>Linha Digitável</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="00190.00009 01234.567890 12345.678901 1 98760000010000"
+                  value={boletoForm.digitable_line}
+                  onChange={(e) => setBoletoForm({ ...boletoForm, digitable_line: e.target.value })}
+                  style={{ flex: 1 }}
+                />
+                {boletoForm.digitable_line && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => handleCopyText(boletoForm.digitable_line, 'Linha digitável')}
+                    title="Copiar Linha Digitável"
+                  >
+                    <Copy size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Código de Barras (opcional)</label>
+              <input
+                type="text"
+                placeholder="44 dígitos numéricos"
+                value={boletoForm.barcode}
+                onChange={(e) => setBoletoForm({ ...boletoForm, barcode: e.target.value })}
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Vencimento do Boleto</label>
+                <input
+                  type="date"
+                  value={boletoForm.due_date}
+                  onChange={(e) => setBoletoForm({ ...boletoForm, due_date: e.target.value })}
+                />
+              </div>
+              <div className="form-group flex-1">
+                <label>Valor do Boleto (R$)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={boletoForm.amount}
+                  onChange={(e) => setBoletoForm({ ...boletoForm, amount: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Anexo do Boleto (PDF)</label>
+              {boletoForm.file_attachment ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#c4b5fd', fontSize: '0.85rem' }}>
+                    <FileText size={16} />
+                    <span>PDF do boleto anexado</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <a
+                      href={boletoForm.file_attachment}
+                      download={`boleto_${selectedPayableForBoleto.payable_number}.pdf`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                    >
+                      <Download size={13} /> Baixar
+                    </a>
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                      onClick={() => setBoletoForm({ ...boletoForm, file_attachment: '' })}
+                    >
+                      <X size={13} /> Remover
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}>
+                  <Upload size={16} />
+                  <span style={{ fontSize: '0.85rem' }}>Clique para selecionar o PDF do boleto</span>
+                  <input
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = (event) => {
+                        const dataUrl = event.target?.result as string;
+                        setBoletoForm(prev => ({ ...prev, file_attachment: dataUrl }));
+                        toast.success("PDF do boleto carregado!");
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div>
+                {selectedPayableForBoleto.instruments && selectedPayableForBoleto.instruments.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    onClick={handleDeleteBoleto}
+                    disabled={isSubmitting}
+                  >
+                    <Trash2 size={14} /> Excluir Boleto
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button type="button" className="btn-secondary" onClick={() => setIsBoletoModalOpen(false)}>
+                  Cancelar
+                </button>
+                <button type="submit" className="btn-primary" disabled={isSubmitting}>
+                  {isSubmitting ? 'Salvando...' : 'Salvar Boleto'}
+                </button>
+              </div>
             </div>
           </form>
         )}
@@ -1965,8 +2697,8 @@ export const Finance: React.FC = () => {
             <button type="button" className="btn-secondary" onClick={() => setIsReceivableModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
-              Salvar Título a Receber
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Salvando...' : 'Salvar Título a Receber'}
             </button>
           </div>
         </form>
@@ -2053,8 +2785,8 @@ export const Finance: React.FC = () => {
               <button type="button" className="btn-secondary" onClick={() => setIsReceiptModalOpen(false)}>
                 Cancelar (ESC)
               </button>
-              <button type="submit" className="btn-primary">
-                Confirmar Recebimento
+              <button type="submit" className="btn-primary" disabled={isSubmitting}>
+                {isSubmitting ? 'Processando...' : 'Confirmar Recebimento'}
               </button>
             </div>
           </form>
@@ -2133,8 +2865,8 @@ export const Finance: React.FC = () => {
             <button type="button" className="btn-secondary" onClick={() => setIsAccountModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
-              Salvar Conta
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Salvando...' : 'Salvar Conta'}
             </button>
           </div>
         </form>
@@ -2187,8 +2919,8 @@ export const Finance: React.FC = () => {
             <button type="button" className="btn-secondary" onClick={() => setIsCategoryModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
-              Salvar Categoria
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Salvando...' : 'Salvar Categoria'}
             </button>
           </div>
         </form>
@@ -2257,8 +2989,8 @@ export const Finance: React.FC = () => {
             <button type="button" className="btn-secondary" onClick={() => setIsTxModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
-              Registrar Movimentação
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Registrando...' : 'Registrar Movimentação'}
             </button>
           </div>
         </form>
@@ -2453,9 +3185,9 @@ export const Finance: React.FC = () => {
             <button type="button" className="btn-secondary" onClick={() => setIsLinkFiscalModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
               <FileCheck size={16} />
-              <span>Confirmar Vínculo Fiscal</span>
+              <span>{isSubmitting ? 'Vinculando...' : 'Confirmar Vínculo Fiscal'}</span>
             </button>
           </div>
         </form>
@@ -2541,9 +3273,9 @@ export const Finance: React.FC = () => {
             <button type="button" className="btn-secondary" onClick={() => setIsAttachReceiptModalOpen(false)}>
               Cancelar (ESC)
             </button>
-            <button type="submit" className="btn-primary">
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
               <Upload size={16} />
-              <span>Salvar Comprovante</span>
+              <span>{isSubmitting ? 'Salvando...' : 'Salvar Comprovante'}</span>
             </button>
           </div>
         </form>
@@ -2558,6 +3290,20 @@ export const Finance: React.FC = () => {
         bankAccounts={bankAccounts}
         onClose={() => setEditingRecord(null)}
         onSaved={() => void loadAllFinanceData()}
+      />
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        subtitle={confirmModal.subtitle}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        type={confirmModal.type}
+        isLoading={confirmModal.isLoading}
+        errorMessage={confirmModal.errorMessage}
+        onClose={closeConfirmModal}
+        onConfirm={confirmModal.onConfirm}
       />
     </div>
   );

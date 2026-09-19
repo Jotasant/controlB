@@ -1654,6 +1654,7 @@ def test_quote_and_order_delete_cancel_logically(
         quote_id,
         mock_org.id,
         mock_user,
+        permanent=False,
     )
     order_result = sales_service.delete_sales_order(
         db,
@@ -1664,8 +1665,8 @@ def test_quote_and_order_delete_cancel_logically(
     assert "cancelada" in quote_result["message"].lower()
     assert "cancelado" in order_result["message"].lower()
 
-    # Repetir DELETE é seguro e não duplica os eventos de cancelamento.
-    sales_service.delete_sales_quote(db, quote_id, mock_org.id, mock_user)
+    # Repetir DELETE com permanent=False é seguro e não duplica os eventos de cancelamento.
+    sales_service.delete_sales_quote(db, quote_id, mock_org.id, mock_user, permanent=False)
     sales_service.delete_sales_order(db, order_id, mock_org.id, mock_user)
     db.commit()
 
@@ -1690,6 +1691,135 @@ def test_quote_and_order_delete_cancel_logically(
     assert order_root.current_status == "CANCELLED"
     assert len([event for event in quote_chain.events if event.event_type == "CANCELLED"]) == 1
     assert len([event for event in order_chain.events if event.event_type == "CANCELLED"]) == 1
+
+
+def test_sales_quote_permanent_deletion(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    quote = sales_service.create_sales_quote(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesQuoteCreate(
+            customer_name="Cliente Exclusao Definitiva",
+            valid_until=date.today() + timedelta(days=7),
+            items=[
+                sales_schemas.SalesQuoteItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("2.00"),
+                    unit_price=Decimal("150.00"),
+                )
+            ],
+        ),
+    )
+    quote_id = quote.id
+    db.commit()
+
+    # Confirma que a cotação e o documento de negócio existem
+    assert sales_service.get_sales_quote(db, quote_id, mock_org.id) is not None
+
+    # Exclusão definitiva (permanent=True)
+    result = sales_service.delete_sales_quote(db, quote_id, mock_org.id, mock_user, permanent=True)
+    db.commit()
+
+    assert result["deleted"] is True
+    assert "excluída com sucesso" in result["message"].lower()
+
+    with pytest.raises(HTTPException) as exc_info:
+        sales_service.get_sales_quote(db, quote_id, mock_org.id)
+    assert exc_info.value.status_code == 404
+
+
+def test_requested_billing_order_can_be_cancelled(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente Pedido Solicitado",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("50.00"),
+                )
+            ],
+        ),
+    )
+    # Simula envio para fila de faturamento (REQUESTED)
+    sales_service.request_order_billing(db, order.id, mock_org.id, mock_user)
+    db.commit()
+
+    assert order.billing_status == "REQUESTED"
+
+    # Deve conseguir cancelar com sucesso já que nenhuma fatura ativa foi emitida
+    result = sales_service.delete_sales_order(
+        db,
+        order.id,
+        mock_org.id,
+        mock_user,
+        reason="Desistência antes do faturamento",
+        permanent=False,
+    )
+    db.commit()
+
+    assert "cancelado com sucesso" in result["message"].lower()
+    cancelled_order = sales_service.get_sales_order(db, order.id, mock_org.id)
+    assert cancelled_order.status == "CANCELLED"
+    assert cancelled_order.billing_status == "CANCELLED"
+
+
+def test_sales_order_permanent_deletion(
+    db: Session,
+    mock_org: Organization,
+    mock_user: User,
+    mock_product: Product,
+):
+    order = sales_service.create_sales_order(
+        db,
+        mock_org.id,
+        mock_user,
+        sales_schemas.SalesOrderCreate(
+            customer_name="Cliente Exclusao Pedido",
+            items=[
+                sales_schemas.SalesOrderItemCreate(
+                    product_id=mock_product.id,
+                    quantity=Decimal("3"),
+                    unit_price=Decimal("20.00"),
+                )
+            ],
+        ),
+    )
+    order_id = order.id
+    db.commit()
+
+    # Exclusão definitiva permanente
+    result = sales_service.delete_sales_order(
+        db,
+        order_id,
+        mock_org.id,
+        mock_user,
+        permanent=True,
+    )
+    db.commit()
+
+    assert result["deleted"] is True
+    assert "excluído definitivamente" in result["message"].lower()
+
+    # Pedido não deve mais existir
+    with pytest.raises(HTTPException) as exc_info:
+        sales_service.get_sales_order(db, order_id, mock_org.id)
+    assert exc_info.value.status_code == 404
+
+
 
 
 @pytest.mark.parametrize(

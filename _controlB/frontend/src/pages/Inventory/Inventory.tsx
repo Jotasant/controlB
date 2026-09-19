@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Package, Tags, History, Plus, Search, RefreshCw,
   Trash2, SlidersHorizontal, AlertTriangle, ArrowDownRight,
@@ -41,6 +41,7 @@ import { ListPagination } from '@/components/ListPagination';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useListPagination } from '@/hooks/useListPagination';
 import { DocumentLink, RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
+import { useToast } from '@/components/Toast/ToastContext';
 import './Inventory.scss';
 
 const ALLOWED_INVENTORY_MENUS = ['produtos', 'categorias', 'armazenagem', 'movimentacoes', 'auditoria', 'integracoes'] as const;
@@ -48,6 +49,8 @@ type InventoryMenuOption = typeof ALLOWED_INVENTORY_MENUS[number];
 type StockStatusFilter = 'todos' | 'criticos' | 'zerados' | 'regulares';
 
 export const Inventory: React.FC = () => {
+  const toast = useToast();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialInventoryMenu = isRequestedView(searchParams, ALLOWED_INVENTORY_MENUS, 'produtos');
   const [activeMenu, setActiveMenu] = useState<InventoryMenuOption>(initialInventoryMenu);
@@ -173,7 +176,7 @@ export const Inventory: React.FC = () => {
       setBatchModalSearch('');
       setBatchModalPage(1);
     } catch (err: any) {
-      alert("Erro ao carregar detalhes do lote de importação.");
+      toast.error(formatApiError(err, "Erro ao carregar detalhes do lote de importação."));
     } finally {
       setLoadingBatchDetail(false);
     }
@@ -247,13 +250,22 @@ export const Inventory: React.FC = () => {
   const handleGenerateReplenishmentFromBatch = (batch: InventoryImportBatch) => {
     const itemsToReplenish = batch.items.filter(it => it.action_type === 'sale_detected' || Number(it.new_stock) <= 0);
     if (itemsToReplenish.length === 0) {
-      alert("Não há itens esgotados ou com vendas apuradas neste lote que necessitem de reposição imediata.");
+      toast.info("Não há itens esgotados ou com vendas apuradas neste lote que necessitem de reposição imediata.");
       return;
     }
     
-    if (window.confirm(`Foram identificados ${itemsToReplenish.length} produtos com saída ou estoque zerado neste lote. Deseja abrir o módulo de Compras para gerar a reposição?`)) {
-      window.location.href = `/purchasing?view=pedidos&origin=audit_batch_${batch.batch_number}`;
-    }
+    openConfirmModal({
+      title: 'Gerar Reposição no Compras',
+      subtitle: `Lote #${batch.batch_number}`,
+      message: `Foram identificados ${itemsToReplenish.length} produto(s) com saída ou estoque zerado neste lote. Deseja abrir o módulo de Compras para gerar a reposição?`,
+      confirmText: 'Ir para Compras',
+      cancelText: 'Permanecer aqui',
+      type: 'info',
+      onConfirm: async () => {
+        closeConfirmModal();
+        navigate(`/compras?view=ordens&origin=audit_batch_${batch.batch_number}`);
+      }
+    });
   };
 
   const handleNavigateToKardexForBatch = (batch: InventoryImportBatch) => {
@@ -847,7 +859,7 @@ export const Inventory: React.FC = () => {
   // Exportação para Planilha CSV formatada
   const exportProductsToCsv = (itemsToExport: Product[] = products, filenameSuffix: string = 'catalogo') => {
     if (!itemsToExport || itemsToExport.length === 0) {
-      alert("Nenhum produto disponível para exportação.");
+      toast.warning("Nenhum produto disponível para exportação.");
       return;
     }
 
@@ -1105,15 +1117,29 @@ export const Inventory: React.FC = () => {
   const divergencePagination = useListPagination(totalDivergenceMovements);
   const arePageProductsSelected = productPagination.pageItems.length > 0 && productPagination.pageItems.every(product => selectedProductIds.has(product.id));
 
-  const handleBulkDeleteCategories = async () => {
+  const handleBulkDeleteCategories = () => {
     const ids = categorySelection.selectedIdList;
-    if (ids.length === 0 || !window.confirm(`Excluir ${ids.length} categoria(s) selecionada(s)? Categorias vinculadas a produtos serão preservadas pela regra do cadastro.`)) return;
-    const results = await Promise.allSettled(ids.map(id => inventoryService.deleteCategory(id)));
-    const succeeded = results.filter(result => result.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    categorySelection.clearSelection();
-    await loadInventoryData(true);
-    window.alert(failed ? `${succeeded} categoria(s) excluída(s); ${failed} possuem vínculos ou não puderam ser removidas.` : `${succeeded} categoria(s) excluída(s).`);
+    if (ids.length === 0) return;
+    openConfirmModal({
+      title: 'Excluir Categorias em Lote',
+      subtitle: `${ids.length} categoria(s) selecionada(s)`,
+      message: `Deseja realmente excluir ${ids.length} categoria(s) selecionada(s)? Categorias vinculadas a produtos serão preservadas pela regra do cadastro.`,
+      confirmText: `Excluir (${ids.length})`,
+      type: 'danger',
+      onConfirm: async () => {
+        const results = await Promise.allSettled(ids.map(id => inventoryService.deleteCategory(id)));
+        const succeeded = results.filter(result => result.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        categorySelection.clearSelection();
+        closeConfirmModal();
+        await loadInventoryData(true);
+        if (failed > 0) {
+          toast.warning(`${succeeded} categoria(s) excluída(s); ${failed} possuem vínculos ou não puderam ser removidas.`);
+        } else {
+          toast.success(`${succeeded} categoria(s) excluída(s) com sucesso.`);
+        }
+      }
+    });
   };
 
   return (

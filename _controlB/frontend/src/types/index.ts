@@ -1543,3 +1543,9 @@ export interface StagnantInventoryReport {
   stagnant_by_category: StagnantCategorySummary[];
   top_stagnant_products: StagnantProductItem[];
 }
+
+// ==============================================================================
+// 12. PROJETOS & OPERAÇÕES
+// ==============================================================================
+export * from './projects';
+

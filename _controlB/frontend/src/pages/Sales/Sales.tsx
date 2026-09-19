@@ -88,6 +88,8 @@ export const Sales: React.FC = () => {
   const orderSelection = useBulkSelection<SalesOrder>();
   const customerSelection = useBulkSelection<Customer>();
   const returnSelection = useBulkSelection<SalesReturn>();
+  const goalSelection = useBulkSelection<SalesGoal>();
+  const priceTableSelection = useBulkSelection<PriceTable>();
 
   // --- FILTROS E BUSCAS GLOBAIS POR ABA ---
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -382,19 +384,19 @@ export const Sales: React.FC = () => {
 
   const handleDeleteQuote = (quote: SalesQuote) => {
     openConfirm({
-      title: 'Cancelar Cotação Comercial',
+      title: 'Excluir Cotação Definitivamente',
       subtitle: `Cotação #${quote.quote_number}`,
-      message: `Deseja realmente cancelar a cotação #${quote.quote_number} de ${quote.customer_name}?`,
+      message: `Deseja realmente excluir permanentemente a cotação #${quote.quote_number} de ${quote.customer_name}? Esta ação removerá o registro e todos os seus itens do sistema.`,
       type: 'danger',
-      confirmText: 'Cancelar Cotação',
+      confirmText: 'Excluir Permanentemente',
       onConfirm: async () => {
         try {
-          await salesService.deleteQuote(quote.id);
-          triggerSuccess("Cotação cancelada com sucesso.");
+          await salesService.deleteQuote(quote.id, true);
+          triggerSuccess(`Cotação #${quote.quote_number} excluída com sucesso.`);
           closeConfirm();
-          loadAllData();
+          loadAllData(true);
         } catch (err: any) {
-          toast.error(formatApiError(err, "Erro ao cancelar cotação."), 'Falha ao cancelar cotação');
+          toast.error(formatApiError(err, "Erro ao excluir cotação."), 'Falha ao excluir cotação');
         }
       }
     });
@@ -583,17 +585,37 @@ export const Sales: React.FC = () => {
     openConfirm({
       title: 'Cancelar Pedido de Venda',
       subtitle: `Pedido #${order.order_number}`,
-      message: `Deseja realmente cancelar o pedido #${order.order_number} de ${order.customer_name}?`,
+      message: `Deseja realmente cancelar o pedido #${order.order_number} de ${order.customer_name}? As reservas de estoque serão liberadas e eventuais solicitações de faturamento serão canceladas.`,
       type: 'danger',
       confirmText: 'Cancelar Pedido',
       onConfirm: async () => {
         try {
-          await salesService.deleteOrder(order.id);
-          triggerSuccess("Pedido cancelado com sucesso.");
+          await salesService.deleteOrder(order.id, 'Cancelamento operacional', false);
+          triggerSuccess(`Pedido #${order.order_number} cancelado com sucesso.`);
           closeConfirm();
-          loadAllData();
+          loadAllData(true);
         } catch (err: any) {
           toast.error(formatApiError(err, "Erro ao cancelar pedido."), 'Falha ao cancelar pedido');
+        }
+      }
+    });
+  };
+
+  const handlePermanentDeleteOrder = (order: SalesOrder) => {
+    openConfirm({
+      title: 'Excluir Pedido Definitivamente',
+      subtitle: `Pedido #${order.order_number}`,
+      message: `Deseja realmente excluir permanentemente o pedido #${order.order_number} de ${order.customer_name}? Esta ação removerá o registro e todos os seus itens do sistema.`,
+      type: 'danger',
+      confirmText: 'Excluir Permanentemente',
+      onConfirm: async () => {
+        try {
+          await salesService.deleteOrder(order.id, undefined, true);
+          triggerSuccess(`Pedido #${order.order_number} excluído definitivamente com sucesso.`);
+          closeConfirm();
+          loadAllData(true);
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Erro ao excluir pedido."), 'Falha ao excluir pedido');
         }
       }
     });
@@ -966,9 +988,6 @@ export const Sales: React.FC = () => {
   const orderPagination = useListPagination(filteredOrders);
   const customerPagination = useListPagination(filteredCustomers);
   const returnPagination = useListPagination(filteredReturns);
-  const cancellableOrdersOnPage = orderPagination.pageItems.filter(order => (
-    order.status !== 'CANCELLED' && order.status !== 'COMPLETED' && order.billing_status === 'PENDING'
-  ));
 
   const openBulkAction = (
     label: string,
@@ -1239,9 +1258,19 @@ export const Sales: React.FC = () => {
                 selectedCount={quoteSelection.selectedCount}
                 resourceName={{ singular: 'cotação', plural: 'cotações' }}
                 onClear={quoteSelection.clearSelection}
-                onDelete={() => openBulkAction('Cancelar', quoteSelection.selectedIdList, salesService.deleteQuote, quoteSelection.clearSelection)}
-                deleteLabel="Cancelar selecionadas"
-              />
+                onDelete={() => openBulkAction('Excluir definitivamente', quoteSelection.selectedIdList, (id) => salesService.deleteQuote(id, true), quoteSelection.clearSelection)}
+                deleteLabel="Excluir selecionadas"
+              >
+                <button
+                  type="button"
+                  className="bulk-btn bulk-btn--warning"
+                  onClick={() => openBulkAction('Cancelar', quoteSelection.selectedIdList, (id) => salesService.cancelQuote(id, 'Cancelamento em massa via seleção'), quoteSelection.clearSelection)}
+                  title="Cancelar cotações selecionadas"
+                >
+                  <XCircle size={14} />
+                  <span>Cancelar selecionadas</span>
+                </button>
+              </BulkActionsBar>
               <div className="table-container ui-table-wrap">
                 <table className="data-table ui-table ui-table--wide">
                   <thead>
@@ -1269,14 +1298,25 @@ export const Sales: React.FC = () => {
                       quotePagination.pageItems.map(q => (
                         <tr
                           key={q.id}
-                          onClick={() => handleOpenQuoteModal(q)}
+                          onClick={(event) => {
+                            if ((event.target as HTMLElement).closest('button, a, input, label, .ui-selection-cell')) return;
+                            handleOpenQuoteModal(q);
+                          }}
                           className={`ui-record-row ${quoteSelection.isSelected(q.id) ? 'ui-record-row--selected' : ''}`}
                           role="button"
                           tabIndex={0}
                           onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenQuoteModal(q); } }}
                           title="Clique na linha para abrir/visualizar a cotação"
                         >
-                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar cotação ${q.quote_number}`} checked={quoteSelection.isSelected(q.id)} onClick={(event) => event.stopPropagation()} onChange={() => quoteSelection.toggleSelect(q.id)} /></td>
+                          <td className="ui-selection-cell" onClick={(event) => event.stopPropagation()}>
+                            <input
+                              className="ui-selection-checkbox"
+                              type="checkbox"
+                              aria-label={`Selecionar cotação ${q.quote_number}`}
+                              checked={quoteSelection.isSelected(q.id)}
+                              onChange={() => quoteSelection.toggleSelect(q.id)}
+                            />
+                          </td>
                           <td><strong>#{q.quote_number}</strong></td>
                           <td>
                             <div className="cell-client">
@@ -1448,45 +1488,95 @@ export const Sales: React.FC = () => {
                 selectedCount={orderSelection.selectedCount}
                 resourceName={{ singular: 'pedido', plural: 'pedidos' }}
                 onClear={orderSelection.clearSelection}
-                onDelete={() => openBulkAction('Cancelar', orderSelection.selectedIdList, (id) => salesService.deleteOrder(id, 'Cancelamento em massa'), orderSelection.clearSelection)}
-                deleteLabel="Cancelar selecionados"
-              />
-              <div className="table-container ui-table-wrap">
-                <table className="data-table ui-table ui-table--wide">
-                  <thead>
-                    <tr>
-                      <th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar pedidos canceláveis desta página" checked={orderSelection.isAllSelected(cancellableOrdersOnPage)} onChange={() => orderSelection.toggleSelectAll(cancellableOrdersOnPage)} /></th>
-                      <th>Pedido</th>
-                      <th>Cliente</th>
-                      <th>Emissão</th>
-                      <th>Condição</th>
-                      <th>Estoque / Execução</th>
-                      <th>Faturamento</th>
-                      <th>Crédito</th>
-                      <th>Total Líquido</th>
-                      <th>Status Geral</th>
-                      <th>Ações Operacionais</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredOrders.length === 0 ? (
-                      <tr>
-                        <td colSpan={11} className="empty-state ui-empty-state">
-                          Nenhum pedido de venda encontrado.
-                        </td>
-                      </tr>
-                    ) : (
-                      orderPagination.pageItems.map(o => (
-                        <tr
-                          key={o.id}
-                          onClick={() => handleOpenOrderModal(o)}
-                          className={`ui-record-row ${orderSelection.isSelected(o.id) ? 'ui-record-row--selected' : ''}`}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenOrderModal(o); } }}
-                          title="Clique na linha para abrir/editar o pedido"
-                        >
-                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar pedido ${o.order_number}`} disabled={o.status === 'CANCELLED' || o.status === 'COMPLETED' || o.billing_status !== 'PENDING'} checked={orderSelection.isSelected(o.id)} onClick={(event) => event.stopPropagation()} onChange={() => orderSelection.toggleSelect(o.id)} /></td>
+                onDelete={() => openBulkAction('Excluir definitivamente', orderSelection.selectedIdList, (id) => salesService.deleteOrder(id, undefined, true), orderSelection.clearSelection)}
+                deleteLabel="Excluir selecionados"
+              >
+                <button
+                  type="button"
+                  className="bulk-btn bulk-btn--warning"
+                  onClick={() => openBulkAction('Cancelar', orderSelection.selectedIdList, (id) => salesService.deleteOrder(id, 'Cancelamento em massa via seleção', false), orderSelection.clearSelection)}
+                  title="Cancelar pedidos selecionados"
+                >
+                  <XCircle size={14} />
+                  <span>Cancelar selecionados</span>
+                </button>
+              </BulkActionsBar>
+                  {/* Header e Seleção de Pedidos */}
+                  {(() => {
+                    const selectablePageOrders = orderPagination.pageItems.filter(o =>
+                      o.status === 'CANCELLED' ||
+                      (o.status !== 'COMPLETED' && !['INVOICED', 'PARTIALLY_INVOICED'].includes(o.billing_status) && !['DISPATCHED', 'DELIVERED'].includes(o.delivery_status))
+                    );
+                    return (
+                      <div className="table-container ui-table-wrap">
+                        <table className="data-table ui-table ui-table--wide">
+                          <thead>
+                            <tr>
+                              <th className="ui-selection-cell">
+                                <input
+                                  className="ui-selection-checkbox"
+                                  type="checkbox"
+                                  aria-label="Selecionar pedidos desta página"
+                                  checked={selectablePageOrders.length > 0 && orderSelection.isAllSelected(selectablePageOrders)}
+                                  disabled={selectablePageOrders.length === 0}
+                                  title={selectablePageOrders.length === 0 ? 'Nenhum pedido selecionável nesta página' : 'Selecionar todos os pedidos operáveis desta página'}
+                                  onChange={() => orderSelection.toggleSelectAll(selectablePageOrders)}
+                                />
+                              </th>
+                              <th>Pedido</th>
+                              <th>Cliente</th>
+                              <th>Emissão</th>
+                              <th>Condição</th>
+                              <th>Estoque / Execução</th>
+                              <th>Faturamento</th>
+                              <th>Crédito</th>
+                              <th>Total Líquido</th>
+                              <th>Status Geral</th>
+                              <th>Ações Operacionais</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredOrders.length === 0 ? (
+                              <tr>
+                                <td colSpan={11} className="empty-state ui-empty-state">
+                                  Nenhum pedido de venda encontrado.
+                                </td>
+                              </tr>
+                            ) : (
+                              orderPagination.pageItems.map(o => {
+                                const isCancellable = o.status !== 'CANCELLED' && o.status !== 'COMPLETED' && !['INVOICED', 'PARTIALLY_INVOICED'].includes(o.billing_status) && !['DISPATCHED', 'DELIVERED'].includes(o.delivery_status);
+                                const isDeletable = o.status === 'CANCELLED';
+                                const isSelectable = isCancellable || isDeletable;
+                                return (
+                                <tr
+                                  key={o.id}
+                                  onClick={(event) => {
+                                    if ((event.target as HTMLElement).closest('button, a, input, label, .ui-selection-cell')) return;
+                                    handleOpenOrderModal(o);
+                                  }}
+                                  className={`ui-record-row ${orderSelection.isSelected(o.id) ? 'ui-record-row--selected' : ''}`}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenOrderModal(o); } }}
+                                  title="Clique na linha para abrir/editar o pedido"
+                                >
+                                  <td className="ui-selection-cell" onClick={(event) => event.stopPropagation()}>
+                                    <input
+                                      className="ui-selection-checkbox"
+                                      type="checkbox"
+                                      aria-label={`Selecionar pedido ${o.order_number}`}
+                                      disabled={!isSelectable}
+                                      title={
+                                        o.status === 'COMPLETED' ? 'Pedido concluído com faturamento/entrega' :
+                                        ['INVOICED', 'PARTIALLY_INVOICED'].includes(o.billing_status) ? 'Pedido com faturas ativas vinculadas' :
+                                        ['DISPATCHED', 'DELIVERED'].includes(o.delivery_status) ? 'Pedido já despachado ou entregue' :
+                                        o.status === 'CANCELLED' ? 'Selecionar pedido cancelado para exclusão definitiva' :
+                                        'Selecionar pedido'
+                                      }
+                                      checked={orderSelection.isSelected(o.id)}
+                                      onChange={() => orderSelection.toggleSelect(o.id)}
+                                    />
+                                  </td>
                           <td><strong>#{o.order_number}</strong></td>
                           <td>
                             <div className="cell-client">
@@ -1617,13 +1707,25 @@ export const Sales: React.FC = () => {
                                 <GitBranch size={14} /> Rastrear
                               </button>
 
-                              {/* Ação 5: Cancelar */}
-                              {o.status !== 'CANCELLED' && o.status !== 'COMPLETED' && o.billing_status === 'PENDING' && (
+                              {/* Ação 5: Cancelar Pedido */}
+                              {o.status !== 'CANCELLED' && o.status !== 'COMPLETED' && o.billing_status !== 'INVOICED' && o.billing_status !== 'PARTIALLY_INVOICED' && o.delivery_status !== 'DISPATCHED' && o.delivery_status !== 'DELIVERED' && (
                                 <button
                                   type="button"
                                   className="table-action-btn ui-table-action danger"
                                   onClick={(e) => { e.stopPropagation(); handleDeleteOrder(o); }}
                                   title="Cancelar pedido"
+                                >
+                                  <XCircle size={14} />
+                                </button>
+                              )}
+
+                              {/* Ação 6: Excluir Pedido Definitivamente */}
+                              {o.status === 'CANCELLED' && (
+                                <button
+                                  type="button"
+                                  className="table-action-btn ui-table-action danger"
+                                  onClick={(e) => { e.stopPropagation(); handlePermanentDeleteOrder(o); }}
+                                  title="Excluir pedido definitivamente"
                                 >
                                   <Trash2 size={14} />
                                 </button>
@@ -1631,14 +1733,17 @@ export const Sales: React.FC = () => {
                             </div>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
                 <ListPagination {...orderPagination} onPageChange={orderPagination.setPage} onPageSizeChange={orderPagination.setPageSize} />
               </div>
-            </div>
-          )}
+            );
+          })()}
+        </div>
+      )}
 
           {activeTab === 'approvals' && (
             <div className="tab-pane credit-approvals-pane">
@@ -2038,14 +2143,25 @@ export const Sales: React.FC = () => {
                       customerPagination.pageItems.map(c => (
                         <tr
                           key={c.id}
-                          onClick={() => handleOpenCustomerModal(c)}
+                          onClick={(event) => {
+                            if ((event.target as HTMLElement).closest('button, a, input, label, .ui-selection-cell')) return;
+                            handleOpenCustomerModal(c);
+                          }}
                           className={`ui-record-row ${customerSelection.isSelected(c.id) ? 'ui-record-row--selected' : ''}`}
                           role="button"
                           tabIndex={0}
                           onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); handleOpenCustomerModal(c); } }}
                           title="Clique na linha para abrir/editar os dados do cliente"
                         >
-                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar cliente ${c.name}`} checked={customerSelection.isSelected(c.id)} onClick={(event) => event.stopPropagation()} onChange={() => customerSelection.toggleSelect(c.id)} /></td>
+                          <td className="ui-selection-cell" onClick={(event) => event.stopPropagation()}>
+                            <input
+                              className="ui-selection-checkbox"
+                              type="checkbox"
+                              aria-label={`Selecionar cliente ${c.name}`}
+                              checked={customerSelection.isSelected(c.id)}
+                              onChange={() => customerSelection.toggleSelect(c.id)}
+                            />
+                          </td>
                           <td>
                             <span className={`person-badge ${c.person_type.toLowerCase()}`}>
                               {c.person_type}
@@ -2109,10 +2225,28 @@ export const Sales: React.FC = () => {
                     </select>
                   </div>
 
+                  <BulkActionsBar
+                    selectedCount={goalSelection.selectedCount}
+                    resourceName={{ singular: 'meta', plural: 'metas' }}
+                    onClear={goalSelection.clearSelection}
+                    onDelete={() => openBulkAction('Excluir', goalSelection.selectedIdList, salesService.deleteSalesGoal, goalSelection.clearSelection)}
+                    deleteLabel="Excluir selecionadas"
+                  />
+
                   <div className="table-container mini ui-table-wrap">
                     <table className="data-table ui-table">
                       <thead>
                         <tr>
+                          <th className="ui-selection-cell">
+                            <input
+                              className="ui-selection-checkbox"
+                              type="checkbox"
+                              aria-label="Selecionar todas as metas comerciais"
+                              checked={goalSelection.isAllSelected(salesGoals)}
+                              disabled={salesGoals.length === 0}
+                              onChange={() => goalSelection.toggleSelectAll(salesGoals)}
+                            />
+                          </th>
                           <th>Vendedor</th>
                           <th>Mês</th>
                           <th>Meta R$</th>
@@ -2123,13 +2257,22 @@ export const Sales: React.FC = () => {
                       <tbody>
                         {salesGoals.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="empty-state ui-empty-state">
+                            <td colSpan={6} className="empty-state ui-empty-state">
                               Nenhuma meta comercial cadastrada para {yearFilter}.
                             </td>
                           </tr>
                         ) : (
                           salesGoals.map(g => (
-                            <tr key={g.id}>
+                            <tr key={g.id} className={goalSelection.isSelected(g.id) ? 'ui-record-row--selected' : ''}>
+                              <td className="ui-selection-cell" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  className="ui-selection-checkbox"
+                                  type="checkbox"
+                                  aria-label={`Selecionar meta do vendedor ${g.seller_name || ''}`}
+                                  checked={goalSelection.isSelected(g.id)}
+                                  onChange={() => goalSelection.toggleSelect(g.id)}
+                                />
+                              </td>
                               <td><strong>{g.seller_name || 'Vendedor'}</strong></td>
                               <td>Mês {g.month}</td>
                               <td><strong>{fmtCurrency(g.target_amount)}</strong></td>
@@ -2158,10 +2301,28 @@ export const Sales: React.FC = () => {
                     <h3><Layers size={16} /> Tabelas de Preços Personalizadas</h3>
                   </div>
 
+                  <BulkActionsBar
+                    selectedCount={priceTableSelection.selectedCount}
+                    resourceName={{ singular: 'tabela', plural: 'tabelas' }}
+                    onClear={priceTableSelection.clearSelection}
+                    onDelete={() => openBulkAction('Excluir', priceTableSelection.selectedIdList, salesService.deletePriceTable, priceTableSelection.clearSelection)}
+                    deleteLabel="Excluir selecionadas"
+                  />
+
                   <div className="table-container mini ui-table-wrap">
                     <table className="data-table ui-table">
                       <thead>
                         <tr>
+                          <th className="ui-selection-cell">
+                            <input
+                              className="ui-selection-checkbox"
+                              type="checkbox"
+                              aria-label="Selecionar todas as tabelas de preços"
+                              checked={priceTableSelection.isAllSelected(priceTables)}
+                              disabled={priceTables.length === 0}
+                              onChange={() => priceTableSelection.toggleSelectAll(priceTables)}
+                            />
+                          </th>
                           <th>Nome da Tabela</th>
                           <th>Descrição</th>
                           <th>Padrão</th>
@@ -2172,13 +2333,22 @@ export const Sales: React.FC = () => {
                       <tbody>
                         {priceTables.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="empty-state ui-empty-state">
+                            <td colSpan={6} className="empty-state ui-empty-state">
                               Nenhuma tabela de preços cadastrada.
                             </td>
                           </tr>
                         ) : (
                           priceTables.map(t => (
-                            <tr key={t.id}>
+                            <tr key={t.id} className={priceTableSelection.isSelected(t.id) ? 'ui-record-row--selected' : ''}>
+                              <td className="ui-selection-cell" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  className="ui-selection-checkbox"
+                                  type="checkbox"
+                                  aria-label={`Selecionar tabela ${t.name}`}
+                                  checked={priceTableSelection.isSelected(t.id)}
+                                  onChange={() => priceTableSelection.toggleSelect(t.id)}
+                                />
+                              </td>
                               <td><strong>{t.name}</strong></td>
                               <td>{t.description || '-'}</td>
                               <td>
@@ -2274,7 +2444,10 @@ export const Sales: React.FC = () => {
                           className={`ui-record-row ${returnSelection.isSelected(r.id) ? 'ui-record-row--selected' : ''}`}
                           role="button"
                           tabIndex={0}
-                          onClick={() => setSelectedReturn(r)}
+                          onClick={(event) => {
+                            if ((event.target as HTMLElement).closest('button, a, input, label, .ui-selection-cell')) return;
+                            setSelectedReturn(r);
+                          }}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault();
@@ -2282,7 +2455,15 @@ export const Sales: React.FC = () => {
                             }
                           }}
                         >
-                          <td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar registro de ${r.customer_name}`} checked={returnSelection.isSelected(r.id)} onClick={(event) => event.stopPropagation()} onChange={() => returnSelection.toggleSelect(r.id)} /></td>
+                          <td className="ui-selection-cell" onClick={(event) => event.stopPropagation()}>
+                            <input
+                              className="ui-selection-checkbox"
+                              type="checkbox"
+                              aria-label={`Selecionar registro de ${r.customer_name}`}
+                              checked={returnSelection.isSelected(r.id)}
+                              onChange={() => returnSelection.toggleSelect(r.id)}
+                            />
+                          </td>
                           <td>
                             <span className={`status-pill ui-status ${
                               r.return_type === 'DEVOLUCAO' ? 'danger' :

@@ -435,6 +435,7 @@ def create_invoice(
                 issue_date=invoice.issue_date,
                 total_amount=invoice.net_amount,
                 tax_amount=invoice.tax_amount,
+                file_attachment=payload.fiscal_file_attachment,
                 notes=f"Registro fiscal de saída originado da fatura {invoice.invoice_number}",
                 status="draft",
             ),
@@ -458,6 +459,10 @@ def create_invoice(
             if fiscal_document
             else header
         )
+        receivable_notes = f"Originado da Fatura Comercial #{invoice.invoice_number}"
+        if payload.boleto_digitable_line:
+            receivable_notes += f" | Boleto: {payload.boleto_digitable_line}"
+
         for installment in saved_invoice.installments:
             finance_service.create_receivable(
                 db,
@@ -475,7 +480,7 @@ def create_invoice(
                     issue_date=invoice.issue_date,
                     due_date=installment.due_date,
                     payment_method_expected="BOLETO",
-                    notes=f"Originado da Fatura Comercial #{invoice.invoice_number}",
+                    notes=receivable_notes,
                 ),
                 current_user=current_user,
                 source_document=receivable_source,
@@ -637,6 +642,9 @@ def process_billing_request(
             fiscal_document_number=payload.fiscal_document_number,
             fiscal_series=payload.fiscal_series,
             fiscal_access_key=payload.fiscal_access_key,
+            fiscal_file_attachment=payload.fiscal_file_attachment,
+            boleto_file_attachment=payload.boleto_file_attachment,
+            boleto_digitable_line=payload.boleto_digitable_line,
             items=requested_items,
         ),
         source_document=request,

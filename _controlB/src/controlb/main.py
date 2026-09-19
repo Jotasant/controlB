@@ -30,6 +30,8 @@ from controlb.modules.sales.api import router as sales_router
 from controlb.modules.billing.api import router as billing_router
 from controlb.modules.finance.api import router as finance_router
 from controlb.modules.documents.api import router as documents_router
+from controlb.modules.projects.api import router as projects_router
+from controlb.modules.chat.api import router as chat_router
 
 
 # Carrega as configurações centralizadas
@@ -39,7 +41,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="API do ecossistema ControlB para compras, estoque, CRM, vendas, faturamento e financeiro.",
+    description="API do ecossistema ControlB para compras, estoque, CRM, vendas, faturamento, financeiro e projetos & operações.",
 )
 
 # 2. Configuração do Middleware de CORS
@@ -91,6 +93,13 @@ async def log_requests_middleware(request: Request, call_next):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Captura e grava nos logs falhas de validação de schemas Pydantic."""
     errors = exc.errors()
+    if request.url.path.startswith("/chat/"):
+        # Não registrar valores de entrada: configurações e callbacks contêm segredos.
+        safe_errors = [
+            {"loc": list(error["loc"]), "type": error["type"], "msg": "Campo inválido."}
+            for error in errors
+        ]
+        return JSONResponse(status_code=422, content={"detail": safe_errors})
     logger.warning(f"⚠️ [VALIDATION ERROR 422] {request.method} {request.url.path} - Erros: {errors}")
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -140,5 +149,7 @@ app.include_router(sales_router)
 app.include_router(billing_router)
 app.include_router(finance_router)
 app.include_router(documents_router)
+app.include_router(projects_router)
+app.include_router(chat_router)
 
 logger.info("🚀 Sistema ControlB API inicializado com sucesso e pronto para requisições.")

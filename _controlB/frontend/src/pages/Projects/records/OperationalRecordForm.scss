@@ -1,0 +1,268 @@
+.operational-record-form {
+  .record-form-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 0.75rem 0.85rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+
+    svg { flex: 0 0 auto; margin-top: 0.1rem; color: var(--accent-brand); }
+  }
+
+  .record-status-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0.25rem 0.6rem;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+  }
+
+  .record-form-checkbox {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.55rem 0.7rem;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: 7px;
+    cursor: pointer;
+
+    input { accent-color: var(--accent-brand); }
+  }
+
+  .record-form-range {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.75rem;
+
+    input { accent-color: var(--accent-brand); }
+    strong { min-width: 44px; color: var(--accent-brand); text-align: right; }
+  }
+
+  .record-form-footer-message {
+    margin-right: auto;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+
+    &.is-dirty { color: #f59e0b; }
+  }
+
+  .record-form-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .record-form-choice {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    min-height: 58px;
+    padding: 0.7rem 0.8rem;
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    cursor: pointer;
+
+    &:has(input:checked) {
+      background: color-mix(in srgb, var(--accent-brand) 8%, var(--bg-app));
+      border-color: color-mix(in srgb, var(--accent-brand) 55%, var(--border-subtle));
+    }
+
+    input { accent-color: var(--accent-brand); }
+    span { min-width: 0; display: grid; gap: 0.15rem; }
+    strong, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    strong { color: var(--text-primary); font-size: 0.8rem; }
+    small { color: var(--text-muted); font-size: 0.7rem; }
+  }
+
+  .record-form-empty { color: var(--text-muted); font-size: 0.8rem; }
+
+  .record-related-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .record-task-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.55rem;
+    margin-bottom: 0.8rem;
+
+    span {
+      display: flex;
+      align-items: baseline;
+      gap: 0.35rem;
+      padding: 0.6rem 0.7rem;
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      background: var(--bg-app);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+    }
+
+    strong { color: var(--text-primary); font-size: 0.9rem; }
+    .is-blocked strong { color: #ef4444; }
+    .is-done strong { color: #10b981; }
+  }
+
+  .record-task-list {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .record-task-item {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 5px minmax(180px, 1.25fr) minmax(280px, 2fr);
+    align-items: center;
+    gap: 0.8rem;
+    min-height: 62px;
+    padding: 0.55rem 0.75rem;
+    color: inherit;
+    text-align: left;
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+
+    &:hover {
+      background: var(--bg-surface-elevated);
+      border-color: color-mix(in srgb, var(--accent-brand) 45%, var(--border-subtle));
+      transform: translateY(-1px);
+    }
+
+    &__status {
+      width: 5px;
+      height: 36px;
+      background: #94a3b8;
+      border-radius: 999px;
+
+      &.status-in_progress { background: #3b82f6; }
+      &.status-review, &.status-in_review { background: #8b5cf6; }
+      &.status-blocked { background: #ef4444; }
+      &.status-done, &.status-completed { background: #10b981; }
+      &.status-cancelled { background: #64748b; }
+    }
+
+    &__identity {
+      min-width: 0;
+      display: grid;
+      gap: 0.15rem;
+
+      small { color: var(--accent-brand); font-size: 0.65rem; font-weight: 700; letter-spacing: 0.025em; }
+      strong { overflow: hidden; color: var(--text-primary); font-size: 0.8rem; text-overflow: ellipsis; white-space: nowrap; }
+    }
+
+    &__meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+
+      > span {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.2rem 0.42rem;
+        color: var(--text-muted);
+        font-size: 0.66rem;
+        background: var(--bg-surface-elevated);
+        border-radius: 999px;
+      }
+    }
+  }
+
+  .record-task-priority {
+    font-weight: 700;
+    &.priority-high { color: #f97316; }
+    &.priority-critical { color: #ef4444; }
+    &.priority-low { color: #10b981; }
+  }
+
+  .record-form-color {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 0.55rem;
+
+    input[type='color'] { width: 48px; padding: 3px; cursor: pointer; }
+  }
+
+  .record-form-stage-list { display: grid; gap: 0.55rem; }
+
+  .record-form-stage {
+    display: grid;
+    grid-template-columns: auto auto 28px minmax(0, 1fr) auto auto auto;
+    align-items: center;
+    gap: 0.7rem;
+    min-height: 64px;
+    padding: 0.65rem 0.75rem;
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: 9px;
+    transition: opacity 120ms ease, border-color 120ms ease;
+
+    &.is-dragging { opacity: 0.45; border-color: var(--accent-brand); }
+    &__grip { color: var(--text-muted); cursor: grab; }
+    &__color { width: 10px; height: 32px; border-radius: 999px; }
+    &__position { color: var(--text-muted); font-size: 0.75rem; font-weight: 700; text-align: center; }
+    &__identity { min-width: 0; display: grid; gap: 0.15rem; }
+    &__identity strong { color: var(--text-primary); font-size: 0.82rem; }
+    &__identity small { overflow: hidden; color: var(--text-muted); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
+    &__flags { display: flex; gap: 0.35rem; }
+    &__flags span { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.2rem 0.45rem; color: var(--accent-brand); font-size: 0.65rem; font-weight: 700; background: color-mix(in srgb, var(--accent-brand) 9%, transparent); border-radius: 999px; }
+    &__flags .is-terminal { color: #10b981; background: color-mix(in srgb, #10b981 10%, transparent); }
+  }
+
+  .record-form-empty-state {
+    display: grid;
+    justify-items: center;
+    gap: 0.35rem;
+    padding: 2.5rem 1rem;
+    color: var(--text-muted);
+    text-align: center;
+
+    strong { color: var(--text-primary); font-size: 0.9rem; }
+    span { font-size: 0.78rem; }
+  }
+
+  .record-form-stage-modal { display: grid; gap: 1rem; }
+  .record-form-modal-actions { display: flex; justify-content: flex-end; gap: 0.55rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle); }
+
+  textarea { resize: vertical; }
+}
+
+@media (max-width: 640px) {
+  .operational-record-form .record-form-footer-message { display: none; }
+  .operational-record-form .record-form-choice-grid { grid-template-columns: 1fr; }
+  .operational-record-form .record-form-stage { grid-template-columns: auto auto 24px minmax(0, 1fr) auto auto; }
+  .operational-record-form .record-form-stage__flags { display: none; }
+  .operational-record-form .record-related-actions { width: 100%; flex-wrap: wrap; }
+  .operational-record-form .record-task-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operational-record-form .record-task-item { grid-template-columns: 5px minmax(0, 1fr); }
+  .operational-record-form .record-task-item__meta { grid-column: 2; justify-content: flex-start; }
+}
+
+@media (min-width: 641px) and (max-width: 960px) {
+  .operational-record-form .record-form-choice-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

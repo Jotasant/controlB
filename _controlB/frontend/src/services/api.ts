@@ -17,7 +17,7 @@ import {
 
 // Cria a instância do Axios
 export const api = axios.create({
-  baseURL: '', // Vazio para usar rotas relativas que passam pelo proxy Nginx na porta 80
+  baseURL: (import.meta.env.VITE_API_BASE_URL as string) || '', // Vazio para rotas relativas (proxy Nginx/Vite) ou URL configurada via env
   headers: {
     'Content-Type': 'application/json',
   },
@@ -106,12 +106,22 @@ api.interceptors.request.use((config) => {
   return Promise.reject(error);
 });
 
+let isRedirectingToLogin = false;
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401 && !error.config.url?.includes('/identity/token')) {
-      authService.logout();
-      window.location.href = '/login';
+    if (error.response && error.response.status === 401 && !error.config?.url?.includes('/identity/token')) {
+      if (!isRedirectingToLogin) {
+        isRedirectingToLogin = true;
+        authService.logout();
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        setTimeout(() => {
+          isRedirectingToLogin = false;
+        }, 2000);
+      }
     }
     return Promise.reject(error);
   }
@@ -296,7 +306,19 @@ export const identityService = {
     );
   },
 
-  async createUser(data: { full_name: string; email: string; password: string; organization_id?: string; role_id?: string; is_seller?: boolean }): Promise<User> {
+  async getUser(userId: string, forceRefresh = false): Promise<User> {
+    return cacheManager.fetchWithCache(
+      `identity:users:item:${userId}`,
+      async () => {
+        const response = await api.get<User>(`/identity/users/${encodeURIComponent(userId)}`);
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
+  async createUser(data: { full_name: string; email: string; password: string; organization_id: string; role_id?: string | null; is_seller?: boolean }): Promise<User> {
     const response = await api.post<User>('/identity/users', data);
     cacheManager.invalidate('identity:users');
     cacheManager.invalidate('identity:teams:candidates');
@@ -304,12 +326,13 @@ export const identityService = {
     return response.data;
   },
 
-  async updateUser(userId: string, data: { full_name?: string; email?: string; password?: string; organization_id?: string; role_id?: string; is_active?: boolean; is_seller?: boolean }): Promise<User> {
+  async updateUser(userId: string, data: { full_name?: string; email?: string; password?: string; organization_id?: string; role_id?: string | null; is_active?: boolean; is_seller?: boolean }): Promise<User> {
     const response = await api.put<User>(`/identity/users/${userId}`, data);
     cacheManager.invalidate('identity:users');
     cacheManager.invalidate('identity:teams:candidates');
     cacheManager.invalidate('identity:me');
     cacheManager.invalidate('sales:sellers');
+    cacheManager.invalidate(`identity:users:item:${userId}`);
     return response.data;
   },
 
@@ -317,6 +340,7 @@ export const identityService = {
     const response = await api.delete<{ message: string }>(`/identity/users/${userId}`);
     cacheManager.invalidate('identity:users');
     cacheManager.invalidate('identity:teams:candidates');
+    cacheManager.invalidate(`identity:users:item:${userId}`);
     return response.data;
   },
 
@@ -341,6 +365,18 @@ export const identityService = {
     );
   },
 
+  async getOrganization(orgId: string, forceRefresh = false): Promise<Organization> {
+    return cacheManager.fetchWithCache(
+      `identity:orgs:item:${orgId}`,
+      async () => {
+        const response = await api.get<Organization>(`/identity/organization/${encodeURIComponent(orgId)}`);
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
   async createOrganization(name: string): Promise<Organization> {
     const response = await api.post<Organization>('/identity/organization', { name });
     cacheManager.invalidate('identity:orgs');
@@ -350,12 +386,14 @@ export const identityService = {
   async updateOrganization(orgId: string, data: { name?: string; is_active?: boolean }): Promise<Organization> {
     const response = await api.put<Organization>(`/identity/organization/${orgId}`, data);
     cacheManager.invalidate('identity:orgs');
+    cacheManager.invalidate(`identity:orgs:item:${orgId}`);
     return response.data;
   },
 
   async deleteOrganization(orgId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/identity/organization/${orgId}`);
     cacheManager.invalidate('identity:orgs');
+    cacheManager.invalidate(`identity:orgs:item:${orgId}`);
     return response.data;
   },
 
@@ -379,6 +417,18 @@ export const identityService = {
     );
   },
 
+  async getRole(roleId: string, forceRefresh = false): Promise<Role> {
+    return cacheManager.fetchWithCache(
+      `identity:roles:item:${roleId}`,
+      async () => {
+        const response = await api.get<Role>(`/identity/role/${encodeURIComponent(roleId)}`);
+        return response.data;
+      },
+      DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  },
+
   async createRole(name: string, description: string, organizationId: string, permissionIds: string[] = []): Promise<Role> {
     const response = await api.post<Role>('/identity/role', { 
       name, 
@@ -394,6 +444,7 @@ export const identityService = {
     const response = await api.put<Role>(`/identity/role/${roleId}`, data);
     cacheManager.invalidate('identity:roles');
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate(`identity:roles:item:${roleId}`);
     return response.data;
   },
 
@@ -401,6 +452,7 @@ export const identityService = {
     const response = await api.delete<{ message: string }>(`/identity/role/${roleId}`);
     cacheManager.invalidate('identity:roles');
     cacheManager.invalidate('identity:users');
+    cacheManager.invalidate(`identity:roles:item:${roleId}`);
     return response.data;
   },
 
@@ -1367,6 +1419,16 @@ export const financeService = {
       barcode?: string;
       digitable_line?: string;
       pix_code?: string;
+      due_date?: string;
+      amount?: number;
+      file_attachment?: string;
+    };
+    new_fiscal_document?: {
+      document_type: string;
+      document_number: string;
+      series?: string;
+      access_key?: string;
+      file_attachment?: string;
     };
     notes?: string;
   }): Promise<import('@/types').Payable[]> {
@@ -1382,6 +1444,41 @@ export const financeService = {
     cacheManager.invalidate('finance:dashboard');
     cacheManager.invalidate('documents');
     return response.data;
+  },
+
+  async reopenPayable(id: string): Promise<import('@/types').Payable> {
+    const response = await api.post<import('@/types').Payable>(`/finance/payables/${id}/reopen`);
+    cacheManager.invalidate('finance:payables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async deletePayable(id: string): Promise<void> {
+    await api.delete(`/finance/payables/${id}`);
+    cacheManager.invalidate('finance:payables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+  },
+
+  async createOrUpdatePayableInstrument(payableId: string, data: {
+    instrument_type?: string;
+    barcode?: string;
+    digitable_line?: string;
+    pix_code?: string;
+    document_number?: string;
+    due_date?: string;
+    amount?: number;
+    file_attachment?: string;
+  }): Promise<import('@/types').PaymentInstrument> {
+    const response = await api.post<import('@/types').PaymentInstrument>(`/finance/payables/${payableId}/instruments`, data);
+    cacheManager.invalidate('finance:payables');
+    return response.data;
+  },
+
+  async deletePayableInstrument(payableId: string, instrumentId: string): Promise<void> {
+    await api.delete(`/finance/payables/${payableId}/instruments/${instrumentId}`);
+    cacheManager.invalidate('finance:payables');
   },
 
   async registerPayment(payableId: string, data: {
@@ -1546,6 +1643,21 @@ export const financeService = {
     return response.data;
   },
 
+  async reopenReceivable(id: string): Promise<import('@/types').Receivable> {
+    const response = await api.post<import('@/types').Receivable>(`/finance/receivables/${id}/reopen`);
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+    return response.data;
+  },
+
+  async deleteReceivable(id: string): Promise<void> {
+    await api.delete(`/finance/receivables/${id}`);
+    cacheManager.invalidate('finance:receivables');
+    cacheManager.invalidate('finance:dashboard');
+    cacheManager.invalidate('documents');
+  },
+
   async registerReceipt(receivableId: string, data: {
     amount: number;
     receipt_date: string;
@@ -1609,6 +1721,9 @@ export const billingService = {
     fiscal_document_number?: string;
     fiscal_series?: string;
     fiscal_access_key?: string;
+    fiscal_file_attachment?: string;
+    boleto_file_attachment?: string;
+    boleto_digitable_line?: string;
     items?: Array<{ sales_order_item_id: string; quantity: number }>;
   }): Promise<import('@/types').Invoice> {
     const response = await api.post<import('@/types').Invoice>(`/billing/requests/${requestId}/issue`, data);
@@ -1675,6 +1790,9 @@ export const billingService = {
     fiscal_document_number?: string;
     fiscal_series?: string;
     fiscal_access_key?: string;
+    fiscal_file_attachment?: string;
+    boleto_file_attachment?: string;
+    boleto_digitable_line?: string;
     items?: Array<{ sales_order_item_id: string; quantity: number }>;
   }): Promise<import('@/types').Invoice> {
     const response = await api.post<import('@/types').Invoice>('/billing/invoices', data);
@@ -1931,12 +2049,7 @@ export const crmService = {
   },
 
   async convertQuoteToOrder(quoteId: string): Promise<import('@/types').SalesOrder> {
-    const response = await api.post<import('@/types').SalesOrder>(`/sales/quotes/${quoteId}/convert`);
-    cacheManager.invalidate('sales:quotes');
-    cacheManager.invalidate(`sales:quote:${quoteId}`);
-    cacheManager.invalidate('sales:orders');
-    cacheManager.invalidate('crm:opportunities');
-    return response.data;
+    return salesService.convertQuoteToOrder(quoteId);
   }
 };
 
@@ -2150,8 +2263,10 @@ export const salesService = {
     return response.data;
   },
 
-  async deleteQuote(quoteId: string): Promise<{ message: string }> {
-    const response = await api.delete<{ message: string }>(`/sales/quotes/${quoteId}`);
+  async deleteQuote(quoteId: string, permanent: boolean = true): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/sales/quotes/${quoteId}`, {
+      params: { permanent }
+    });
     cacheManager.invalidate('sales:quotes');
     cacheManager.invalidate(`sales:quote:${quoteId}`);
     cacheManager.invalidate('crm:opportunities');
@@ -2228,9 +2343,9 @@ export const salesService = {
     return response.data;
   },
 
-  async deleteOrder(orderId: string, reason?: string): Promise<{ message: string }> {
+  async deleteOrder(orderId: string, reason?: string, permanent: boolean = false): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/sales/orders/${orderId}`, {
-      params: reason ? { reason } : undefined,
+      params: { ...(reason ? { reason } : {}), permanent },
     });
     cacheManager.invalidate('sales:orders');
     cacheManager.invalidate(`sales:order:${orderId}`);
@@ -2512,6 +2627,361 @@ export const salesService = {
         return Array.isArray(response.data) ? response.data : [];
       },
       DEFAULT_CACHE_TTL,
+      forceRefresh
+    );
+  }
+};
+
+// ==============================================================================
+// 12. PROJETOS & OPERAÇÕES SERVICE
+// Função utilitária para extrair listas tanto de arrays diretos quanto de PaginatedResponse ({ items: [...] })
+const unwrapProjectsList = (data: any): any[] => {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  return [];
+};
+
+export const projectsService = {
+  // --- PROJETOS ---
+  async getProjects(params?: import('@/types').ProjectsFilterParams, forceRefresh = false): Promise<import('@/types').Project[]> {
+    const key = `projects:list:${JSON.stringify(params || {})}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get('/projects/', { params });
+        return unwrapProjectsList(response.data);
+      },
+      30 * 1000, // 30s cache
+      forceRefresh
+    );
+  },
+
+  async getProject(id: string): Promise<import('@/types').Project> {
+    const response = await api.get<import('@/types').Project>(`/projects/${id}`);
+    return response.data;
+  },
+
+  async createProject(payload: import('@/types').ProjectCreatePayload): Promise<import('@/types').Project> {
+    const response = await api.post<import('@/types').Project>('/projects/', payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async updateProject(id: string, payload: Partial<import('@/types').ProjectCreatePayload>): Promise<import('@/types').Project> {
+    const response = await api.put<import('@/types').Project>(`/projects/${id}`, payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async changeProjectStage(id: string, stage_id: string, notes?: string): Promise<import('@/types').Project> {
+    const response = await api.post<import('@/types').Project>(`/projects/${id}/stage`, { stage_id, to_stage_id: stage_id, notes });
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async addProjectMember(id: string, payload: { user_id: string; role: string }): Promise<import('@/types').ProjectMember> {
+    const response = await api.post<import('@/types').ProjectMember>(`/projects/${id}/members`, payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async removeProjectMember(id: string, member_id: string): Promise<void> {
+    await api.delete(`/projects/${id}/members/${member_id}`);
+    cacheManager.invalidate('projects:');
+  },
+
+  async deleteProject(id: string): Promise<void> {
+    await api.delete(`/projects/${id}`);
+    cacheManager.invalidate('projects:');
+  },
+
+  // --- ORDENS DE SERVIÇO ---
+  async getWorkOrders(params?: import('@/types').WorkOrdersFilterParams, forceRefresh = false): Promise<import('@/types').WorkOrder[]> {
+    const key = `projects:work_orders:${JSON.stringify(params || {})}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get('/projects/orders', { params });
+        return unwrapProjectsList(response.data);
+      },
+      30 * 1000,
+      forceRefresh
+    );
+  },
+
+  async getWorkOrder(id: string): Promise<import('@/types').WorkOrder> {
+    const response = await api.get<import('@/types').WorkOrder>(`/projects/orders/${id}`);
+    return response.data;
+  },
+
+  async createWorkOrder(payload: import('@/types').WorkOrderCreatePayload): Promise<import('@/types').WorkOrder> {
+    const response = await api.post<import('@/types').WorkOrder>('/projects/orders', payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async updateWorkOrder(id: string, payload: Partial<import('@/types').WorkOrderCreatePayload>): Promise<import('@/types').WorkOrder> {
+    const response = await api.put<import('@/types').WorkOrder>(`/projects/orders/${id}`, payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async changeWorkOrderStatus(id: string, status: string): Promise<import('@/types').WorkOrder> {
+    const response = await api.post<import('@/types').WorkOrder>(`/projects/orders/${id}/status`, { status });
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async deleteWorkOrder(id: string): Promise<void> {
+    await api.delete(`/projects/orders/${id}`);
+    cacheManager.invalidate('projects:');
+  },
+
+  // --- TAREFAS ---
+  async getTasks(params?: import('@/types').TasksFilterParams, forceRefresh = false): Promise<import('@/types').Task[]> {
+    const key = `projects:tasks:${JSON.stringify(params || {})}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get('/projects/tasks/list', { params });
+        return unwrapProjectsList(response.data);
+      },
+      30 * 1000,
+      forceRefresh
+    );
+  },
+
+  async getTask(id: string): Promise<import('@/types').Task> {
+    const response = await api.get<import('@/types').Task>(`/projects/tasks/${id}`);
+    return response.data;
+  },
+
+  async createTask(payload: import('@/types').TaskCreatePayload): Promise<import('@/types').Task> {
+    const response = await api.post<import('@/types').Task>('/projects/tasks', payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async updateTask(id: string, payload: Partial<import('@/types').TaskCreatePayload>): Promise<import('@/types').Task> {
+    const response = await api.put<import('@/types').Task>(`/projects/tasks/${id}`, payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async changeTaskStatus(id: string, status: string): Promise<import('@/types').Task> {
+    const response = await api.post<import('@/types').Task>(`/projects/tasks/${id}/status`, { status });
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async deleteTask(id: string): Promise<void> {
+    await api.delete(`/projects/tasks/${id}`);
+    cacheManager.invalidate('projects:');
+  },
+
+  // --- OCORRÊNCIAS / ISSUES ---
+  async getIssues(params?: { project_id?: string; work_order_id?: string; status?: string }, forceRefresh = false): Promise<import('@/types').Issue[]> {
+    const key = `projects:issues:${JSON.stringify(params || {})}`;
+    return cacheManager.fetchWithCache(
+      key,
+      async () => {
+        const response = await api.get('/projects/issues/list', { params });
+        return unwrapProjectsList(response.data);
+      },
+      30 * 1000,
+      forceRefresh
+    );
+  },
+
+  async getIssue(id: string): Promise<import('@/types').Issue> {
+    const response = await api.get<import('@/types').Issue>(`/projects/issues/${id}`);
+    return response.data;
+  },
+
+  async createIssue(payload: import('@/types').IssueCreatePayload): Promise<import('@/types').Issue> {
+    const response = await api.post<import('@/types').Issue>('/projects/issues', payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async updateIssue(id: string, payload: Partial<import('@/types').IssueCreatePayload>): Promise<import('@/types').Issue> {
+    const response = await api.put<import('@/types').Issue>(`/projects/issues/${id}`, payload);
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async resolveIssue(id: string, resolution_notes: string): Promise<import('@/types').Issue> {
+    const response = await api.post<import('@/types').Issue>(`/projects/issues/${id}/resolve`, { resolution_notes });
+    cacheManager.invalidate('projects:');
+    return response.data;
+  },
+
+  async deleteIssue(id: string): Promise<void> {
+    await api.delete(`/projects/issues/${id}`);
+    cacheManager.invalidate('projects:');
+  },
+
+  // --- CHECKLISTS ---
+  async getChecklists(params?: { project_id?: string; work_order_id?: string; task_id?: string }): Promise<import('@/types').Checklist[]> {
+    const response = await api.get('/projects/checklists', { params });
+    return unwrapProjectsList(response.data);
+  },
+
+  async toggleChecklistItem(checklist_id: string, item_id: string, is_checked: boolean): Promise<import('@/types').ChecklistItem> {
+    const response = await api.post<import('@/types').ChecklistItem>(`/projects/checklists/${checklist_id}/items/${item_id}/toggle`, { is_checked });
+    return response.data;
+  },
+
+  // --- CONFIGURAÇÕES ---
+  async getProjectTypes(forceRefresh = false, activeOnly = true): Promise<import('@/types').ProjectType[]> {
+    return cacheManager.fetchWithCache(
+      `projects:types:${activeOnly}`,
+      async () => {
+        const response = await api.get('/projects/types', { params: { active_only: activeOnly } });
+        return unwrapProjectsList(response.data);
+      },
+      60 * 1000,
+      forceRefresh
+    );
+  },
+
+  async getProjectType(id: string): Promise<import('@/types').ProjectType> {
+    const response = await api.get<import('@/types').ProjectType>(`/projects/types/${id}`);
+    return response.data;
+  },
+
+  async createProjectType(payload: { name: string; code: string; prefix?: string; description?: string | null; color?: string; default_workflow_id?: string | null }): Promise<import('@/types').ProjectType> {
+    const response = await api.post<import('@/types').ProjectType>('/projects/types', payload);
+    cacheManager.invalidate('projects:types');
+    return response.data;
+  },
+
+  async updateProjectType(id: string, payload: Partial<{ name: string; code: string; prefix?: string; description?: string | null; color?: string; default_workflow_id?: string | null; is_active?: boolean }>): Promise<import('@/types').ProjectType> {
+    const response = await api.put<import('@/types').ProjectType>(`/projects/types/${id}`, payload);
+    cacheManager.invalidate('projects:types');
+    return response.data;
+  },
+
+  async deleteProjectType(id: string): Promise<void> {
+    await api.delete(`/projects/types/${id}`);
+    cacheManager.invalidate('projects:types');
+  },
+
+  async getWorkOrderTypes(forceRefresh = false, activeOnly = true): Promise<import('@/types').WorkOrderType[]> {
+    return cacheManager.fetchWithCache(
+      `projects:wo_types:${activeOnly}`,
+      async () => {
+        const response = await api.get('/projects/order-types', { params: { active_only: activeOnly } });
+        return unwrapProjectsList(response.data);
+      },
+      60 * 1000,
+      forceRefresh
+    );
+  },
+
+  async getWorkOrderType(id: string): Promise<import('@/types').WorkOrderType> {
+    const response = await api.get<import('@/types').WorkOrderType>(`/projects/order-types/${id}`);
+    return response.data;
+  },
+
+  async createWorkOrderType(payload: { name: string; code: string; prefix?: string; description?: string | null; color?: string; default_workflow_id?: string | null }): Promise<import('@/types').WorkOrderType> {
+    const response = await api.post<import('@/types').WorkOrderType>('/projects/order-types', payload);
+    cacheManager.invalidate('projects:wo_types');
+    return response.data;
+  },
+
+  async updateWorkOrderType(id: string, payload: Partial<{ name: string; code: string; prefix?: string; description?: string | null; color?: string; default_workflow_id?: string | null; is_active?: boolean }>): Promise<import('@/types').WorkOrderType> {
+    const response = await api.put<import('@/types').WorkOrderType>(`/projects/order-types/${id}`, payload);
+    cacheManager.invalidate('projects:wo_types');
+    return response.data;
+  },
+
+  async deleteWorkOrderType(id: string): Promise<void> {
+    await api.delete(`/projects/order-types/${id}`);
+    cacheManager.invalidate('projects:wo_types');
+  },
+
+  async getWorkflowTemplates(forceRefresh = false, activeOnly = true): Promise<import('@/types').WorkflowTemplate[]> {
+    return cacheManager.fetchWithCache(
+      `projects:workflows:${activeOnly}`,
+      async () => {
+        const response = await api.get('/projects/workflows', { params: { active_only: activeOnly } });
+        return unwrapProjectsList(response.data);
+      },
+      60 * 1000,
+      forceRefresh
+    );
+  },
+
+  async getWorkflowTemplate(id: string): Promise<import('@/types').WorkflowTemplate> {
+    const response = await api.get<import('@/types').WorkflowTemplate>(`/projects/workflows/${id}`);
+    return response.data;
+  },
+
+  async createWorkflowTemplate(payload: { name: string; description?: string | null; target_entity?: string; stages?: any[] }): Promise<import('@/types').WorkflowTemplate> {
+    const response = await api.post<import('@/types').WorkflowTemplate>('/projects/workflows', payload);
+    cacheManager.invalidate('projects:workflows');
+    return response.data;
+  },
+
+  async updateWorkflowTemplate(id: string, payload: Partial<{ name: string; description?: string | null; target_entity?: string; is_active?: boolean }>): Promise<import('@/types').WorkflowTemplate> {
+    const response = await api.put<import('@/types').WorkflowTemplate>(`/projects/workflows/${id}`, payload);
+    cacheManager.invalidate('projects:workflows');
+    return response.data;
+  },
+
+  async addWorkflowStage(
+    workflowId: string,
+    payload: {
+      name: string;
+      position: number;
+      color?: string;
+      description?: string | null;
+      is_initial?: boolean;
+      is_terminal?: boolean;
+      allowed_transitions?: string[];
+    }
+  ): Promise<import('@/types').WorkflowStage> {
+    const response = await api.post<import('@/types').WorkflowStage>(`/projects/workflows/${workflowId}/stages`, payload);
+    cacheManager.invalidate('projects:workflows');
+    return response.data;
+  },
+
+  async updateWorkflowStage(
+    stageId: string,
+    payload: Partial<{
+      name: string;
+      position: number;
+      color: string;
+      description: string | null;
+      is_initial: boolean;
+      is_terminal: boolean;
+      allowed_transitions: string[];
+    }>
+  ): Promise<import('@/types').WorkflowStage> {
+    const response = await api.put<import('@/types').WorkflowStage>(`/projects/workflows/stages/${stageId}`, payload);
+    cacheManager.invalidate('projects:workflows');
+    return response.data;
+  },
+
+  async deleteWorkflowTemplate(id: string): Promise<void> {
+    await api.delete(`/projects/workflows/${id}`);
+    cacheManager.invalidate('projects:workflows');
+  },
+
+  async deleteWorkflowStage(stageId: string): Promise<void> {
+    await api.delete(`/projects/workflows/stages/${stageId}`);
+    cacheManager.invalidate('projects:workflows');
+  },
+
+  async getChecklistTemplates(forceRefresh = false): Promise<import('@/types').ChecklistTemplate[]> {
+    return cacheManager.fetchWithCache(
+      'projects:checklist_templates',
+      async () => {
+        const response = await api.get('/projects/checklists/templates');
+        return unwrapProjectsList(response.data);
+      },
+      60 * 1000,
       forceRefresh
     );
   }

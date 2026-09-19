@@ -8,7 +8,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, LogIn, Loader2, AlertCircle, Sun, Moon } from 'lucide-react';
-import { authService } from '@/services/api';
+import { authService, formatApiError } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
 import { Logo } from '@/components/Logo';
 import './Login.scss';
@@ -39,7 +39,7 @@ export const Login: React.FC = () => {
       }, 400);
     } catch (err: any) {
       setErrorMessage(
-        err.response?.data?.detail || 'Credenciais inválidas ou servidor indisponível.'
+        formatApiError(err, 'Credenciais inválidas ou servidor indisponível.')
       );
       setShake(true);
       setTimeout(() => setShake(false), 500);

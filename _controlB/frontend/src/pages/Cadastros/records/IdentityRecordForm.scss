@@ -1,0 +1,68 @@
+@use '../../Projects/records/OperationalRecordForm.scss';
+
+.identity-record-form {
+  .field-help {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+
+  .identity-permission-groups {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .identity-permission-group {
+    overflow: hidden;
+    background: var(--bg-app);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+
+    > header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.7rem 0.85rem;
+      background: var(--bg-surface-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+
+      strong { color: var(--text-primary); font-size: 0.78rem; }
+      span { color: var(--text-muted); font-size: 0.68rem; font-weight: 700; }
+    }
+  }
+
+  .identity-permission-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+    padding: 0.7rem;
+  }
+
+  .identity-permission {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    min-height: 58px;
+    padding: 0.65rem 0.7rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease;
+
+    &.is-checked {
+      background: color-mix(in srgb, var(--accent-brand) 7%, var(--bg-app));
+      border-color: color-mix(in srgb, var(--accent-brand) 50%, var(--border-subtle));
+    }
+
+    input { margin-top: 0.15rem; accent-color: var(--accent-brand); }
+    span { min-width: 0; display: grid; gap: 0.12rem; }
+    strong { color: var(--text-primary); font-size: 0.76rem; }
+    small { color: var(--text-muted); font-size: 0.66rem; line-height: 1.35; }
+  }
+}
+
+@media (max-width: 720px) {
+  .identity-record-form .identity-permission-grid { grid-template-columns: 1fr; }
+}

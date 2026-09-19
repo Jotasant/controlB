@@ -177,6 +177,17 @@ class PaymentInstrumentCreate(BaseModel):
     file_attachment: str | None = None
 
 
+class PaymentInstrumentUpdate(BaseModel):
+    instrument_type: str | None = None
+    barcode: str | None = None
+    digitable_line: str | None = None
+    pix_code: str | None = None
+    document_number: str | None = None
+    due_date: date | None = None
+    amount: Decimal | None = None
+    file_attachment: str | None = None
+
+
 class PaymentInstrumentResponse(PaymentInstrumentCreate):
     id: uuid.UUID
     payable_id: uuid.UUID
@@ -198,7 +209,7 @@ class PayableBase(BaseModel):
     issue_date: date
     due_date: date
     expense_nature: str = Field(
-        "OPEX",
+        "NOT_APPLICABLE",
         description="Natureza contábil: OPEX, CAPEX, FINANCIAL, TAX, PAYROLL, TRANSFER ou NOT_APPLICABLE",
     )
     obligation_type: str = Field(
@@ -219,7 +230,7 @@ class PayableBase(BaseModel):
     def validate_expense_nature(cls, value: str) -> str:
         return _normalize_payable_classification(
             value, PAYABLE_ACCOUNTING_NATURES, "Natureza contábil"
-        ) or "OPEX"
+        ) or "NOT_APPLICABLE"
 
     @field_validator("obligation_type")
     @classmethod
@@ -237,8 +248,10 @@ class PayableBase(BaseModel):
 
 
 class PayableCreate(PayableBase):
-    # Opcional: já cadastrar meio de pagamento (boleto/PIX) e parcelas
+    # Opcional: já cadastrar meio de pagamento (boleto/PIX), parcelas e nota fiscal anexada
     instrument: PaymentInstrumentCreate | None = None
+    instruments: list[PaymentInstrumentCreate] | None = None
+    new_fiscal_document: FiscalDocumentCreate | None = None
     installments_count: int | None = Field(default=1, ge=1, le=48, description="Gerar parcelas automáticas")
     installment_frequency_days: int | None = Field(default=30, description="Dias entre parcelas")
 

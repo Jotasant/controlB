@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useState } from 'react';
-import { AlertCircle, Save } from 'lucide-react';
+import { AlertCircle, Save, Barcode, Upload, X, Download, RotateCcw } from 'lucide-react';
 import { Modal } from '@/components/Modal/Modal';
 import { financeService, formatApiError } from '@/services/api';
 import type {
@@ -65,6 +65,15 @@ export const FinanceRecordEditModal: React.FC<Props> = ({
       else if (item !== null && item !== undefined && typeof item !== 'object') next[key] = String(item);
       else next[key] = '';
     });
+    if (record.kind === 'payable') {
+      const inst = record.value.instruments?.find(i => i.instrument_type === 'BOLETO') || record.value.instruments?.[0];
+      if (inst) {
+        next['digitable_line'] = inst.digitable_line || '';
+        next['barcode'] = inst.barcode || '';
+        next['pix_code'] = inst.pix_code || '';
+        next['file_attachment'] = inst.file_attachment || '';
+      }
+    }
     setForm(next);
     setError(null);
   }, [record]);
@@ -97,6 +106,18 @@ export const FinanceRecordEditModal: React.FC<Props> = ({
           status: field('status') as Payable['status'],
           notes: field('notes') || null
         });
+
+        if (field('digitable_line') || field('barcode') || field('file_attachment')) {
+          await financeService.createOrUpdatePayableInstrument(record.value.id, {
+            instrument_type: 'BOLETO',
+            digitable_line: field('digitable_line') || undefined,
+            barcode: field('barcode') || undefined,
+            pix_code: field('pix_code') || undefined,
+            due_date: field('due_date') || undefined,
+            amount: Number(field('original_amount')) || undefined,
+            file_attachment: field('file_attachment') || undefined
+          });
+        }
       } else if (record.kind === 'receivable') {
         await financeService.updateReceivable(record.value.id, {
           customer_id: field('customer_id') || null,
@@ -182,6 +203,19 @@ export const FinanceRecordEditModal: React.FC<Props> = ({
         {error && <div className="ui-inline-feedback ui-inline-feedback--error"><AlertCircle size={15} /> {error}</div>}
 
         {record.kind === 'payable' && <>
+          {record.value.status === 'CANCELLED' && (
+            <div className="ui-inline-feedback ui-inline-feedback--warning" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span>Conta atualmente <strong>CANCELADA</strong>. Clique para reabrir para tramitação e pagamento.</span>
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                onClick={() => set('status', 'PENDING_APPROVAL')}
+              >
+                <RotateCcw size={13} /> Reabrir Conta
+              </button>
+            </div>
+          )}
           {(record.value.purchase_order_id || record.value.fiscal_document_id) && (
             <div className="ui-inline-feedback">
               Origem documental preservada: {record.value.purchase_order_id ? 'pedido de compra' : 'documento fiscal'}.
@@ -198,18 +232,104 @@ export const FinanceRecordEditModal: React.FC<Props> = ({
             <div className="form-group flex-1"><label>Vencimento</label><input type="date" value={field('due_date')} onChange={e => set('due_date', e.target.value)} /></div>
           </div>
           <div className="form-row">
-            <div className="form-group flex-1"><label>Natureza contábil</label><select value={field('expense_nature')} onChange={e => set('expense_nature', e.target.value)}>{[['OPEX','OPEX'],['CAPEX','CAPEX'],['FINANCIAL','Financeira'],['TAX','Tributária'],['PAYROLL','Folha'],['TRANSFER','Transferência'],['NOT_APPLICABLE','Não aplicável']].map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-            <div className="form-group flex-1"><label>Tipo da obrigação</label><select value={field('obligation_type')} onChange={e => set('obligation_type', e.target.value)}>{[['GOODS_SUPPLIER','Fornecedor de mercadoria'],['SERVICE_PROVIDER','Prestador de serviço'],['TAX','Tributo'],['PAYROLL','Folha'],['RENT_LEASE','Aluguel/arrendamento'],['FINANCING','Financiamento'],['REIMBURSEMENT','Reembolso'],['INVESTMENT','Investimento'],['OTHER','Outro']].map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-            <div className="form-group flex-1"><label>Origem</label><select disabled={!!(record.value.purchase_order_id || record.value.fiscal_document_id)} value={field('business_origin')} onChange={e => set('business_origin', e.target.value)}>{[['PURCHASE','Compra'],['REPLENISHMENT','Reposição'],['INVESTMENT','Investimento'],['CONTRACT','Contrato'],['FISCAL_DOCUMENT','Documento fiscal'],['MANUAL','Manual'],['OTHER','Outra']].map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+            <div className="form-group flex-1"><label>Natureza contábil</label><select value={field('expense_nature') || 'NOT_APPLICABLE'} onChange={e => set('expense_nature', e.target.value)}>{[['NOT_APPLICABLE', 'Não Aplicável'], ['FINANCIAL', 'Financeira'], ['TAX', 'Tributária'], ['PAYROLL', 'Folha'], ['TRANSFER', 'Transferência'], ['OPEX', 'OPEX (Despesa Operacional)'], ['CAPEX', 'CAPEX (Investimento em Ativos)']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+            <div className="form-group flex-1"><label>Tipo da obrigação</label><select value={field('obligation_type')} onChange={e => set('obligation_type', e.target.value)}>{[['GOODS_SUPPLIER', 'Fornecedor de mercadoria'], ['SERVICE_PROVIDER', 'Prestador de serviço'], ['TAX', 'Tributo'], ['PAYROLL', 'Folha'], ['RENT_LEASE', 'Aluguel/arrendamento'], ['FINANCING', 'Financiamento'], ['REIMBURSEMENT', 'Reembolso'], ['INVESTMENT', 'Investimento'], ['OTHER', 'Outro']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+            <div className="form-group flex-1"><label>Origem</label><select disabled={!!(record.value.purchase_order_id || record.value.fiscal_document_id)} value={field('business_origin')} onChange={e => set('business_origin', e.target.value)}>{[['PURCHASE', 'Compra'], ['REPLENISHMENT', 'Reposição'], ['INVESTMENT', 'Investimento'], ['CONTRACT', 'Contrato'], ['FISCAL_DOCUMENT', 'Documento fiscal'], ['MANUAL', 'Manual'], ['OTHER', 'Outra']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
           </div>
           <div className="form-row">
             <div className="form-group flex-1"><label>Categoria</label><select value={field('financial_category_id')} onChange={e => set('financial_category_id', e.target.value)}><option value="">Sem categoria</option>{categories.filter(item => item.category_type === 'EXPENSE').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
             <div className="form-group flex-1"><label>Centro de custo</label><select value={field('cost_center_id')} onChange={e => set('cost_center_id', e.target.value)}><option value="">Sem centro</option>{costCenters.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
             <div className="form-group flex-1"><label>Status</label><select value={field('status')} onChange={e => set('status', e.target.value)}><option value="PENDING_APPROVAL">Pendente aprovação</option><option value="APPROVED">Aprovada</option><option value="SCHEDULED">Agendada</option><option value="OVERDUE">Vencida</option><option value="CANCELLED">Cancelada</option></select></div>
           </div>
+
+          <div style={{ background: 'rgba(139, 92, 246, 0.05)', padding: '0.75rem', borderRadius: 6, margin: '0.75rem 0', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#a78bfa', fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+              <Barcode size={15} />
+              <span>Boleto Bancário / Instrumento de Cobrança</span>
+            </div>
+            <div className="form-row">
+              <div className="form-group flex-2">
+                <label>Linha Digitável</label>
+                <input
+                  placeholder="34191.79001 01043.510047..."
+                  value={field('digitable_line')}
+                  onChange={e => set('digitable_line', e.target.value)}
+                />
+              </div>
+              <div className="form-group flex-1">
+                <label>Código de Barras</label>
+                <input
+                  placeholder="44 dígitos numéricos"
+                  value={field('barcode')}
+                  onChange={e => set('barcode', e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Anexo do Boleto (PDF)</label>
+              {field('file_attachment') ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.6rem', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: 6 }}>
+                  <span style={{ color: '#c4b5fd', fontSize: '0.8rem' }}>📄 Boleto PDF Anexado</span>
+                  <div style={{ display: 'flex', gap: '0.3rem' }}>
+                    <a
+                      href={field('file_attachment')}
+                      download={`boleto_${record.value.payable_number}.pdf`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary"
+                      style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }}
+                    >
+                      <Download size={12} /> Baixar
+                    </a>
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }}
+                      onClick={() => set('file_attachment', '')}
+                    >
+                      <X size={12} /> Remover
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.5rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                  <Upload size={14} />
+                  <span>Selecionar ou Substituir Boleto PDF</span>
+                  <input
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    style={{ display: 'none' }}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = ev => {
+                        const dataUrl = ev.target?.result as string;
+                        set('file_attachment', dataUrl);
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+          </div>
         </>}
 
         {record.kind === 'receivable' && <>
+          {record.value.status === 'CANCELLED' && (
+            <div className="ui-inline-feedback ui-inline-feedback--warning" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span>Título atualmente <strong>CANCELADO</strong>. Clique para reabrir para cobrança/recebimento.</span>
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                onClick={() => set('status', 'PENDING')}
+              >
+                <RotateCcw size={13} /> Reabrir Título
+              </button>
+            </div>
+          )}
           <div className="form-row">
             <div className="form-group flex-1">
               <label>Cliente cadastrado</label>
@@ -254,7 +374,7 @@ export const FinanceRecordEditModal: React.FC<Props> = ({
 
         {record.kind === 'fiscal' && <>
           {isFiscalLocked && <div className="ui-inline-feedback">Documento autorizado: somente observações, anexo e cancelamento podem ser alterados.</div>}
-          <div className="form-row"><div className="form-group flex-1"><label>Direção</label><select disabled={isFiscalLocked} value={field('direction')} onChange={e => set('direction', e.target.value)}><option value="INBOUND">Entrada</option><option value="OUTBOUND">Saída</option></select></div><div className="form-group flex-1"><label>Tipo</label><select disabled={isFiscalLocked} value={field('document_type')} onChange={e => set('document_type', e.target.value)}>{['NFE','NFSE','NFCE','CTE','OUTRO'].map(item => <option key={item}>{item}</option>)}</select></div><div className="form-group flex-1"><label>Status</label><select value={field('status').toLowerCase()} onChange={e => set('status', e.target.value)}>{!isFiscalLocked && <option value="draft">Rascunho</option>}<option value="authorized">Autorizado</option><option value="cancelled">Cancelado</option></select></div></div>
+          <div className="form-row"><div className="form-group flex-1"><label>Direção</label><select disabled={isFiscalLocked} value={field('direction')} onChange={e => set('direction', e.target.value)}><option value="INBOUND">Entrada</option><option value="OUTBOUND">Saída</option></select></div><div className="form-group flex-1"><label>Tipo</label><select disabled={isFiscalLocked} value={field('document_type')} onChange={e => set('document_type', e.target.value)}>{['NFE', 'NFSE', 'NFCE', 'CTE', 'OUTRO'].map(item => <option key={item}>{item}</option>)}</select></div><div className="form-group flex-1"><label>Status</label><select value={field('status').toLowerCase()} onChange={e => set('status', e.target.value)}>{!isFiscalLocked && <option value="draft">Rascunho</option>}<option value="authorized">Autorizado</option><option value="cancelled">Cancelado</option></select></div></div>
           <div className="form-row"><div className="form-group flex-1"><label>Número *</label><input disabled={isFiscalLocked} required value={field('document_number')} onChange={e => set('document_number', e.target.value)} /></div><div className="form-group flex-1"><label>Série</label><input disabled={isFiscalLocked} value={field('series')} onChange={e => set('series', e.target.value)} /></div><div className="form-group flex-1"><label>Emissão</label><input disabled={isFiscalLocked} type="date" value={field('issue_date')} onChange={e => set('issue_date', e.target.value)} /></div></div>
           <div className="form-row"><div className="form-group flex-2"><label>Emissor *</label><input disabled={isFiscalLocked} required value={field('issuer_name')} onChange={e => set('issuer_name', e.target.value)} /></div><div className="form-group flex-1"><label>Valor total</label><input disabled={isFiscalLocked} type="number" step="0.01" value={field('total_amount')} onChange={e => set('total_amount', e.target.value)} /></div><div className="form-group flex-1"><label>Impostos</label><input disabled={isFiscalLocked} type="number" step="0.01" value={field('tax_amount')} onChange={e => set('tax_amount', e.target.value)} /></div></div>
         </>}

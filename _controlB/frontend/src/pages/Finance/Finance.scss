@@ -630,8 +630,96 @@
                     }
                   }
 
+                  .btn-action-reopen {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                    background: rgba(59, 130, 246, 0.1);
+                    border: 1px solid rgba(59, 130, 246, 0.25);
+                    color: #3b82f6;
+                    padding: 0.3rem 0.65rem;
+                    border-radius: 6px;
+                    font-size: 0.725rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+
+                    &:hover {
+                      background: #3b82f6;
+                      color: #fff;
+                    }
+                  }
+
+                  .btn-action-delete {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                    background: rgba(239, 68, 68, 0.1);
+                    border: 1px solid rgba(239, 68, 68, 0.25);
+                    color: #ef4444;
+                    padding: 0.3rem 0.65rem;
+                    border-radius: 6px;
+                    font-size: 0.725rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+
+                    &:hover {
+                      background: #ef4444;
+                      color: #fff;
+                    }
+                  }
+
+                  .btn-action-boleto {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.3rem;
+                    background: rgba(139, 92, 246, 0.1);
+                    border: 1px solid rgba(139, 92, 246, 0.25);
+                    color: #8b5cf6;
+                    padding: 0.3rem 0.65rem;
+                    border-radius: 6px;
+                    font-size: 0.725rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+
+                    &:hover {
+                      background: #8b5cf6;
+                      color: #fff;
+                    }
+                  }
+
                   .paid-icon {
                     color: #10b981;
+                  }
+                }
+
+                .boleto-tag {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 0.3rem;
+                  background: rgba(139, 92, 246, 0.08);
+                  border: 1px solid rgba(139, 92, 246, 0.25);
+                  color: #a78bfa;
+                  font-size: 0.7rem;
+                  padding: 0.15rem 0.45rem;
+                  border-radius: 4px;
+                  font-family: monospace;
+                  font-weight: 500;
+
+                  .btn-copy-mini {
+                    background: none;
+                    border: none;
+                    color: #c4b5fd;
+                    cursor: pointer;
+                    padding: 0;
+                    display: inline-flex;
+                    align-items: center;
+
+                    &:hover {
+                      color: #fff;
+                    }
                   }
                 }
               }

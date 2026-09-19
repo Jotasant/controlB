@@ -68,6 +68,9 @@ class InvoiceCreate(InvoiceBase):
     fiscal_document_number: str | None = Field(default=None, max_length=100)
     fiscal_series: str | None = Field(default=None, max_length=20)
     fiscal_access_key: str | None = Field(default=None, max_length=100)
+    fiscal_file_attachment: str | None = Field(default=None, description="Anexo em Base64 da nota fiscal (PDF/XML)")
+    boleto_file_attachment: str | None = Field(default=None, description="Anexo em Base64 do boleto bancário (PDF)")
+    boleto_digitable_line: str | None = Field(default=None, description="Linha digitável do boleto bancário")
 
 
 class InvoiceUpdate(BaseModel):
@@ -99,6 +102,15 @@ class BillingRequestIssue(BaseModel):
     fiscal_series: str | None = Field(default=None, max_length=20)
     fiscal_access_key: str | None = Field(default=None, max_length=100)
     items: list[InvoiceItemCreate] = Field(default_factory=list)
+    fiscal_file_attachment: str | None = Field(
+        default=None, description="Anexo em Base64 da nota fiscal (PDF/XML)"
+    )
+    boleto_file_attachment: str | None = Field(
+        default=None, description="Anexo em Base64 do boleto bancário (PDF)"
+    )
+    boleto_digitable_line: str | None = Field(
+        default=None, description="Linha digitável do boleto bancário"
+    )
 
 
 class BillingRequestCancel(BaseModel):

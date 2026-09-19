@@ -48,6 +48,7 @@ os.environ["DATABASE_URL"] = _test_url.render_as_string(hide_password=False)
 # arquivo de teste independente da ordem de coleta.
 from controlb.db import Base, engine  # noqa: E402
 from controlb.modules.billing import models as billing_models  # noqa: E402
+from controlb.modules.chat import models as chat_models  # noqa: E402
 from controlb.modules.crm import models as crm_models  # noqa: E402
 from controlb.modules.documents import models as document_models  # noqa: E402
 from controlb.modules.finance import models as finance_models  # noqa: E402
@@ -65,6 +66,7 @@ _MODEL_MODULES = (
     crm_models,
     sales_models,
     billing_models,
+    chat_models,
 )
 
 Base.metadata.create_all(engine)

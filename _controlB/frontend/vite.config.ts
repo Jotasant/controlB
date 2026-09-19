@@ -31,8 +31,39 @@ export default defineConfig({
       },
       '/sales': 'http://localhost:8000',
       '/billing': 'http://localhost:8000',
-      '/finance': 'http://localhost:8000',
+      '/finance': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass: (req) => {
+          // Se for uma requisição de navegação no navegador (HTML ou rota da SPA /financeiro), serve o index.html
+          const accept = req.headers.accept || '';
+          if (
+            accept.includes('text/html') ||
+            req.url === '/financeiro' ||
+            req.url?.startsWith('/financeiro') ||
+            req.url === '/finance' ||
+            req.url === '/finance/'
+          ) {
+            return '/index.html';
+          }
+        },
+      },
       '/documents': 'http://localhost:8000',
+      '/chat': 'http://localhost:8000',
+      '/projects': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass: (req) => {
+          const accept = req.headers.accept || '';
+          if (
+            accept.includes('text/html') ||
+            req.url === '/projetos' ||
+            req.url?.startsWith('/projetos')
+          ) {
+            return '/index.html';
+          }
+        },
+      },
       '/docs': 'http://localhost:8000',
       '/openapi.json': 'http://localhost:8000',
       '/health': 'http://localhost:8000',

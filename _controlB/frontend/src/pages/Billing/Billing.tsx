@@ -1,8 +1,9 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  AlertCircle, Ban, Building2, ClipboardList, DollarSign, Eye,
-  FileText, Layers, Plus, ReceiptText, RefreshCw, TrendingUp
+  AlertCircle, Ban, Barcode, Building2, ClipboardList, DollarSign, Eye,
+  FileText, Layers, Paperclip, Plus, ReceiptText, RefreshCw, TrendingUp,
+  Upload, X
 } from 'lucide-react';
 import { billingService, financeService, formatApiError } from '@/services/api';
 import type { BusinessDocument, FiscalDocument, Invoice } from '@/types';
@@ -40,13 +41,15 @@ const emptyInvoiceForm = () => ({
   issue_date: today(), due_date: defaultDueDate(), installments_count: '1', notes: '',
   generate_receivables_in_finance: true, generate_outbound_fiscal_document: true,
   fiscal_document_type: 'NFE' as 'NFE' | 'NFSE' | 'NFCE' | 'OUTRO',
-  fiscal_document_number: '', fiscal_series: '', fiscal_access_key: ''
+  fiscal_document_number: '', fiscal_series: '', fiscal_access_key: '',
+  fiscal_file_attachment: '', boleto_file_attachment: '', boleto_digitable_line: ''
 });
 const emptyRequestIssueForm = () => ({
   issue_date: today(), due_date: defaultDueDate(), installments_count: '1', tax_amount: '0.00', notes: '',
   generate_receivables_in_finance: true, generate_outbound_fiscal_document: true,
   fiscal_document_type: 'NFE' as 'NFE' | 'NFSE' | 'NFCE' | 'OUTRO',
-  fiscal_document_number: '', fiscal_series: '', fiscal_access_key: ''
+  fiscal_document_number: '', fiscal_series: '', fiscal_access_key: '',
+  fiscal_file_attachment: '', boleto_file_attachment: '', boleto_digitable_line: ''
 });
 
 export const Billing: React.FC = () => {
@@ -64,9 +67,13 @@ export const Billing: React.FC = () => {
   const [processingRequest, setProcessingRequest] = useState<BusinessDocument | null>(null);
   const [requestIssueForm, setRequestIssueForm] = useState(emptyRequestIssueForm);
   const [requestItemQuantities, setRequestItemQuantities] = useState<Record<string, string>>({});
+  const [requestFiscalFile, setRequestFiscalFile] = useState<{ name: string; dataUrl: string } | null>(null);
+  const [requestBoletoFile, setRequestBoletoFile] = useState<{ name: string; dataUrl: string } | null>(null);
   const [cancellingRequest, setCancellingRequest] = useState<BusinessDocument | null>(null);
   const [requestCancelReason, setRequestCancelReason] = useState('');
   const [invoiceForm, setInvoiceForm] = useState(emptyInvoiceForm);
+  const [invoiceFiscalFile, setInvoiceFiscalFile] = useState<{ name: string; dataUrl: string } | null>(null);
+  const [invoiceBoletoFile, setInvoiceBoletoFile] = useState<{ name: string; dataUrl: string } | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [editForm, setEditForm] = useState({ customer_name: '', customer_document: '', issue_date: '', due_date: '', notes: '' });
@@ -74,6 +81,11 @@ export const Billing: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
   const [editingFinanceRecord, setEditingFinanceRecord] = useState<EditableFinanceRecord | null>(null);
   const [saving, setSaving] = useState(false);
+  const [bulkCancelModal, setBulkCancelModal] = useState<{
+    type: 'requests' | 'invoices' | 'fiscalDocs';
+    itemsCount: number;
+  } | null>(null);
+  const [bulkCancelReason, setBulkCancelReason] = useState('');
   const invoiceSelection = useBulkSelection<Invoice>();
   const fiscalSelection = useBulkSelection<FiscalDocument>();
   const requestSelection = useBulkSelection<BusinessDocument>();
@@ -124,9 +136,15 @@ export const Billing: React.FC = () => {
         fiscal_document_type: invoiceForm.fiscal_document_type,
         fiscal_document_number: invoiceForm.fiscal_document_number || undefined,
         fiscal_series: invoiceForm.fiscal_series || undefined,
-        fiscal_access_key: invoiceForm.fiscal_access_key || undefined
+        fiscal_access_key: invoiceForm.fiscal_access_key || undefined,
+        fiscal_file_attachment: invoiceForm.fiscal_file_attachment || undefined,
+        boleto_file_attachment: invoiceForm.boleto_file_attachment || undefined,
+        boleto_digitable_line: invoiceForm.boleto_digitable_line || undefined
       });
-      setIsInvoiceModalOpen(false); setInvoiceForm(emptyInvoiceForm());
+      setIsInvoiceModalOpen(false);
+      setInvoiceForm(emptyInvoiceForm());
+      setInvoiceFiscalFile(null);
+      setInvoiceBoletoFile(null);
       setFeedback({ type: 'success', text: 'Fatura emitida e integrações financeiras geradas com sucesso.' });
       await loadBillingData(); setActiveTab('invoices');
     } catch (error) {
@@ -207,6 +225,8 @@ export const Billing: React.FC = () => {
     }
     setProcessingRequest(request);
     setRequestIssueForm(emptyRequestIssueForm());
+    setRequestFiscalFile(null);
+    setRequestBoletoFile(null);
     setRequestItemQuantities(Object.fromEntries(
       requestItems(request).map(item => [
         item.sales_order_item_id,
@@ -241,11 +261,16 @@ export const Billing: React.FC = () => {
         fiscal_document_number: requestIssueForm.fiscal_document_number || undefined,
         fiscal_series: requestIssueForm.fiscal_series || undefined,
         fiscal_access_key: requestIssueForm.fiscal_access_key || undefined,
+        fiscal_file_attachment: requestIssueForm.fiscal_file_attachment || undefined,
+        boleto_file_attachment: requestIssueForm.boleto_file_attachment || undefined,
+        boleto_digitable_line: requestIssueForm.boleto_digitable_line || undefined,
         items: requestItems(processingRequest).length > 0 ? selectedRequestLines.map(({ item, quantity }) => ({
           sales_order_item_id: item.sales_order_item_id, quantity
         })) : undefined
       });
       setProcessingRequest(null);
+      setRequestFiscalFile(null);
+      setRequestBoletoFile(null);
       setFeedback({ type: 'success', text: `Fatura ${invoice.invoice_number}, documento fiscal e títulos financeiros gerados.` });
       await loadBillingData(); setActiveTab('invoices');
     } catch (error) {
@@ -303,51 +328,72 @@ export const Billing: React.FC = () => {
     },
   });
 
-  const handleBulkCancelRequests = async () => {
+  const openBulkCancelRequests = () => {
     const selected = requests.filter(item => requestSelection.isSelected(item.id) && item.current_status === 'REQUESTED');
     if (selected.length === 0) return;
-    const reason = window.prompt(`Informe o motivo para cancelar ${selected.length} solicitação(ões):`);
-    if (!reason || reason.trim().length < 3) return;
-    if (!window.confirm(`Cancelar ${selected.length} solicitação(ões) pendente(s)?`)) return;
-    setSaving(true);
-    const results = await Promise.allSettled(selected.map(item => billingService.cancelRequest(item.id, reason.trim())));
-    const succeeded = results.filter(item => item.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    requestSelection.clearSelection();
-    setFeedback({ type: failed ? 'error' : 'success', text: failed ? `${succeeded} solicitação(ões) cancelada(s); ${failed} falharam.` : `${succeeded} solicitação(ões) cancelada(s).` });
-    await loadBillingData(); setSaving(false);
+    setBulkCancelReason('');
+    setBulkCancelModal({ type: 'requests', itemsCount: selected.length });
   };
 
-  const handleBulkCancelInvoices = async () => {
+  const openBulkCancelInvoices = () => {
     const selected = invoices.filter(item => invoiceSelection.isSelected(item.id) && !['PAID', 'CANCELLED'].includes(item.status));
     if (selected.length === 0) return;
-    const reason = window.prompt(`Informe o motivo para cancelar ${selected.length} fatura(s):`);
-    if (!reason || reason.trim().length < 3) return;
-    if (!window.confirm(`Cancelar ${selected.length} fatura(s) e seus registros derivados em aberto?`)) return;
-    setSaving(true);
-    const results = await Promise.allSettled(selected.map(item => billingService.cancelInvoice(item.id, reason.trim())));
-    const succeeded = results.filter(item => item.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    invoiceSelection.clearSelection();
-    setFeedback({
-      type: failed ? 'error' : 'success',
-      text: failed ? `${succeeded} fatura(s) cancelada(s); ${failed} não puderam ser canceladas.` : `${succeeded} fatura(s) cancelada(s) com sucesso.`,
-    });
-    await loadBillingData();
-    setSaving(false);
+    setBulkCancelReason('');
+    setBulkCancelModal({ type: 'invoices', itemsCount: selected.length });
   };
 
-  const handleBulkCancelFiscalDocs = async () => {
+  const openBulkCancelFiscalDocs = () => {
     const selected = fiscalDocs.filter(item => fiscalSelection.isSelected(item.id) && ['DRAFT', 'PENDING'].includes(item.status.toUpperCase()));
-    if (selected.length === 0 || !window.confirm(`Cancelar ${selected.length} documento(s) fiscal(is) ainda não autorizado(s)?`)) return;
+    if (selected.length === 0) return;
+    setBulkCancelModal({ type: 'fiscalDocs', itemsCount: selected.length });
+  };
+
+  const handleConfirmBulkCancel = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!bulkCancelModal) return;
     setSaving(true);
-    const results = await Promise.allSettled(selected.map(item => financeService.updateFiscalDocument(item.id, { status: 'CANCELLED' })));
-    const succeeded = results.filter(item => item.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    fiscalSelection.clearSelection();
-    setFeedback({ type: failed ? 'error' : 'success', text: failed ? `${succeeded} documento(s) cancelado(s); ${failed} falharam.` : `${succeeded} documento(s) cancelado(s).` });
-    await loadBillingData();
-    setSaving(false);
+    try {
+      if (bulkCancelModal.type === 'requests') {
+        const selected = requests.filter(item => requestSelection.isSelected(item.id) && item.current_status === 'REQUESTED');
+        const reason = bulkCancelReason.trim();
+        const results = await Promise.allSettled(selected.map(item => billingService.cancelRequest(item.id, reason)));
+        const succeeded = results.filter(item => item.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        requestSelection.clearSelection();
+        setFeedback({
+          type: failed ? 'error' : 'success',
+          text: failed ? `${succeeded} solicitação(ões) cancelada(s); ${failed} falharam.` : `${succeeded} solicitação(ões) cancelada(s) com sucesso.`
+        });
+      } else if (bulkCancelModal.type === 'invoices') {
+        const selected = invoices.filter(item => invoiceSelection.isSelected(item.id) && !['PAID', 'CANCELLED'].includes(item.status));
+        const reason = bulkCancelReason.trim();
+        const results = await Promise.allSettled(selected.map(item => billingService.cancelInvoice(item.id, reason)));
+        const succeeded = results.filter(item => item.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        invoiceSelection.clearSelection();
+        setFeedback({
+          type: failed ? 'error' : 'success',
+          text: failed ? `${succeeded} fatura(s) cancelada(s); ${failed} não puderam ser canceladas.` : `${succeeded} fatura(s) cancelada(s) com sucesso.`
+        });
+      } else if (bulkCancelModal.type === 'fiscalDocs') {
+        const selected = fiscalDocs.filter(item => fiscalSelection.isSelected(item.id) && ['DRAFT', 'PENDING'].includes(item.status.toUpperCase()));
+        const results = await Promise.allSettled(selected.map(item => financeService.updateFiscalDocument(item.id, { status: 'CANCELLED' })));
+        const succeeded = results.filter(item => item.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        fiscalSelection.clearSelection();
+        setFeedback({
+          type: failed ? 'error' : 'success',
+          text: failed ? `${succeeded} documento(s) cancelado(s); ${failed} falharam.` : `${succeeded} documento(s) cancelado(s) com sucesso.`
+        });
+      }
+      setBulkCancelModal(null);
+      setBulkCancelReason('');
+      await loadBillingData();
+    } catch (error) {
+      setFeedback({ type: 'error', text: formatApiError(error, 'Erro ao executar cancelamento em lote.') });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -378,7 +424,7 @@ export const Billing: React.FC = () => {
 
           {activeTab === 'requests' && <>
             <BulkActionsBar selectedCount={requestSelection.selectedCount} resourceName={{ singular: 'solicitação', plural: 'solicitações' }} onClear={requestSelection.clearSelection}>
-              <button type="button" className="bulk-btn bulk-btn--danger" disabled={saving} onClick={() => void handleBulkCancelRequests()}><Ban size={14} /> Cancelar pendentes</button>
+              <button type="button" className="bulk-btn bulk-btn--danger" disabled={saving} onClick={openBulkCancelRequests}><Ban size={14} /> Cancelar pendentes</button>
             </BulkActionsBar>
             <div className="table-card">
               <table className="data-table"><thead><tr><th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar solicitações pendentes desta página" checked={requestSelection.isAllSelected(pendingRequests)} onChange={() => requestSelection.toggleSelectAll(pendingRequests)} /></th><th>Solicitação</th><th>Pedido</th><th>Cliente</th><th>Valor solicitado</th><th>Data</th><th>Status</th><th>Fatura</th></tr></thead><tbody>
@@ -390,7 +436,7 @@ export const Billing: React.FC = () => {
 
           {activeTab === 'invoices' && <>
             <BulkActionsBar selectedCount={invoiceSelection.selectedCount} resourceName={{ singular: 'fatura', plural: 'faturas' }} onClear={invoiceSelection.clearSelection}>
-              <button type="button" className="bulk-btn bulk-btn--danger" disabled={saving} onClick={() => void handleBulkCancelInvoices()}><Ban size={14} /> Cancelar selecionadas</button>
+              <button type="button" className="bulk-btn bulk-btn--danger" disabled={saving} onClick={openBulkCancelInvoices}><Ban size={14} /> Cancelar selecionadas</button>
             </BulkActionsBar>
             <div className="table-card"><table className="data-table"><thead><tr><th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar faturas desta página" checked={invoiceSelection.isAllSelected(cancellableInvoices)} onChange={() => invoiceSelection.toggleSelectAll(cancellableInvoices)} /></th><th>Fatura</th><th>Cliente</th><th>Emissão</th><th>Vencimento</th><th>Total</th><th>Parcelas</th><th>Status</th><th>Ações</th></tr></thead><tbody>
               {invoices.length === 0 ? <tr><td colSpan={9} className="empty-row">Nenhuma fatura emitida.</td></tr> : invoicePagination.pageItems.map(invoice => <tr key={invoice.id} className={`ui-record-row ${invoiceSelection.isSelected(invoice.id) ? 'ui-record-row--selected' : ''}`} role="button" tabIndex={0} onClick={() => openInvoiceRecord(invoice)} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); openInvoiceRecord(invoice); } }}><td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar fatura ${invoice.invoice_number}`} disabled={!canManageBilling || ['PAID', 'CANCELLED'].includes(invoice.status)} checked={invoiceSelection.isSelected(invoice.id)} onClick={event => event.stopPropagation()} onChange={() => invoiceSelection.toggleSelect(invoice.id)} /></td><td><strong>{invoice.invoice_number}</strong></td><td><div className="customer-cell"><Building2 size={13} /><RecordLink type="CUSTOMER" id={invoice.customer_id}><span>{invoice.customer_name}</span></RecordLink></div></td><td>{fmtDate(invoice.issue_date)}</td><td>{fmtDate(invoice.due_date)}</td><td className="net-val">{fmtCurrency(invoice.net_amount)}</td><td><span className="badge-pill"><Layers size={11} /> {invoice.installments?.length || 1}x</span></td><td><span className={`status-badge status-badge--${invoice.status.toLowerCase()}`}>{statusLabel(invoice.status)}</span></td><td><div className="table-actions"><button className="btn-icon-action" title="Detalhar" onClick={(event) => { event.stopPropagation(); setSelectedInvoice(invoice); }}><Eye size={14} /></button>{canManageBilling && <button className="btn-icon-action btn-icon-action--danger" title="Cancelar" disabled={['PAID', 'CANCELLED'].includes(invoice.status)} onClick={(event) => { event.stopPropagation(); setCancellingInvoice(invoice); setCancelReason(''); }}><Ban size={14} /></button>}</div></td></tr>)}
@@ -399,7 +445,7 @@ export const Billing: React.FC = () => {
 
           {activeTab === 'outbound-nfe' && <>
             <BulkActionsBar selectedCount={fiscalSelection.selectedCount} resourceName={{ singular: 'documento', plural: 'documentos' }} onClear={fiscalSelection.clearSelection}>
-              <button type="button" className="bulk-btn bulk-btn--danger" disabled={saving} onClick={() => void handleBulkCancelFiscalDocs()}><Ban size={14} /> Cancelar rascunhos</button>
+              <button type="button" className="bulk-btn bulk-btn--danger" disabled={saving} onClick={openBulkCancelFiscalDocs}><Ban size={14} /> Cancelar rascunhos</button>
             </BulkActionsBar>
             <div className="table-card"><table className="data-table"><thead><tr><th className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label="Selecionar documentos desta página" checked={fiscalSelection.isAllSelected(cancellableFiscalDocs)} onChange={() => fiscalSelection.toggleSelectAll(cancellableFiscalDocs)} /></th><th>Tipo</th><th>Número</th><th>Emissão</th><th>Destinatário</th><th>Total</th><th>Impostos</th><th>Status</th></tr></thead><tbody>
               {fiscalDocs.length === 0 ? <tr><td colSpan={8} className="empty-row">Nenhum documento fiscal de saída registrado.</td></tr> : fiscalPagination.pageItems.map(document => <tr key={document.id} className={`${document.status.toLowerCase() !== 'cancelled' ? 'ui-record-row' : ''} ${fiscalSelection.isSelected(document.id) ? 'ui-record-row--selected' : ''}`} role={document.status.toLowerCase() !== 'cancelled' ? 'button' : undefined} tabIndex={document.status.toLowerCase() !== 'cancelled' ? 0 : undefined} onClick={() => document.status.toLowerCase() !== 'cancelled' && setEditingFinanceRecord({ kind: 'fiscal', value: document })} onKeyDown={(event) => { if (['Enter', ' '].includes(event.key) && document.status.toLowerCase() !== 'cancelled') { event.preventDefault(); setEditingFinanceRecord({ kind: 'fiscal', value: document }); } }}><td className="ui-selection-cell"><input className="ui-selection-checkbox" type="checkbox" aria-label={`Selecionar documento ${document.document_number}`} disabled={!['DRAFT', 'PENDING'].includes(document.status.toUpperCase())} checked={fiscalSelection.isSelected(document.id)} onClick={event => event.stopPropagation()} onChange={() => fiscalSelection.toggleSelect(document.id)} /></td><td><span className="doc-badge">{document.document_type}</span></td><td><strong>{document.document_number}</strong></td><td>{fmtDate(document.issue_date)}</td><td>{document.customer_id ? <RecordLink type="CUSTOMER" id={document.customer_id}>{document.recipient_name || 'Consumidor final'}</RecordLink> : (document.recipient_name || 'Consumidor final')}</td><td className="net-val">{fmtCurrency(document.total_amount)}</td><td>{fmtCurrency(document.tax_amount)}</td><td><span className={`status-badge status-badge--${document.status.toLowerCase()}`}>{statusLabel(document.status)}</span></td></tr>)}
@@ -418,6 +464,115 @@ export const Billing: React.FC = () => {
           <div className="integration-box billing-integration-box"><div className="request-totals"><span>Produtos / serviços: <strong>{fmtCurrency(requestItems(processingRequest).length ? selectedRequestSubtotal : Number(processingRequest.payload.amount || 0))}</strong></span><span>Total com impostos: <strong>{fmtCurrency((requestItems(processingRequest).length ? selectedRequestSubtotal : Number(processingRequest.payload.amount || 0)) + Number(requestIssueForm.tax_amount || 0))}</strong></span></div><label className="checkbox-label"><input type="checkbox" checked={requestIssueForm.generate_receivables_in_finance} onChange={event => setRequestIssueForm({ ...requestIssueForm, generate_receivables_in_finance: event.target.checked })} /> Gerar parcelas no Contas a Receber</label><label className="checkbox-label"><input type="checkbox" checked={requestIssueForm.generate_outbound_fiscal_document} onChange={event => setRequestIssueForm({ ...requestIssueForm, generate_outbound_fiscal_document: event.target.checked })} /> Gerar documento fiscal de saída</label>
             {requestIssueForm.generate_outbound_fiscal_document && <><div className="form-row"><div className="form-group flex-1"><label>Tipo fiscal</label><select value={requestIssueForm.fiscal_document_type} onChange={event => setRequestIssueForm({ ...requestIssueForm, fiscal_document_type: event.target.value as typeof requestIssueForm.fiscal_document_type })}>{['NFE', 'NFSE', 'NFCE', 'OUTRO'].map(value => <option key={value}>{value}</option>)}</select></div><div className="form-group flex-1"><label>Número externo</label><input placeholder="Automático se vazio" value={requestIssueForm.fiscal_document_number} onChange={event => setRequestIssueForm({ ...requestIssueForm, fiscal_document_number: event.target.value })} /></div><div className="form-group flex-1"><label>Série</label><input value={requestIssueForm.fiscal_series} onChange={event => setRequestIssueForm({ ...requestIssueForm, fiscal_series: event.target.value })} /></div></div><div className="form-group"><label>Chave de acesso</label><input maxLength={100} value={requestIssueForm.fiscal_access_key} onChange={event => setRequestIssueForm({ ...requestIssueForm, fiscal_access_key: event.target.value })} /></div></>}
           </div>
+          <div className="integration-box billing-integration-box" style={{ marginTop: '0.75rem' }}>
+            <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#e2e8f0' }}>
+              <Paperclip size={15} /> Anexos e Boleto
+            </h4>
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <FileText size={14} /> Anexar Nota Fiscal (PDF ou XML)
+                </label>
+                {requestFiscalFile ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 6, fontSize: '0.825rem' }}>
+                    <span style={{ color: '#93c5fd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={requestFiscalFile.name}>
+                      📄 {requestFiscalFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRequestFiscalFile(null);
+                        setRequestIssueForm(prev => ({ ...prev, fiscal_file_attachment: '' }));
+                      }}
+                      style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0 0.25rem' }}
+                      title="Remover anexo da nota"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                    <Upload size={14} />
+                    <span>Selecionar Nota (PDF/XML)</span>
+                    <input
+                      type="file"
+                      accept=".pdf,.xml,application/pdf,text/xml,application/xml"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          const dataUrl = event.target?.result as string;
+                          setRequestFiscalFile({ name: file.name, dataUrl });
+                          setRequestIssueForm(prev => ({
+                            ...prev,
+                            fiscal_file_attachment: dataUrl,
+                            fiscal_document_number: prev.fiscal_document_number || file.name.replace(/\.[^/.]+$/, '')
+                          }));
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              <div className="form-group flex-1">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <Barcode size={14} /> Anexar Boleto Bancário (PDF)
+                </label>
+                {requestBoletoFile ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 6, fontSize: '0.825rem' }}>
+                    <span style={{ color: '#6ee7b7', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={requestBoletoFile.name}>
+                      🧾 {requestBoletoFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRequestBoletoFile(null);
+                        setRequestIssueForm(prev => ({ ...prev, boleto_file_attachment: '' }));
+                      }}
+                      style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0 0.25rem' }}
+                      title="Remover anexo do boleto"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                    <Upload size={14} />
+                    <span>Selecionar Boleto (PDF)</span>
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          const dataUrl = event.target?.result as string;
+                          setRequestBoletoFile({ name: file.name, dataUrl });
+                          setRequestIssueForm(prev => ({ ...prev, boleto_file_attachment: dataUrl }));
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '0.5rem' }}>
+              <label>Linha Digitável / Código de Barras do Boleto</label>
+              <input
+                placeholder="Ex: 34191.79001 01043.510047 91020.150008 5 89250000012000"
+                value={requestIssueForm.boleto_digitable_line}
+                onChange={event => setRequestIssueForm({ ...requestIssueForm, boleto_digitable_line: event.target.value })}
+              />
+            </div>
+          </div>
           <div className="form-group"><label>Observações da emissão</label><textarea rows={3} value={requestIssueForm.notes} onChange={event => setRequestIssueForm({ ...requestIssueForm, notes: event.target.value })} /></div>
           <div className="modal-footer modal-footer--split"><button type="button" className="btn-danger" disabled={saving} onClick={() => { setCancellingRequest(processingRequest); setRequestCancelReason(''); setProcessingRequest(null); }}>Recusar solicitação</button><div><button type="button" className="btn-secondary" onClick={() => setProcessingRequest(null)}>Voltar</button><button type="submit" className="btn-primary" disabled={saving || (requestItems(processingRequest).length > 0 && selectedRequestLines.length === 0)}>{saving ? 'Processando...' : 'Emitir e integrar'}</button></div></div>
         </form> : processingRequest && <div className="invoice-detail"><div className="detail-grid"><div><span>Pedido</span>{processingRequest.payload.sales_order_id ? <RecordLink type="SALES_ORDER" id={String(processingRequest.payload.sales_order_id)}><strong>#{String(processingRequest.payload.order_number || processingRequest.payload.sales_order_id || '-')}</strong></RecordLink> : <strong>#{String(processingRequest.payload.order_number || '-')}</strong>}</div><div><span>Cliente</span>{processingRequest.payload.customer_id ? <RecordLink type="CUSTOMER" id={String(processingRequest.payload.customer_id)}><strong>{String(processingRequest.payload.customer_name || '-')}</strong></RecordLink> : <strong>{String(processingRequest.payload.customer_name || '-')}</strong>}</div><div><span>Status</span><strong>{statusLabel(processingRequest.current_status)}</strong></div><div><span>Valor solicitado</span><strong>{fmtCurrency(Number(processingRequest.payload.amount || 0))}</strong></div><div><span>Emitida em</span><strong>{fmtDate(processingRequest.issued_at || processingRequest.created_at)}</strong></div><div><span>Motivo</span><strong>{String(processingRequest.payload.cancellation_reason || '-')}</strong></div></div></div>}
@@ -430,6 +585,115 @@ export const Billing: React.FC = () => {
           <div className="form-row"><div className="form-group flex-1"><label>Data de emissão *</label><input type="date" required value={invoiceForm.issue_date} onChange={event => setInvoiceForm({ ...invoiceForm, issue_date: event.target.value })} /></div><div className="form-group flex-1"><label>Vencimento da primeira parcela *</label><input type="date" required value={invoiceForm.due_date} onChange={event => setInvoiceForm({ ...invoiceForm, due_date: event.target.value })} /></div></div>
           <div className="integration-box billing-integration-box"><label className="checkbox-label"><input type="checkbox" checked={invoiceForm.generate_receivables_in_finance} onChange={event => setInvoiceForm({ ...invoiceForm, generate_receivables_in_finance: event.target.checked })} /> Gerar parcelas no Contas a Receber</label><label className="checkbox-label"><input type="checkbox" checked={invoiceForm.generate_outbound_fiscal_document} onChange={event => setInvoiceForm({ ...invoiceForm, generate_outbound_fiscal_document: event.target.checked })} /> Gerar documento fiscal de saída em rascunho</label>
             {invoiceForm.generate_outbound_fiscal_document && <div className="form-row"><div className="form-group flex-1"><label>Tipo fiscal</label><select value={invoiceForm.fiscal_document_type} onChange={event => setInvoiceForm({ ...invoiceForm, fiscal_document_type: event.target.value as typeof invoiceForm.fiscal_document_type })}>{['NFE', 'NFSE', 'NFCE', 'OUTRO'].map(value => <option key={value}>{value}</option>)}</select></div><div className="form-group flex-1"><label>Número externo</label><input placeholder="Automático se vazio" value={invoiceForm.fiscal_document_number} onChange={event => setInvoiceForm({ ...invoiceForm, fiscal_document_number: event.target.value })} /></div><div className="form-group flex-1"><label>Série</label><input value={invoiceForm.fiscal_series} onChange={event => setInvoiceForm({ ...invoiceForm, fiscal_series: event.target.value })} /></div></div>}
+          </div>
+          <div className="integration-box billing-integration-box" style={{ marginTop: '0.75rem' }}>
+            <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#e2e8f0' }}>
+              <Paperclip size={15} /> Anexos da Fatura (Nota Fiscal e Boleto)
+            </h4>
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <FileText size={14} /> Anexar Nota Fiscal (PDF ou XML)
+                </label>
+                {invoiceFiscalFile ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 6, fontSize: '0.825rem' }}>
+                    <span style={{ color: '#93c5fd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invoiceFiscalFile.name}>
+                      📄 {invoiceFiscalFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvoiceFiscalFile(null);
+                        setInvoiceForm(prev => ({ ...prev, fiscal_file_attachment: '' }));
+                      }}
+                      style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0 0.25rem' }}
+                      title="Remover anexo da nota"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                    <Upload size={14} />
+                    <span>Selecionar Nota (PDF/XML)</span>
+                    <input
+                      type="file"
+                      accept=".pdf,.xml,application/pdf,text/xml,application/xml"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          const dataUrl = event.target?.result as string;
+                          setInvoiceFiscalFile({ name: file.name, dataUrl });
+                          setInvoiceForm(prev => ({
+                            ...prev,
+                            fiscal_file_attachment: dataUrl,
+                            fiscal_document_number: prev.fiscal_document_number || file.name.replace(/\.[^/.]+$/, '')
+                          }));
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              <div className="form-group flex-1">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <Barcode size={14} /> Anexar Boleto Bancário (PDF)
+                </label>
+                {invoiceBoletoFile ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 6, fontSize: '0.825rem' }}>
+                    <span style={{ color: '#6ee7b7', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invoiceBoletoFile.name}>
+                      🧾 {invoiceBoletoFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvoiceBoletoFile(null);
+                        setInvoiceForm(prev => ({ ...prev, boleto_file_attachment: '' }));
+                      }}
+                      style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '0 0.25rem' }}
+                      title="Remover anexo do boleto"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', padding: '0.6rem', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.02)', fontSize: '0.8rem' }}>
+                    <Upload size={14} />
+                    <span>Selecionar Boleto (PDF)</span>
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          const dataUrl = event.target?.result as string;
+                          setInvoiceBoletoFile({ name: file.name, dataUrl });
+                          setInvoiceForm(prev => ({ ...prev, boleto_file_attachment: dataUrl }));
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '0.5rem' }}>
+              <label>Linha Digitável / Código de Barras do Boleto</label>
+              <input
+                placeholder="Ex: 34191.79001 01043.510047 91020.150008 5 89250000012000"
+                value={invoiceForm.boleto_digitable_line}
+                onChange={event => setInvoiceForm({ ...invoiceForm, boleto_digitable_line: event.target.value })}
+              />
+            </div>
           </div>
           <div className="form-group"><label>Observações</label><textarea rows={3} value={invoiceForm.notes} onChange={event => setInvoiceForm({ ...invoiceForm, notes: event.target.value })} /></div>
           <div className="modal-footer"><button type="button" className="btn-secondary" onClick={() => setIsInvoiceModalOpen(false)}>Cancelar</button><button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Emitindo...' : 'Emitir Fatura'}</button></div>
@@ -456,6 +720,73 @@ export const Billing: React.FC = () => {
 
       <Modal isOpen={!!cancellingRequest} onClose={() => setCancellingRequest(null)} title="Cancelar Solicitação" subtitle="O pedido voltará a disponibilizar o saldo para uma nova solicitação" size="sm">
         <form onSubmit={handleCancelRequest} className="wizard-form"><div className="form-group"><label>Motivo do cancelamento *</label><textarea required minLength={3} rows={4} value={requestCancelReason} onChange={event => setRequestCancelReason(event.target.value)} /></div><div className="modal-footer"><button type="button" className="btn-secondary" onClick={() => setCancellingRequest(null)}>Voltar</button><button type="submit" className="btn-danger" disabled={saving}>{saving ? 'Cancelando...' : 'Cancelar solicitação'}</button></div></form>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(bulkCancelModal)}
+        onClose={() => !saving && setBulkCancelModal(null)}
+        title={
+          bulkCancelModal?.type === 'requests' ? 'Cancelar Solicitações de Vendas' :
+          bulkCancelModal?.type === 'invoices' ? 'Cancelar Faturas Comerciais' :
+          'Cancelar Documentos Fiscais em Rascunho'
+        }
+        subtitle={
+          bulkCancelModal ? `Esta ação cancelará ${bulkCancelModal.itemsCount} ${bulkCancelModal.itemsCount === 1 ? 'registro selecionado' : 'registros selecionados'}` : ''
+        }
+        size="md"
+      >
+        {bulkCancelModal && (
+          <form onSubmit={handleConfirmBulkCancel} className="wizard-form">
+            {bulkCancelModal.type !== 'fiscalDocs' ? (
+              <>
+                <div className="billing-feedback billing-feedback--error" style={{ marginBottom: '1rem' }}>
+                  <AlertCircle size={16} />
+                  <span>
+                    {bulkCancelModal.type === 'requests'
+                      ? 'Ao cancelar, o saldo dos pedidos será reaberto para novas solicitações no Comercial.'
+                      : 'Ao cancelar as faturas, seus títulos a receber e documentos fiscais em rascunho serão cancelados.'}
+                  </span>
+                </div>
+                <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
+                    Motivo do cancelamento em lote *
+                  </label>
+                  <textarea
+                    required
+                    minLength={3}
+                    rows={4}
+                    placeholder="Ex: Cancelamento operacional / Desistência comercial / Ajuste de pedidos"
+                    value={bulkCancelReason}
+                    onChange={(event) => setBulkCancelReason(event.target.value)}
+                    style={{ width: '100%', resize: 'vertical' }}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="billing-feedback billing-feedback--error" style={{ marginBottom: '1rem' }}>
+                <AlertCircle size={16} />
+                <span>Documentos fiscais em rascunho ou pendentes serão cancelados. Notas já autorizadas na SEFAZ exigem cancelamento fiscal específico.</span>
+              </div>
+            )}
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setBulkCancelModal(null)}
+                disabled={saving}
+              >
+                Voltar
+              </button>
+              <button
+                type="submit"
+                className="btn-danger"
+                disabled={saving || (bulkCancelModal.type !== 'fiscalDocs' && bulkCancelReason.trim().length < 3)}
+              >
+                {saving ? 'Processando...' : `Confirmar cancelamento (${bulkCancelModal.itemsCount})`}
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       <FinanceRecordEditModal record={editingFinanceRecord} categories={[]} costCenters={[]} suppliers={[]} onClose={() => setEditingFinanceRecord(null)} onSaved={() => void loadBillingData()} />

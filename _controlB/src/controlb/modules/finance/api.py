@@ -170,6 +170,44 @@ def update_payable(
     )
 
 
+@router.post("/finance/payables/{payable_id}/reopen", response_model=schemas.PayableResponse, summary="Reabrir Conta a Pagar Cancelada")
+def reopen_payable(
+    payable_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.reopen_payable(db, current_user.organization_id, payable_id, current_user)
+
+
+@router.delete("/finance/payables/{payable_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Excluir Conta a Pagar")
+def delete_payable(
+    payable_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    service.delete_payable(db, current_user.organization_id, payable_id, current_user)
+
+
+@router.post("/finance/payables/{payable_id}/instruments", response_model=schemas.PaymentInstrumentResponse, summary="Cadastrar ou Atualizar Boleto/Instrumento de Pagamento")
+def create_or_update_payable_instrument(
+    payable_id: uuid.UUID,
+    payload: schemas.PaymentInstrumentCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.create_or_update_payable_instrument(db, current_user.organization_id, payable_id, payload)
+
+
+@router.delete("/finance/payables/{payable_id}/instruments/{instrument_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remover Instrumento de Pagamento")
+def delete_payable_instrument(
+    payable_id: uuid.UUID,
+    instrument_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    service.delete_payable_instrument(db, current_user.organization_id, payable_id, instrument_id)
+
+
 @router.post("/finance/payables/{payable_id}/payments", response_model=schemas.PaymentResponse, status_code=status.HTTP_201_CREATED, summary="Efetuar Baixa / Pagamento de Conta")
 def register_payment(
     payable_id: uuid.UUID,
@@ -304,6 +342,24 @@ def update_receivable(
     return service.update_receivable(
         db, current_user.organization_id, receivable_id, current_user, payload
     )
+
+
+@router.post("/finance/receivables/{receivable_id}/reopen", response_model=schemas.ReceivableResponse, summary="Reabrir Conta a Receber Cancelada")
+def reopen_receivable(
+    receivable_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    return service.reopen_receivable(db, current_user.organization_id, receivable_id, current_user)
+
+
+@router.delete("/finance/receivables/{receivable_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Excluir Conta a Receber")
+def delete_receivable(
+    receivable_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user),
+):
+    service.delete_receivable(db, current_user.organization_id, receivable_id, current_user)
 
 
 @router.post("/finance/receivables/{receivable_id}/receipts", response_model=schemas.ReceiptResponse, status_code=status.HTTP_201_CREATED, summary="Registrar Baixa de Recebimento")

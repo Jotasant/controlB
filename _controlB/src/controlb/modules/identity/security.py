@@ -249,7 +249,12 @@ def get_user_permissions(user: User) -> list[str]:
     """Extrai e retorna a lista de códigos de permissões ativas de um usuário."""
     if not user.role or not user.role.is_active:
         return []
-    return [p.code for p in user.role.permissions if p.is_active]
+    perms = [p.code for p in user.role.permissions if p.is_active]
+    # Usuários administradores possuem acesso universal irrestrito a todos os módulos do ERP
+    if user.role.name and user.role.name.strip().lower() in ["administrador", "admin", "diretor", "diretoria"]:
+        if "*:*" not in perms:
+            perms.append("*:*")
+    return perms
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
@@ -289,7 +294,7 @@ def require_permission(permission_code: str) -> Callable:
     """
     def permission_checker(current_user: User = Depends(get_current_user)) -> User:
         user_perms = get_user_permissions(current_user)
-        if permission_code not in user_perms:
+        if "*:*" not in user_perms and permission_code not in user_perms:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Acesso negado: Você não possui a permissão '{permission_code}'."

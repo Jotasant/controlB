@@ -98,13 +98,14 @@ def convert_quote_to_order(
     return service.convert_quote_to_order(db, quote_id, current_user.organization_id, current_user)
 
 
-@router.delete("/quotes/{quote_id}", status_code=status.HTTP_200_OK, summary="Cancelar Orçamento")
+@router.delete("/quotes/{quote_id}", status_code=status.HTTP_200_OK, summary="Excluir ou Cancelar Cotação")
 def delete_sales_quote(
     quote_id: uuid.UUID,
+    permanent: bool = Query(True, description="Se True, exclui definitivamente. Se False, apenas cancela."),
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.delete_sales_quote(db, quote_id, current_user.organization_id, current_user)
+    return service.delete_sales_quote(db, quote_id, current_user.organization_id, current_user, permanent=permanent)
 
 
 # ==============================================================================
@@ -235,14 +236,17 @@ def decide_commercial_approval(
     )
 
 
-@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Cancelar Pedido de Venda")
+@router.delete("/orders/{order_id}", status_code=status.HTTP_200_OK, summary="Cancelar ou Excluir Pedido de Venda")
 def delete_sales_order(
     order_id: uuid.UUID,
     reason: str | None = Query(None, description="Motivo do cancelamento"),
+    permanent: bool = Query(False, description="Se True, exclui definitivamente. Se False, cancela."),
     db: Session = Depends(get_db),
     current_user = Depends(identity_service.require_permission("sales:manage"))
 ):
-    return service.delete_sales_order(db, order_id, current_user.organization_id, current_user, reason=reason)
+    return service.delete_sales_order(
+        db, order_id, current_user.organization_id, current_user, reason=reason, permanent=permanent
+    )
 
 
 

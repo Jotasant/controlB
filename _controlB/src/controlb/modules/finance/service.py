@@ -360,7 +360,15 @@ def create_payable_expense(
     source_document = None
     fiscal_document = None
     purchase_order = None
-    if payload.fiscal_document_id:
+    if payload.new_fiscal_document:
+        fiscal_document = persist_fiscal_document(
+            db, organization_id, current_user, payload.new_fiscal_document
+        )
+        payload.fiscal_document_id = fiscal_document.id
+        source_document = get_fiscal_document_header(
+            db, fiscal_document, organization_id
+        )
+    elif payload.fiscal_document_id:
         fiscal_document = repository.get_fiscal_document_by_id(
             db, payload.fiscal_document_id, organization_id
         )
@@ -507,18 +515,30 @@ def create_payable_expense(
                 },
             )
 
-        # Se houver instrumento (Boleto/PIX) na 1ª parcela
-        if payload.instrument and i == 1:
+        # Instrumento de Pagamento (Boleto/PIX/etc) em todas as parcelas
+        inst_payload = None
+        if payload.instruments and len(payload.instruments) >= i:
+            inst_payload = payload.instruments[i - 1]
+        elif payload.instrument:
+            inst_payload = payload.instrument
+
+        if inst_payload:
+            doc_num = inst_payload.document_number
+            if not doc_num:
+                doc_num = f"{payable_document.document_number}"
+            elif installments_count > 1 and not doc_num.endswith(f"/{installments_count}"):
+                doc_num = f"{doc_num}-{i}/{installments_count}"
+
             inst = models.PaymentInstrument(
                 payable_id=saved_payable.id,
-                instrument_type=payload.instrument.instrument_type,
-                barcode=payload.instrument.barcode,
-                digitable_line=payload.instrument.digitable_line,
-                pix_code=payload.instrument.pix_code,
-                document_number=payload.instrument.document_number,
-                due_date=payload.instrument.due_date or due_date,
+                instrument_type=inst_payload.instrument_type,
+                barcode=inst_payload.barcode,
+                digitable_line=inst_payload.digitable_line,
+                pix_code=inst_payload.pix_code,
+                document_number=doc_num,
+                due_date=inst_payload.due_date if (i == 1 and inst_payload.due_date) else due_date,
                 amount=part_amount,
-                file_attachment=payload.instrument.file_attachment
+                file_attachment=inst_payload.file_attachment,
             )
             repository.create_payment_instrument(db, inst)
             db.refresh(saved_payable)
@@ -746,10 +766,10 @@ def update_payable(
     if not payable:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada.")
     header = get_payable_header(db, payable, organization_id)
-    if payable.status in {"PAID", "CANCELLED", "RECONCILED"}:
+    if payable.status in {"PAID", "RECONCILED"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Conta liquidada, cancelada ou conciliada não pode ser editada.",
+            detail="Conta liquidada ou conciliada não pode ser editada.",
         )
 
     changes = payload.model_dump(exclude_unset=True)
@@ -761,6 +781,11 @@ def update_payable(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status da conta a pagar inválido para edição manual.")
         if payable.payments and requested_status == "CANCELLED":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Conta com pagamentos registrados não pode ser cancelada diretamente.")
+    elif payable.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conta cancelada só pode ser editada para reabertura de status.",
+        )
 
     if "supplier_id" in changes and changes["supplier_id"] is not None:
         supplier = db.scalar(
@@ -1283,10 +1308,10 @@ def update_receivable(
     if not receivable:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a receber não encontrada.")
     header = get_receivable_header(db, receivable, organization_id)
-    if receivable.status in {"RECEIVED", "CANCELLED"}:
+    if receivable.status == "RECEIVED":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Conta recebida ou cancelada não pode ser editada.",
+            detail="Conta já recebida não pode ser editada.",
         )
 
     changes = payload.model_dump(exclude_unset=True)
@@ -1297,6 +1322,11 @@ def update_receivable(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status da conta a receber inválido para edição manual.")
         if receivable.receipts and requested_status == "CANCELLED":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Conta com recebimentos registrados não pode ser cancelada diretamente.")
+    elif receivable.status == "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conta cancelada só pode ser editada para reabertura de status.",
+        )
 
     if "original_amount" in changes:
         settled_amount = receivable.original_amount - receivable.outstanding_amount
@@ -1543,3 +1573,181 @@ def get_finance_dashboard_summary(db: Session, organization_id: uuid.UUID) -> sc
         opex_month=opex_m,
         unreconciled_transactions_count=len(txs)
     )
+
+
+def reopen_payable(
+    db: Session,
+    organization_id: uuid.UUID,
+    payable_id: uuid.UUID,
+    current_user: User,
+) -> models.Payable:
+    payable = repository.get_payable_by_id(db, payable_id, organization_id)
+    if not payable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada.")
+    if payable.status != "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Apenas contas canceladas podem ser reabertas. Status atual: {payable.status}."
+        )
+    new_status = "APPROVED" if payable.purchase_order_id else "PENDING_APPROVAL"
+    transition_payable_status(
+        db,
+        payable,
+        organization_id,
+        new_status,
+        actor_id=current_user.id,
+        event_type="PAYABLE_REOPENED",
+        event_metadata={"reason": "Reabertura manual de conta a pagar"},
+    )
+    db.commit()
+    db.refresh(payable)
+    return payable
+
+
+def delete_payable(
+    db: Session,
+    organization_id: uuid.UUID,
+    payable_id: uuid.UUID,
+    current_user: User,
+) -> None:
+    from controlb.modules.documents import repository as documents_repository
+
+    payable = repository.get_payable_by_id(db, payable_id, organization_id)
+    if not payable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada.")
+    if payable.payments:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conta a pagar com pagamentos registrados não pode ser excluída.",
+        )
+    if payable.status not in {"CANCELLED", "DRAFT", "PENDING_APPROVAL"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Apenas contas canceladas ou pendentes podem ser excluídas. Status atual: {payable.status}.",
+        )
+    document = get_payable_header(db, payable, organization_id)
+    repository.delete_payable(db, payable)
+    if document:
+        documents_repository.delete_document(db, document)
+    db.commit()
+
+
+def reopen_receivable(
+    db: Session,
+    organization_id: uuid.UUID,
+    receivable_id: uuid.UUID,
+    current_user: User,
+) -> models.Receivable:
+    receivable = repository.get_receivable_by_id(db, receivable_id, organization_id)
+    if not receivable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a receber não encontrada.")
+    if receivable.status != "CANCELLED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Apenas títulos cancelados podem ser reabertos. Status atual: {receivable.status}."
+        )
+    transition_receivable_status(
+        db,
+        receivable,
+        organization_id,
+        "PENDING",
+        actor_id=current_user.id,
+        event_type="RECEIVABLE_REOPENED",
+        event_metadata={"reason": "Reabertura manual de conta a receber"},
+    )
+    db.commit()
+    db.refresh(receivable)
+    return receivable
+
+
+def delete_receivable(
+    db: Session,
+    organization_id: uuid.UUID,
+    receivable_id: uuid.UUID,
+    current_user: User,
+) -> None:
+    from controlb.modules.documents import repository as documents_repository
+
+    receivable = repository.get_receivable_by_id(db, receivable_id, organization_id)
+    if not receivable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a receber não encontrada.")
+    if receivable.receipts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Título com recebimentos registrados não pode ser excluído.",
+        )
+    if receivable.status not in {"CANCELLED", "PENDING"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Apenas títulos cancelados ou pendentes podem ser excluídos. Status atual: {receivable.status}.",
+        )
+    document = get_receivable_header(db, receivable, organization_id)
+    repository.delete_receivable(db, receivable)
+    if document:
+        documents_repository.delete_document(db, document)
+    db.commit()
+
+
+def create_or_update_payable_instrument(
+    db: Session,
+    organization_id: uuid.UUID,
+    payable_id: uuid.UUID,
+    payload: schemas.PaymentInstrumentCreate,
+) -> models.PaymentInstrument:
+    payable = repository.get_payable_by_id(db, payable_id, organization_id)
+    if not payable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada.")
+
+    existing = next((inst for inst in payable.instruments if inst.instrument_type == payload.instrument_type), None)
+    if existing:
+        if payload.barcode is not None:
+            existing.barcode = payload.barcode
+        if payload.digitable_line is not None:
+            existing.digitable_line = payload.digitable_line
+        if payload.pix_code is not None:
+            existing.pix_code = payload.pix_code
+        if payload.document_number is not None:
+            existing.document_number = payload.document_number
+        if payload.due_date is not None:
+            existing.due_date = payload.due_date
+        if payload.amount is not None:
+            existing.amount = payload.amount
+        if payload.file_attachment is not None:
+            existing.file_attachment = payload.file_attachment
+        db.flush()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    inst = models.PaymentInstrument(
+        payable_id=payable.id,
+        instrument_type=payload.instrument_type,
+        barcode=payload.barcode,
+        digitable_line=payload.digitable_line,
+        pix_code=payload.pix_code,
+        document_number=payload.document_number or payable.payable_number,
+        due_date=payload.due_date or payable.due_date,
+        amount=payload.amount or payable.outstanding_amount,
+        file_attachment=payload.file_attachment,
+    )
+    saved = repository.create_payment_instrument(db, inst)
+    db.commit()
+    db.refresh(saved)
+    return saved
+
+
+def delete_payable_instrument(
+    db: Session,
+    organization_id: uuid.UUID,
+    payable_id: uuid.UUID,
+    instrument_id: uuid.UUID,
+) -> None:
+    payable = repository.get_payable_by_id(db, payable_id, organization_id)
+    if not payable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conta a pagar não encontrada.")
+    inst = repository.get_payment_instrument_by_id(db, instrument_id, payable_id)
+    if not inst:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrumento de pagamento não encontrado.")
+    repository.delete_payment_instrument(db, inst)
+    db.commit()
+

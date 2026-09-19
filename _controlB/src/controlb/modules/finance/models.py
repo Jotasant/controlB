@@ -209,7 +209,7 @@ class Payable(Base):
     
     # Dimensões independentes da obrigação. OPEX/CAPEX não define quem
     # recebe nem qual processo de negócio originou o título.
-    expense_nature: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEX")
+    expense_nature: Mapped[str] = mapped_column(String(30), nullable=False, default="NOT_APPLICABLE")
     obligation_type: Mapped[str] = mapped_column(String(40), nullable=False, default="OTHER")
     business_origin: Mapped[str] = mapped_column(String(40), nullable=False, default="MANUAL")
     payment_method_expected: Mapped[str | None] = mapped_column(String(50), nullable=True)  # BOLETO, PIX, TRANSFERENCIA, CARTAO

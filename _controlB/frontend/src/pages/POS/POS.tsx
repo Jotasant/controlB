@@ -201,8 +201,8 @@ export const POS: React.FC = () => {
       triggerFeedback('error', 'O carrinho de compras está vazio.');
       return;
     }
-    if (paymentMethod === 'DINHEIRO' && numAmountPaid > 0 && numAmountPaid < cartTotal) {
-      triggerFeedback('error', 'O valor pago em dinheiro é insuficiente.');
+    if (paymentMethod === 'DINHEIRO' && numAmountPaid < cartTotal) {
+      triggerFeedback('error', 'O valor pago em dinheiro é insuficiente para cobrir o total da venda.');
       return;
     }
 

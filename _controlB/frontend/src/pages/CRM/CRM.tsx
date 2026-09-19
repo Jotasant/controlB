@@ -34,6 +34,7 @@ import {
 import { crmService, salesService, inventoryService, documentService, formatApiError } from '@/services/api';
 import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction, BusinessDocumentChain, SellerResponse } from '@/types';
 import { Modal } from '@/components/Modal/Modal';
+import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
 import { CustomerPicker } from '@/components/CustomerPicker';
 import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
 import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
@@ -142,6 +143,52 @@ export const CRM: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [stageFilter, setStageFilter] = useState<string>('ALL');
   const [oppActivityFilter, setOppActivityFilter] = useState<'ALL' | 'STAGNANT'>('ALL');
+
+  // Modal de Confirmação Estilizado (Substitui window.confirm e window.alert)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    message: React.ReactNode;
+    confirmText?: string;
+    cancelText?: string;
+    type?: 'danger' | 'warning' | 'info' | 'success';
+    isLoading?: boolean;
+    errorMessage?: string | null;
+    onConfirm: () => Promise<void>;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: async () => {},
+  });
+
+  const openConfirmModal = (config: {
+    title: string;
+    subtitle?: string;
+    message: React.ReactNode;
+    confirmText?: string;
+    cancelText?: string;
+    type?: 'danger' | 'warning' | 'info' | 'success';
+    onConfirm: () => Promise<void>;
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title: config.title,
+      subtitle: config.subtitle,
+      message: config.message,
+      confirmText: config.confirmText || 'Confirmar',
+      cancelText: config.cancelText || 'Voltar',
+      type: config.type || 'danger',
+      isLoading: false,
+      errorMessage: null,
+      onConfirm: config.onConfirm,
+    });
+  };
+
+  const closeConfirmModal = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, errorMessage: null, isLoading: false }));
+  };
 
   // Filtros Leads (Fase 2)
   const [leadSearch, setLeadSearch] = useState<string>('');
@@ -757,15 +804,24 @@ export const CRM: React.FC = () => {
     }
   };
 
-  const handleDeleteLead = async (leadId: string, leadName: string) => {
-    if (!window.confirm(`Deseja realmente excluir o lead '${leadName}'?`)) return;
-    try {
-      await crmService.deleteLead(leadId);
-      toast.success(`Lead '${leadName}' excluído com sucesso.`, "Lead Removido");
-      void loadCRMData();
-    } catch (err: any) {
-      toast.error(formatApiError(err, "Falha ao excluir lead."));
-    }
+  const handleDeleteLead = (leadId: string, leadName: string) => {
+    openConfirmModal({
+      title: 'Excluir Lead',
+      subtitle: leadName,
+      message: `Deseja realmente excluir permanentemente o lead "${leadName}"?`,
+      confirmText: 'Excluir Lead',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await crmService.deleteLead(leadId);
+          closeConfirmModal();
+          toast.success(`Lead '${leadName}' excluído com sucesso.`, "Lead Removido");
+          void loadCRMData();
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Falha ao excluir lead."));
+        }
+      }
+    });
   };
 
   const handleChangeLeadStatus = async (leadId: string, newStatus: string) => {
@@ -957,15 +1013,24 @@ export const CRM: React.FC = () => {
     }
   };
 
-  const handleDeleteStage = async (stageId: string, stageName: string) => {
-    if (!window.confirm(`Deseja realmente remover a etapa '${stageName}' do Funil?`)) return;
-    try {
-      await crmService.deleteStage(stageId);
-      toast.success(`Etapa '${stageName}' removida com sucesso!`, "Etapa Excluída");
-      void loadCRMData();
-    } catch (err: any) {
-      toast.error(formatApiError(err, "Falha ao excluir etapa. Certifique-se de que não há oportunidades vinculadas a ela."));
-    }
+  const handleDeleteStage = (stageId: string, stageName: string) => {
+    openConfirmModal({
+      title: 'Remover Etapa do Funil',
+      subtitle: stageName,
+      message: `Deseja realmente remover a etapa "${stageName}" do Funil? Certifique-se de que não há oportunidades vinculadas a ela.`,
+      confirmText: 'Remover Etapa',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await crmService.deleteStage(stageId);
+          closeConfirmModal();
+          toast.success(`Etapa '${stageName}' removida com sucesso!`, "Etapa Excluída");
+          void loadCRMData();
+        } catch (err: any) {
+          toast.error(formatApiError(err, "Falha ao excluir etapa. Certifique-se de que não há oportunidades vinculadas a ela."));
+        }
+      }
+    });
   };
 
   // ===========================================================================
@@ -1725,20 +1790,30 @@ export const CRM: React.FC = () => {
   const activityPagination = useListPagination(filteredActivities);
   const scheduledActivitiesOnPage = activityPagination.pageItems.filter(activity => activity.status === 'SCHEDULED');
 
-  const runCrmBulkAction = async (
+  const runCrmBulkAction = (
     ids: string[],
     label: string,
     action: (id: string) => Promise<unknown>,
     clearSelection: () => void,
   ) => {
-    if (ids.length === 0 || !window.confirm(`${label} ${ids.length} registro(s) selecionado(s)?`)) return;
-    const results = await Promise.allSettled(ids.map(action));
-    const succeeded = results.filter(result => result.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    clearSelection();
-    if (failed) toast.warning(`${succeeded} registro(s) processado(s); ${failed} falharam por regras ou vínculos existentes.`, 'Operação parcial');
-    else toast.success(`${succeeded} registro(s) processado(s).`, 'Operação concluída');
-    await loadCRMData();
+    if (ids.length === 0) return;
+    openConfirmModal({
+      title: `${label} em Lote`,
+      subtitle: `${ids.length} ${ids.length === 1 ? 'registro selecionado' : 'registros selecionados'}`,
+      message: `Deseja realmente executar a ação "${label}" para os ${ids.length} registro(s) selecionado(s)?`,
+      confirmText: `Confirmar (${ids.length})`,
+      type: 'danger',
+      onConfirm: async () => {
+        const results = await Promise.allSettled(ids.map(action));
+        const succeeded = results.filter(result => result.status === 'fulfilled').length;
+        const failed = results.length - succeeded;
+        clearSelection();
+        closeConfirmModal();
+        if (failed) toast.warning(`${succeeded} registro(s) processado(s); ${failed} falharam por regras ou vínculos existentes.`, 'Operação parcial');
+        else toast.success(`${succeeded} registro(s) processado(s).`, 'Operação concluída');
+        await loadCRMData();
+      }
+    });
   };
 
   const recentOpps = useMemo(() => {
@@ -5496,6 +5571,20 @@ export const CRM: React.FC = () => {
           <div className="ui-empty-state" style={{ padding: '2rem', textAlign: 'center' }}>Nenhuma cadeia documental disponível.</div>
         )}
       </Modal>
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        subtitle={confirmModal.subtitle}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        type={confirmModal.type}
+        isLoading={confirmModal.isLoading}
+        errorMessage={confirmModal.errorMessage}
+        onClose={closeConfirmModal}
+        onConfirm={confirmModal.onConfirm}
+      />
     </div>
   );
 };

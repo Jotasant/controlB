@@ -40,6 +40,28 @@ from controlb.modules.sales.models import (
 )
 from controlb.modules.billing.models import Invoice, InvoiceInstallment
 from controlb.modules.documents.models import BusinessDocument, DocumentRelation, DocumentEvent
+from controlb.modules.projects.models import (  # noqa: F401
+    ProjectType, WorkOrderType, WorkflowTemplate, WorkflowStage,
+    Project, ProjectMember, ProjectStageHistory,
+    WorkOrder, Task, TaskAssignment, TaskDependency,
+    Issue, ChecklistTemplate, ChecklistTemplateItem,
+    Checklist, ChecklistItem, Comment,
+)
+from controlb.modules.recurrence.models import (  # noqa: F401
+    CustomerPurchaseHistory,
+    CustomerProductRecurrence,
+    RecurrenceAlert,
+    ProductDemandForecast,
+    ProductDemandDetail,
+    IntelligentReplenishmentSuggestion,
+)
+from controlb.modules.chat.models import (  # noqa: F401
+    ChatConnection,
+    ChatConversation,
+    ChatConversationLink,
+    ChatMessage,
+    ChatWebhookEvent,
+)
 from controlb.config import get_settings
 
 

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from controlb.logger import logger
@@ -1454,39 +1455,96 @@ def delete_sales_quote(
     quote_id: uuid.UUID,
     organization_id: uuid.UUID,
     current_user: User,
+    permanent: bool = True,
 ):
     _validate_current_user_tenant(current_user, organization_id)
     quote = repository.get_quote_by_id_for_update(db, quote_id, organization_id)
     if not quote:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orçamento não encontrado.")
-    quote_document = _ensure_quote_document(db, quote, organization_id)
-    if quote.status == "CONVERTED":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Uma cotação convertida não pode ser cancelada.",
-        )
-    if quote.status == "CANCELLED":
-        return {"message": "Cotação já estava cancelada."}
 
-    previous_status = quote.status
-    for approval in quote.commercial_approvals:
-        if approval.status == "PENDING":
-            approval.status = "CANCELLED"
-    quote.commercial_approval_status = "NOT_REQUIRED"
-    documents_service.record_event(
-        db,
-        organization_id=organization_id,
-        document=quote_document,
-        event_type="CANCELLED",
-        previous_status=previous_status,
-        new_status="CANCELLED",
-        created_by_id=current_user.id,
-        event_metadata={"quote_id": str(quote.id)},
-        idempotency_key=f"sales-quote:{quote.id}:cancelled",
-    )
-    quote.status = quote_document.current_status
+    # 1. Se for cancelamento lógico (permanent=False)
+    if not permanent:
+        quote_document = _ensure_quote_document(db, quote, organization_id)
+        if quote.status == "CONVERTED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Uma cotação convertida não pode ser cancelada.",
+            )
+        if quote.status == "CANCELLED":
+            return {"message": "Cotação já estava cancelada."}
+
+        previous_status = quote.status
+        for approval in quote.commercial_approvals:
+            if approval.status == "PENDING":
+                approval.status = "CANCELLED"
+        quote.commercial_approval_status = "NOT_REQUIRED"
+        documents_service.record_event(
+            db,
+            organization_id=organization_id,
+            document=quote_document,
+            event_type="CANCELLED",
+            previous_status=previous_status,
+            new_status="CANCELLED",
+            created_by_id=current_user.id,
+            event_metadata={"quote_id": str(quote.id)},
+            idempotency_key=f"sales-quote:{quote.id}:cancelled",
+        )
+        quote.status = quote_document.current_status
+        db.flush()
+        return {"message": "Cotação cancelada com sucesso."}
+
+    # 2. Se for exclusão física/permanente (permanent=True)
+    if quote.status == "CONVERTED":
+        active_order = db.scalar(
+            select(models.SalesOrder).where(
+                models.SalesOrder.sales_quote_id == quote.id,
+                models.SalesOrder.organization_id == organization_id,
+                models.SalesOrder.status != "CANCELLED",
+            )
+        )
+        if active_order:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Não é possível excluir a cotação pois ela foi convertida no Pedido de Venda ativo #{active_order.order_number}."
+                ),
+            )
+
+    # Desvincula pedidos de venda cancelados que apontavam para esta cotação
+    cancelled_orders = db.scalars(
+        select(models.SalesOrder).where(
+            models.SalesOrder.sales_quote_id == quote.id,
+            models.SalesOrder.organization_id == organization_id,
+        )
+    ).all()
+    for o in cancelled_orders:
+        o.sales_quote_id = None
+
+    quote_number = quote.quote_number
+    document_id = quote.document_id
+
+    # Remover aprovações comerciais vinculadas
+    for approval in list(quote.commercial_approvals):
+        db.delete(approval)
+
+    # Remover itens da cotação
+    for item in list(quote.items):
+        db.delete(item)
+
+    # Deletar a cotação comercial
+    db.delete(quote)
     db.flush()
-    return {"message": "Cotação cancelada com sucesso."}
+
+    # Tratar remoção ou término no módulo de documentos
+    if document_id:
+        from controlb.modules.documents.models import BusinessDocument
+
+        doc = db.get(BusinessDocument, document_id)
+        if doc:
+            db.delete(doc)
+
+    db.flush()
+    return {"message": f"Cotação #{quote_number} excluída com sucesso.", "deleted": True}
 
 
 # ==============================================================================
@@ -1939,27 +1997,61 @@ def delete_sales_order(
     organization_id: uuid.UUID,
     current_user: User,
     reason: str | None = None,
+    permanent: bool = False,
 ):
     _validate_current_user_tenant(current_user, organization_id)
     order = repository.get_order_by_id_for_update(db, order_id, organization_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido de venda não encontrado.")
     order_document = _ensure_order_document(db, order, organization_id)
+    from controlb.modules.billing.models import Invoice
     from controlb.modules.inventory import service as inventory_service
+    from controlb.modules.inventory.models import InventoryDelivery, StockReservation
 
-    if (
-        order.billing_status in {"REQUESTED", "PARTIALLY_INVOICED", "INVOICED"}
-        or order.status == "COMPLETED"
-        or order.delivery_status in {"DISPATCHED", "DELIVERED"}
-    ):
+    # 1. Validação de Faturas Ativas ou Status Faturado
+    if order.billing_status in {"PARTIALLY_INVOICED", "INVOICED"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Um pedido com faturamento solicitado/iniciado, concluído ou com expedição iniciada não pode "
-                "ser cancelado; utilize o fluxo de devolução quando aplicável."
+                f"O pedido #{order.order_number} possui faturamento iniciado ou concluído ({order.billing_status}). "
+                "Não é possível cancelá-lo ou excluí-lo diretamente."
             ),
         )
-    if order.status == "CANCELLED":
+
+    active_invoice = db.scalar(
+        select(Invoice).where(
+            Invoice.sales_order_id == order.id,
+            Invoice.organization_id == organization_id,
+            Invoice.status != "CANCELLED",
+        )
+    )
+    if active_invoice:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Não é possível cancelar ou excluir o pedido #{order.order_number} pois existe a Fatura Ativa #{active_invoice.invoice_number}. "
+                "Cancele a fatura primeiro no módulo de Faturamento."
+            ),
+        )
+
+    # 2. Validação de Expedição e Conclusão
+    if order.delivery_status in {"DISPATCHED", "DELIVERED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"O pedido #{order.order_number} possui mercadorias já despachadas ou entregues "
+                f"(status de entrega: {order.delivery_status}). Utilize o fluxo de devoluções em Pós-Venda."
+            ),
+        )
+    if order.status == "COMPLETED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"O pedido #{order.order_number} já foi concluído e não pode ser cancelado.",
+        )
+
+    # 3. EXCLUSÃO DEFINITIVA (se permanent=True)
+    if permanent:
+        # Liberar quaisquer reservas de estoque
         inventory_service.release_sales_order_reservation(
             db,
             organization_id,
@@ -1968,8 +2060,66 @@ def delete_sales_order(
             locked_order=order,
             delivery_status_after="CANCELLED",
         )
-        return {"message": "Pedido de venda já estava cancelado."}
 
+        # Remover entregas associadas (não despachadas)
+        deliveries = db.scalars(
+            select(InventoryDelivery).where(
+                InventoryDelivery.sales_order_id == order.id,
+                InventoryDelivery.organization_id == organization_id,
+            )
+        ).all()
+        for d in deliveries:
+            db.delete(d)
+
+        # Remover reservas associadas
+        reservations = db.scalars(
+            select(StockReservation).where(
+                StockReservation.sales_order_id == order.id,
+                StockReservation.organization_id == organization_id,
+            )
+        ).all()
+        for r in reservations:
+            db.delete(r)
+
+        # Desvincular faturas canceladas se houver
+        cancelled_invoices = db.scalars(
+            select(Invoice).where(
+                Invoice.sales_order_id == order.id,
+                Invoice.organization_id == organization_id,
+            )
+        ).all()
+        for inv in cancelled_invoices:
+            inv.sales_order_id = None
+
+        order_number = order.order_number
+        document_id = order.document_id
+
+        # Remover itens e aprovações
+        for item in list(order.items):
+            db.delete(item)
+        if order.credit_approval:
+            db.delete(order.credit_approval)
+        for approval in list(order.commercial_approvals):
+            db.delete(approval)
+
+        # Deletar o SalesOrder
+        db.delete(order)
+        db.flush()
+
+        # Deletar o BusinessDocument correspondente
+        if document_id:
+            from controlb.modules.documents.models import BusinessDocument
+
+            doc = db.get(BusinessDocument, document_id)
+            if doc:
+                db.delete(doc)
+
+        db.flush()
+        return {"message": f"Pedido #{order_number} excluído definitivamente com sucesso.", "deleted": True}
+
+    # 4. CANCELAMENTO LÓGICO SEGURO E IDEMPOTENTE
+    # Reexecutar o fluxo também reconcilia estados derivados (entrega, reserva,
+    # faturamento e aprovações) que possam ter ficado inconsistentes.
     previous_status = order.status
     inventory_service.release_sales_order_reservation(
         db,
@@ -1980,6 +2130,7 @@ def delete_sales_order(
         delivery_status_after="CANCELLED",
     )
     order.delivery_status = "CANCELLED"
+    order.billing_status = "CANCELLED"
     if order.credit_approval and order.credit_approval.status == "PENDING":
         order.credit_approval.status = "CANCELLED"
     for approval in order.commercial_approvals:
@@ -2002,7 +2153,7 @@ def delete_sales_order(
     )
     order.status = order_document.current_status
     db.flush()
-    return {"message": "Pedido de venda cancelado com sucesso."}
+    return {"message": f"Pedido #{order.order_number} cancelado com sucesso."}
 
 
 def update_sales_order_status(

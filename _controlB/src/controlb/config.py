@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"            # Algoritmo de criptografia do token (HMAC com SHA-256)
     access_token_expire_minutes: int = 480 # Tempo de expiração da sessão do usuário (em minutos)
 
+    # Chave dedicada para credenciais de conectores. Quando não informada, a
+    # SECRET_KEY existente é usada como origem de chave para manter compatibilidade.
+    chat_credentials_key: str | None = None
+    chat_public_base_url: str | None = None
+    # URLs exatas aprovadas pelo operador para evitar chamadas a destinos arbitrários.
+    chat_allowed_base_urls: list[str] = []
+
     # Configuração do Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH,

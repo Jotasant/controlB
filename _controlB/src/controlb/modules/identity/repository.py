@@ -102,7 +102,7 @@ def update_user(db: Session, db_user: User, user_data: UserUpdate, hashed_passwo
         db_user.email = user_data.email
     if user_data.organization_id is not None:
         db_user.organization_id = user_data.organization_id
-    if user_data.role_id is not None:
+    if "role_id" in user_data.model_fields_set:
         db_user.role_id = user_data.role_id
     if user_data.is_active is not None:
         db_user.is_active = user_data.is_active
