@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     chat_public_base_url: str | None = None
     # URLs exatas aprovadas pelo operador para evitar chamadas a destinos arbitrários.
     chat_allowed_base_urls: list[str] = []
+    # STT opcional/local. Nenhum modelo é baixado e nenhum áudio é enviado a terceiros.
+    chat_stt_model_path: str | None = None
+    chat_audio_worker_enabled: bool = True
 
     # Configuração do Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(

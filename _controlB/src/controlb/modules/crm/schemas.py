@@ -44,13 +44,21 @@ class CRMStageResponse(CRMStageBase):
 class LeadBase(BaseModel):
     name: str = Field(..., max_length=255)
     company_name: str | None = None
+    position: str | None = None
+    segment: str | None = None
+    address_city: str | None = None
+    address_state: str | None = None
+    annual_revenue: Decimal | None = None
     email: str | None = None
     phone: str | None = None
+    secondary_phone: str | None = None
     source: str = "Indicação"
+    contact_origin_id: uuid.UUID | None = None
     status: str = "NEW"
     notes: str | None = None
     assigned_to_id: uuid.UUID | None = None
     customer_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
 
 
 class LeadCreate(LeadBase):
@@ -61,13 +69,21 @@ class LeadCreate(LeadBase):
 class LeadUpdate(BaseModel):
     name: str | None = None
     company_name: str | None = None
+    position: str | None = None
+    segment: str | None = None
+    address_city: str | None = None
+    address_state: str | None = None
+    annual_revenue: Decimal | None = None
     email: str | None = None
     phone: str | None = None
+    secondary_phone: str | None = None
     source: str | None = None
+    contact_origin_id: uuid.UUID | None = None
     status: str | None = None
     notes: str | None = None
     assigned_to_id: uuid.UUID | None = None
     customer_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
 
 
 class LeadResponse(LeadBase):

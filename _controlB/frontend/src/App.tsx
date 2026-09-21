@@ -19,12 +19,18 @@ const Login = lazy(() => import('@/pages/Login/Login').then(m => ({ default: m.L
 const Dashboard = lazy(() => import('@/pages/Dashboard/Dashboard').then(m => ({ default: m.Dashboard })));
 const Purchasing = lazy(() => import('@/pages/Purchasing/Purchasing').then(m => ({ default: m.Purchasing })));
 const Inventory = lazy(() => import('@/pages/Inventory/Inventory').then(m => ({ default: m.Inventory })));
-const CRM = lazy(() => import('@/pages/CRM/CRM').then(m => ({ default: m.CRM })));
-const Sales = lazy(() => import('@/pages/Sales/Sales').then(m => ({ default: m.Sales })));
+const CRM = lazy(() => import('@/pages/CRM/CRM').then(m => ({ default: m.CRMRoute })));
+const Sales = lazy(() => import('@/pages/Sales/Sales').then(m => ({ default: m.SalesRoute })));
+const SalesRecordFormPage = lazy(() => import('@/pages/Sales/SalesRecordFormPage').then(m => ({ default: m.SalesRecordFormPage })));
+const CommercialTeamRecordFormPage = lazy(() => import('@/components/CommercialTeamsSettings/CommercialTeamsSettings').then(m => ({ default: m.CommercialTeamRecordFormPage })));
+const SalesAuxRecordFormPage = lazy(() => import('@/pages/Sales/Sales').then(m => ({ default: m.SalesAuxRecordFormPage })));
+const CRMRecordFormPage = lazy(() => import('@/pages/CRM/CRM').then(m => ({ default: m.CRMRecordFormPage })));
 const POS = lazy(() => import('@/pages/POS/POS').then(m => ({ default: m.POS })));
 const Finance = lazy(() => import('@/pages/Finance/Finance').then(m => ({ default: m.Finance })));
 const Billing = lazy(() => import('@/pages/Billing/Billing').then(m => ({ default: m.Billing })));
 const Cadastros = lazy(() => import('@/pages/Cadastros/Cadastros').then(m => ({ default: m.Cadastros })));
+const Contacts = lazy(() => import('@/pages/Contacts/Contacts').then(m => ({ default: m.Contacts })));
+const ContactRecordFormPage = lazy(() => import('@/pages/Contacts/ContactRecordFormPage').then(m => ({ default: m.ContactRecordFormPage })));
 const OrganizationRecordFormPage = lazy(() => import('@/pages/Cadastros/records/OrganizationRecordFormPage').then(m => ({ default: m.OrganizationRecordFormPage })));
 const UserRecordFormPage = lazy(() => import('@/pages/Cadastros/records/UserRecordFormPage').then(m => ({ default: m.UserRecordFormPage })));
 const RoleRecordFormPage = lazy(() => import('@/pages/Cadastros/records/RoleRecordFormPage').then(m => ({ default: m.RoleRecordFormPage })));
@@ -36,7 +42,9 @@ const TaskRecordFormPage = lazy(() => import('@/pages/Projects/records/TaskRecor
 const IssueRecordFormPage = lazy(() => import('@/pages/Projects/records/IssueRecordFormPage').then(m => ({ default: m.IssueRecordFormPage })));
 const ProjectTypeRecordFormPage = lazy(() => import('@/pages/Projects/records/TypeRecordFormPage').then(m => ({ default: m.ProjectTypeRecordFormPage })));
 const WorkOrderTypeRecordFormPage = lazy(() => import('@/pages/Projects/records/TypeRecordFormPage').then(m => ({ default: m.WorkOrderTypeRecordFormPage })));
+const ChatConnections = lazy(() => import('@/pages/Chat/ChatConnections').then(m => ({ default: m.ChatConnections })));
 const WorkflowRecordFormPage = lazy(() => import('@/pages/Projects/records/WorkflowRecordFormPage').then(m => ({ default: m.WorkflowRecordFormPage })));
+const ChatConnectionFormPage = lazy(() => import('@/pages/Chat/ChatConnectionFormPage').then(m => ({ default: m.ChatConnectionFormPage })));
 
 const PageLoadingFallback: React.FC = () => (
   <div style={{
@@ -72,6 +80,13 @@ const router = createBrowserRouter([
           { path: '/dashboard', element: <Dashboard /> },
           { path: '/crm', element: <CRM /> },
           { path: '/vendas', element: <Sales /> },
+          { path: '/vendas/:resource/:recordId', element: <SalesAuxRecordFormPage /> },
+          { path: '/vendas/clientes/:recordId', element: <SalesRecordFormPage kind="clientes" /> },
+          { path: '/vendas/cotacoes/:recordId', element: <SalesRecordFormPage kind="cotacoes" /> },
+          { path: '/vendas/pedidos/:recordId', element: <SalesRecordFormPage kind="pedidos" /> },
+          { path: '/crm/equipes/:recordId', element: <CommercialTeamRecordFormPage /> },
+          { path: '/vendas/equipes/:recordId', element: <CommercialTeamRecordFormPage /> },
+          { path: '/crm/:resource/:recordId', element: <CRMRecordFormPage /> },
           { path: '/pdv', element: <POS /> },
           { path: '/faturamento', element: <Billing /> },
           { path: '/financeiro', element: <Finance /> },
@@ -87,7 +102,14 @@ const router = createBrowserRouter([
           { path: '/projetos/tipos-de-projeto/:recordId', element: <ProjectTypeRecordFormPage /> },
           { path: '/projetos/tipos-de-ordem/:recordId', element: <WorkOrderTypeRecordFormPage /> },
           { path: '/projetos/workflows/:recordId', element: <WorkflowRecordFormPage /> },
+          { path: '/chat/conexoes', element: <ChatConnections /> },
+          { path: '/chat/conexoes/:recordId', element: <ChatConnectionFormPage /> },
+          { path: '/chat', element: <Navigate to="/chat/conexoes" replace /> },
           { path: '/cadastros', element: <Cadastros /> },
+          { path: '/contatos', element: <Contacts /> },
+          { path: '/contatos/:recordId', element: <ContactRecordFormPage /> },
+          { path: '/cadastros/contatos', element: <Contacts /> },
+          { path: '/cadastros/contatos/:recordId', element: <ContactRecordFormPage /> },
           { path: '/cadastros/organizacoes/:recordId', element: <OrganizationRecordFormPage /> },
           { path: '/cadastros/usuarios/:recordId', element: <UserRecordFormPage /> },
           { path: '/cadastros/cargos/:recordId', element: <RoleRecordFormPage /> },

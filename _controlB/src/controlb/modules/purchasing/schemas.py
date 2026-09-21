@@ -11,7 +11,7 @@ Define os schemas para validação de entrada (Create/Update) e serialização d
 import uuid
 from decimal import Decimal
 from datetime import date, datetime
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import model_validator, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 # ==============================================================================
@@ -24,6 +24,7 @@ class SupplierBase(BaseModel):
     trade_name: str | None = Field(None, max_length=500, description="Nome Fantasia")
     cnpj_cpf: str = Field(..., min_length=11, max_length=100, description="CNPJ ou CPF do Fornecedor")
     state_registration: str | None = Field(None, max_length=100, description="Inscrição Estadual")
+    contact_id: uuid.UUID | None = None
     contact_name: str | None = Field(None, max_length=200, description="Nome do Vendedor / Representante")
     segments: str | None = Field(None, max_length=500, description="Categorias/Segmentos atendidos (ex: Medicamentos, Perfumaria)")
     payment_terms: str | None = Field(None, max_length=200, description="Condição de Pagamento Padrão (ex: 30 DDL)")
@@ -45,6 +46,7 @@ class SupplierCreate(SupplierBase):
 
 
 class SupplierUpdate(BaseModel):
+    contact_id: uuid.UUID | None = None
     """Payload para atualização parcial de um Fornecedor."""
     name: str | None = None
     trade_name: str | None = None
@@ -67,6 +69,14 @@ class SupplierUpdate(BaseModel):
 
 
 class SupplierResponse(SupplierBase):
+    email: str | None = None  # Identity owns validation; legacy output must remain readable.
+    @model_validator(mode="before")
+    @classmethod
+    def identity_details(cls, value):
+        from controlb.modules.identity.contact_identity import contact_response
+        return contact_response(value, cls.model_fields, {"email":"email","phone":"phone","contact_name":"name"})
+
+
     """Schema de resposta com dados do Fornecedor persistido."""
     id: uuid.UUID
     organization_id: uuid.UUID

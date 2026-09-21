@@ -84,6 +84,11 @@ export const buildRecordHref = (type: string, id: string, view?: string): string
   const normalizedType = normalizeRecordType(type);
   if (!normalizedType || !id) return null;
 
+  const pages: Partial<Record<RecordReferenceType, string>> = {
+    SALES_RETURN: '/vendas/devolucoes', CUSTOMER: '/vendas/clientes', SALES_QUOTE: '/vendas/cotacoes', SALES_ORDER: '/vendas/pedidos',
+    LEAD: '/crm/leads', OPPORTUNITY: '/crm/oportunidades', CRM_INTERACTION: '/crm/atividades',
+  };
+  if (pages[normalizedType]) return `${pages[normalizedType]}/${encodeURIComponent(id)}`;
   const target = TARGETS[normalizedType];
   const params = new URLSearchParams({
     view: view || target.view,

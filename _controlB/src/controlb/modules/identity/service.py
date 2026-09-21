@@ -359,12 +359,22 @@ def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate)
                 detail=f"Já existe um contato cadastrado com o documento '{data.document}' ({existing.name})."
             )
 
-    return repository.create_contact(db, organization_id, data)
+    contact = repository.create_contact(db, organization_id, data)
+    contact.name_manually_set = True
+    db.flush()
+    return contact
 
 
 def update_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID, data: ContactUpdate):
     """Atualiza dados cadastrais de um contato."""
     contact = get_contact(db, contact_id, organization_id)
+    if data.contact_origin_id:
+        from .models import ContactOrigin
+        from sqlalchemy import select
+        if not db.scalar(select(ContactOrigin.id).where(ContactOrigin.id == data.contact_origin_id, ContactOrigin.organization_id == organization_id)):
+            raise HTTPException(422, "Origem inválida para a organização.")
+    if contact.first_contact_at and "phone" in data.model_fields_set and data.phone != contact.phone:
+        raise HTTPException(409, "Telefone sincronizado identifica o contato. Cadastre outro contato para outro número.")
     if data.document and data.document.strip():
         existing = repository.get_contact_by_document(db, data.document, organization_id)
         if existing and existing.id != contact.id:
@@ -372,7 +382,20 @@ def update_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUI
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Já existe outro contato cadastrado com o documento '{data.document}' ({existing.name})."
             )
-    return repository.update_contact(db, contact, data)
+    if "name" in data.model_fields_set and data.name is not None:
+        if not data.name.strip():
+            raise HTTPException(422, "Informe o nome do contato.")
+        contact.name_manually_set = True
+    result = repository.update_contact(db, contact, data)
+    from controlb.modules.chat.models import ChatConversation
+    from sqlalchemy import update
+    db.execute(update(ChatConversation).where(
+        ChatConversation.organization_id == organization_id,
+        ChatConversation.contact_id == contact.id,
+        ChatConversation.is_group.is_(False),
+    ).values(display_name=contact.name))
+    db.flush()
+    return result
 
 
 def delete_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUID):
@@ -380,6 +403,18 @@ def delete_contact(db: Session, contact_id: uuid.UUID, organization_id: uuid.UUI
     contact = get_contact(db, contact_id, organization_id)
     repository.delete_contact(db, contact)
     return {"message": "Contato excluído com sucesso."}
+
+
+def bulk_delete_contacts(db: Session, organization_id: uuid.UUID, contact_ids: list[uuid.UUID]):
+    """Remove múltiplos contatos institucionais em massa."""
+    deleted_count = 0
+    for cid in contact_ids:
+        contact = repository.get_contact_by_id(db, cid, organization_id)
+        if contact:
+            repository.delete_contact(db, contact)
+            deleted_count += 1
+    db.commit()
+    return {"message": f"{deleted_count} contato(s) excluído(s) com sucesso.", "deleted_count": deleted_count}
 
 
 # ==============================================================================

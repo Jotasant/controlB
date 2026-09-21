@@ -34,36 +34,29 @@ def db() -> Generator[Session, None, None]:
         yield session
 
 
-def test_create_customer_pf_and_sync_contact(db: Session):
-    """Valida o cadastro de cliente PF com sincronização unificada no Contact (Identity)."""
-    org_id = uuid.uuid4()
-    org = Organization(id=org_id, name="Empresa Teste")
+def test_create_customer_references_identity_without_implicit_contact(db: Session):
+    org = Organization(name="Empresa Teste")
     db.add(org)
+    db.flush()
+    contact = Contact(organization_id=org.id, name="Contato preservado",
+                      email="jefferson@example.com", phone="11999998888")
+    db.add(contact)
     db.commit()
 
     payload = sales_schemas.CustomerCreate(
-        person_type="PF",
-        document="88844433321",
-        name="Jefferson S",
-        trade_name=None,
-        email="jefferson@controlb.com",
-        phone="11999998888",
+        person_type="PF", document="88844433321", name="Nome comercial",
+        contact_id=contact.id,
     )
-
-    created_customer = sales_service.create_customer(db, org_id, payload)
-    assert created_customer.id is not None
-    assert created_customer.person_type == "PF"
-    assert created_customer.document == "88844433321"
-    assert created_customer.name == "Jefferson S"
-    assert created_customer.contact_id is not None
-
-    # Verifica se o Contact correspondente foi criado no Identity com papel is_customer=True
-    contact = db.query(Contact).filter(Contact.id == created_customer.contact_id).first()
-    assert contact is not None
-    assert contact.document == "88844433321"
-    assert contact.name == "Jefferson S"
-    assert contact.is_customer is True
-    assert contact.origin_module == "SALES"
+    customer = sales_service.create_customer(db, org.id, payload)
+    assert customer.contact_id == contact.id
+    assert contact.name == "Contato preservado"
+    assert customer.email is None  # Legacy column is never populated.
+    assert sales_schemas.CustomerResponse.model_validate(customer).email == contact.email
+    assert db.query(Contact).count() == 1
+    with pytest.raises(HTTPException) as exc:
+        sales_service.update_customer(db, customer.id, org.id,
+                                      sales_schemas.CustomerUpdate(phone="11999998888"))
+    assert exc.value.status_code == 422
 
 
 def test_list_and_search_customers(db: Session):

@@ -1,6 +1,6 @@
 /**
  * pages/Sales/Sales.tsx - Módulo Comercial, Cotações & Vendas (ControlB ERP)
- * 
+ *
  * Funcionalidades Estruturais:
  * 1. 📝 Cotações & Propostas Comerciais (Orçamentos, Descontos, Alçadas, Validade e Conversão em Pedido)
  * 2. 📦 Pedidos de Venda (Gestão de status, itens, faturamento e entregas)
@@ -10,8 +10,8 @@
  * 6. 📊 Indicadores & BI Comercial (Faturamento, Ticket Médio, Conversão e Ranking de Vendedores)
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
 import {
   ShoppingBag, FileText, RefreshCw, Search,
   Trash2, Users, Plus, Target, DollarSign,
@@ -33,13 +33,12 @@ import {
   InventoryDelivery, StockReservation
 } from '@/types';
 import { formatCurrency, formatQuantity } from '@/utils/formatters';
+import { RecordEditorSurface } from '@/components/RecordForm/RecordEditorSurface';
+import { RecordFormPage, RecordFormSection } from '@/components/RecordForm';
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal, ConfirmModalType } from '@/components/ConfirmModal/ConfirmModal';
 import { Can } from '@/components/Can';
 import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline';
-import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
-import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
-import { OrderModal } from '@/components/OrderModal/OrderModal';
 import { CommercialTeamsSettings } from '@/components/CommercialTeamsSettings/CommercialTeamsSettings';
 import { CommercialPoliciesSettings } from '@/components/CommercialPoliciesSettings/CommercialPoliciesSettings';
 import { useToast } from '@/components/Toast/ToastContext';
@@ -47,7 +46,7 @@ import { BulkActionsBar } from '@/components/BulkActionsBar';
 import { ListPagination } from '@/components/ListPagination';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useListPagination } from '@/hooks/useListPagination';
-import { DocumentLink, RecordLink, useRecordDeepLink, isRequestedView, parseRecordReference } from '@/components/RecordLink';
+import { DocumentLink, RecordLink, useRecordDeepLink, isRequestedView, buildRecordHref, parseRecordReference } from '@/components/RecordLink';
 import './Sales.scss';
 
 type ActiveSalesTab =
@@ -65,8 +64,23 @@ const ALLOWED_SALES_TABS: readonly ActiveSalesTab[] = [
   'quotes', 'orders', 'approvals', 'deliveries', 'customers', 'commercial', 'post_sales', 'analytics', 'settings'
 ];
 
-export const Sales: React.FC = () => {
+export function SalesAuxRecordFormPage() {
+  const { resource, recordId } = useParams();
+  const location = useLocation();
+  if (!resource || !recordId || !['metas', 'tabelas-de-precos', 'devolucoes'].includes(resource)) return <Navigate to="/vendas" replace />;
+  return <Sales key={location.key} recordKind={resource} recordId={recordId} />;
+}
+
+export const Sales: React.FC<{ recordKind?: string; recordId?: string }> = ({ recordKind, recordId }) => {
+  const recordInitialized = useRef(false);
+  const [recordReady, setRecordReady] = useState(!recordKind);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const [selectedGoal, setSelectedGoal] = useState<SalesGoal | null>(null);
+  const [selectedTable, setSelectedTable] = useState<PriceTable | null>(null);
+  const backToList = () => navigate('/vendas?view=' + (recordKind === 'devolucoes' ? 'post_sales' : 'commercial'));
+
   const toast = useToast();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialTab = isRequestedView(searchParams, ALLOWED_SALES_TABS, 'quotes');
   const [activeTab, setActiveTab] = useState<ActiveSalesTab>(initialTab);
@@ -168,8 +182,6 @@ export const Sales: React.FC = () => {
   // =========================================================================
   // ESTADOS: 1. COTAÇÕES & PROPOSTAS COMERCIAIS
   // =========================================================================
-  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState<boolean>(false);
-  const [editingQuote, setEditingQuote] = useState<SalesQuote | null>(null);
   const [quoteToCancel, setQuoteToCancel] = useState<SalesQuote | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState<string>('');
   const [isCancellingQuote, setIsCancellingQuote] = useState<boolean>(false);
@@ -177,15 +189,11 @@ export const Sales: React.FC = () => {
   // =========================================================================
   // ESTADOS: 2. PEDIDOS DE VENDA
   // =========================================================================
-  const [isOrderModalOpen, setIsOrderModalOpen] = useState<boolean>(false);
-  const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
   const [billingOrderId, setBillingOrderId] = useState<string | null>(null);
 
   // =========================================================================
   // ESTADOS: 3. CLIENTES (PF / PJ)
   // =========================================================================
-  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
-  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
 
   // =========================================================================
   // ESTADOS: 4. GESTÃO COMERCIAL (METAS & TABELAS DE PREÇOS)
@@ -351,8 +359,7 @@ export const Sales: React.FC = () => {
   // HANDLERS: COTAÇÕES & PROPOSTAS COMERCIAIS
   // =========================================================================
   const handleOpenQuoteModal = (quote?: SalesQuote) => {
-    setEditingQuote(quote || null);
-    setIsQuoteModalOpen(true);
+    navigate(`/vendas/cotacoes/${quote?.id || 'novo'}`, { state: { returnTo: '/vendas?view=quotes' } });
   };
 
   const handleConvertToOrder = (quote: SalesQuote) => {
@@ -406,8 +413,7 @@ export const Sales: React.FC = () => {
   // HANDLERS: PEDIDOS DE VENDA & WORKFLOW
   // =========================================================================
   const handleOpenOrderModal = (order?: SalesOrder) => {
-    setEditingOrder(order || null);
-    setIsOrderModalOpen(true);
+    navigate(`/vendas/pedidos/${order?.id || 'novo'}`, { state: { returnTo: '/vendas?view=orders' } });
   };
 
   const handleUpdateQuoteStatus = async (quote: SalesQuote, newStatus: string) => {
@@ -625,8 +631,7 @@ export const Sales: React.FC = () => {
   // HANDLERS: CLIENTES (PF / PJ)
   // =========================================================================
   const handleOpenCustomerModal = (customer?: Customer) => {
-    setEditingCustomer(customer || null);
-    setIsCustomerModalOpen(true);
+    navigate(`/vendas/clientes/${customer?.id || 'novo'}`, { state: { returnTo: '/vendas?view=customers' } });
   };
 
   useRecordDeepLink({
@@ -661,7 +666,7 @@ export const Sales: React.FC = () => {
     records: salesReturns,
     onOpen: (salesReturn) => {
       setActiveTab('post_sales');
-      setSelectedReturn(salesReturn);
+      navigate('/vendas/devolucoes/' + salesReturn.id);
     },
   });
 
@@ -717,7 +722,8 @@ export const Sales: React.FC = () => {
   // =========================================================================
   // HANDLERS: GESTÃO COMERCIAL (METAS & TABELAS)
   // =========================================================================
-  const handleOpenGoalModal = async () => {
+  const handleOpenGoalModal = async (hydrate = false) => {
+    if (!hydrate) { navigate('/vendas/metas/novo?year=' + yearFilter); return; }
     setModalError(null);
     const firstSeller = sellers[0];
     setGoalSellerId(firstSeller?.id || '');
@@ -741,7 +747,7 @@ export const Sales: React.FC = () => {
     setIsSaving(true);
     setModalError(null);
     try {
-      await salesService.createSalesGoal({
+      const created = await salesService.createSalesGoal({
         user_id: goalSellerId,
         seller_name: goalSellerName.trim(),
         month: Number(goalMonth),
@@ -751,6 +757,7 @@ export const Sales: React.FC = () => {
       });
       setIsGoalModalOpen(false);
       triggerSuccess("Meta comercial cadastrada com sucesso!");
+      navigate('/vendas/metas/' + created.id, { replace: true });
       loadAllData();
     } catch (err: any) {
       setModalError(formatApiError(err, "Erro ao cadastrar meta comercial."));
@@ -789,7 +796,7 @@ export const Sales: React.FC = () => {
     setIsSaving(true);
     setModalError(null);
     try {
-      await salesService.createPriceTable({
+      const created = await salesService.createPriceTable({
         name: priceTableName.trim(),
         description: priceTableDesc.trim() || undefined,
         is_default: priceTableIsDefault,
@@ -802,6 +809,7 @@ export const Sales: React.FC = () => {
       });
       setIsPriceTableModalOpen(false);
       triggerSuccess("Tabela de preços cadastrada com sucesso!");
+      navigate('/vendas/tabelas-de-precos/' + created.id, { replace: true });
       loadAllData();
     } catch (err: any) {
       setModalError(formatApiError(err, "Erro ao cadastrar tabela de preços."));
@@ -833,7 +841,8 @@ export const Sales: React.FC = () => {
   // =========================================================================
   // HANDLERS: PÓS-VENDA
   // =========================================================================
-  const handleOpenReturnModal = () => {
+  const handleOpenReturnModal = (hydrate = false) => {
+    if (!hydrate) { navigate('/vendas/devolucoes/novo'); return; }
     setModalError(null);
     setRetCustomerName('');
     setRetType('DEVOLUCAO');
@@ -860,7 +869,7 @@ export const Sales: React.FC = () => {
     try {
       const q = Math.max(1, parseInt(retQuantity) || 1);
       const p = safeNumber(retUnitPrice);
-      await salesService.createSalesReturn({
+      const created = await salesService.createSalesReturn({
         customer_name: retCustomerName.trim(),
         return_type: retType,
         reason: retReason.trim(),
@@ -875,6 +884,7 @@ export const Sales: React.FC = () => {
       });
       setIsReturnModalOpen(false);
       triggerSuccess("Registro de pós-venda processado com sucesso!");
+      navigate('/vendas/devolucoes/' + created.id, { replace: true });
       loadAllData();
     } catch (err: any) {
       setModalError(formatApiError(err, "Erro ao registrar devolução/troca."));
@@ -1014,9 +1024,50 @@ export const Sales: React.FC = () => {
     });
   };
 
+  const hydrateRecord = useRef<() => Promise<void>>(async () => {});
+  hydrateRecord.current = async () => {
+    if (!recordId || !recordKind) return;
+      try {
+        if (recordId === 'novo') {
+          if (recordKind === 'metas') { setYearFilter(Number(searchParams.get('year')) || new Date().getFullYear()); await handleOpenGoalModal(true); }
+          else if (recordKind === 'tabelas-de-precos') setIsPriceTableModalOpen(true);
+          else handleOpenReturnModal(true);
+        } else if (recordKind === 'metas') {
+          const item = (await salesService.getSalesGoals(undefined, true)).find(row => row.id === recordId);
+          if (!item) throw new Error('Meta não encontrada.'); setSelectedGoal(item);
+        } else if (recordKind === 'tabelas-de-precos') {
+          const item = (await salesService.getPriceTables(true)).find(row => row.id === recordId);
+          if (!item) throw new Error('Tabela não encontrada.'); setSelectedTable(item);
+        } else {
+          const item = (await salesService.getSalesReturns(true)).find(row => row.id === recordId);
+          if (!item) throw new Error('Devolução não encontrada.'); setSelectedReturn(item);
+        }
+        setRecordReady(true);
+      } catch (err) { setRecordError(formatApiError(err, 'Não foi possível abrir o registro.')); }
+  };
+  useEffect(() => {
+    if (!recordKind || !recordId || loading || recordInitialized.current) return;
+    recordInitialized.current = true;
+    setRecordError(null);
+    void hydrateRecord.current();
+  }, [recordKind, recordId, loading]);
+
   return (
     <div className="sales-page">
-      <div className="sales-layout">
+      {recordKind && !recordReady && <RecordFormPage title="Registro comercial" isLoading={!recordError} error={recordError} onBack={backToList} />}
+      {selectedGoal && <RecordFormPage title={selectedGoal.seller_name || 'Meta comercial'} eyebrow="Vendas · Metas" onBack={backToList}>
+        <RecordFormSection title="Meta registrada"><div className="ui-form"><div className="form-row cols-3">
+          <p>Competência: {selectedGoal.month}/{selectedGoal.year}</p><p>Meta: {fmtCurrency(selectedGoal.target_amount)}</p><p>Comissão: {fmtPercent(selectedGoal.commission_percent)}</p>
+        </div><p>Registro disponível para consulta. O fluxo atual permite cadastrar e excluir metas.</p></div></RecordFormSection>
+      </RecordFormPage>}
+      {selectedTable && <RecordFormPage title={selectedTable.name} eyebrow="Vendas · Tabelas de preços" description={selectedTable.description || undefined} onBack={backToList}>
+        <RecordFormSection title="Preços cadastrados"><p>{selectedTable.is_active ? 'Ativa' : 'Inativa'} · {selectedTable.is_default ? 'Tabela padrão' : 'Tabela adicional'}</p>
+          <div className="ui-table-wrap"><table className="ui-table"><thead><tr><th>Produto</th><th>Preço</th><th>Desconto</th></tr></thead>
+          <tbody>{selectedTable.items?.map(item => <tr key={item.id || item.product_id}><td>{item.product?.name || products.find(p => p.id === item.product_id)?.name || item.product_id}</td><td>{fmtCurrency(item.price)}</td><td>{fmtPercent(item.discount_percent)}</td></tr>)}</tbody></table></div>
+        </RecordFormSection>
+      </RecordFormPage>}
+
+      {!recordKind && <div className="sales-layout">
         {/* ================================================================= */}
         {/* 1. SIDEBAR LATERAL ESQUERDA (PADRÃO CORPORATIVO CONTROLB)         */}
         {/* ================================================================= */}
@@ -1209,7 +1260,7 @@ export const Sales: React.FC = () => {
 
               {activeTab === 'commercial' && (
                 <>
-                  <button className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsPriceTableModalOpen(true)}>
+                  <button className="btn-secondary ui-button ui-button--secondary" onClick={() => navigate('/vendas/tabelas-de-precos/novo')}>
                     <Layers size={16} /> Nova Tabela de Preços
                   </button>
                   <button className="btn-primary ui-button ui-button--primary" onClick={() => void handleOpenGoalModal()}>
@@ -1219,7 +1270,7 @@ export const Sales: React.FC = () => {
               )}
 
               {activeTab === 'post_sales' && (
-                <button className="btn-primary ui-button ui-button--primary" onClick={handleOpenReturnModal}>
+                <button className="btn-primary ui-button ui-button--primary" onClick={() => handleOpenReturnModal()}>
                   <Plus size={16} /> Registrar Devolução
                 </button>
               )}
@@ -2273,7 +2324,7 @@ export const Sales: React.FC = () => {
                                   onChange={() => goalSelection.toggleSelect(g.id)}
                                 />
                               </td>
-                              <td><strong>{g.seller_name || 'Vendedor'}</strong></td>
+                              <td><button className="ui-button ui-button--ghost" onClick={() => navigate('/vendas/metas/' + g.id)}>{g.seller_name || 'Vendedor'}</button></td>
                               <td>Mês {g.month}</td>
                               <td><strong>{fmtCurrency(g.target_amount)}</strong></td>
                               <td>{fmtPercent(g.commission_percent)}</td>
@@ -2349,7 +2400,7 @@ export const Sales: React.FC = () => {
                                   onChange={() => priceTableSelection.toggleSelect(t.id)}
                                 />
                               </td>
-                              <td><strong>{t.name}</strong></td>
+                              <td><button className="ui-button ui-button--ghost" onClick={() => navigate('/vendas/tabelas-de-precos/' + t.id)}>{t.name}</button></td>
                               <td>{t.description || '-'}</td>
                               <td>
                                 <span className={`status-pill ui-status ${t.is_default ? 'success' : 'info'}`}>
@@ -2446,12 +2497,12 @@ export const Sales: React.FC = () => {
                           tabIndex={0}
                           onClick={(event) => {
                             if ((event.target as HTMLElement).closest('button, a, input, label, .ui-selection-cell')) return;
-                            setSelectedReturn(r);
+                            navigate('/vendas/devolucoes/' + r.id);
                           }}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault();
-                              setSelectedReturn(r);
+                              navigate('/vendas/devolucoes/' + r.id);
                             }
                           }}
                         >
@@ -2708,39 +2759,17 @@ export const Sales: React.FC = () => {
             </div>
           )}
         </main>
-      </div>
+      </div>}
 
       {/* =================================================================== */}
       {/* MODAIS DO MÓDULO DE VENDAS                                          */}
       {/* =================================================================== */}
 
       {/* Modal 1: Cotação Comercial Unificada */}
-      <QuoteModal
-        isOpen={isQuoteModalOpen}
-        onClose={() => {
-          setIsQuoteModalOpen(false);
-          setEditingQuote(null);
-        }}
-        quote={editingQuote}
-        onSuccess={() => {
-          triggerSuccess(editingQuote ? "Cotação comercial atualizada com sucesso!" : "Cotação comercial emitida com sucesso!");
-          loadAllData(true);
-        }}
-      />
+
 
       {/* Modal 2: Novo Pedido de Venda Canônico (Wizard Multietapas) */}
-      <OrderModal
-        isOpen={isOrderModalOpen}
-        onClose={() => {
-          setIsOrderModalOpen(false);
-          setEditingOrder(null);
-        }}
-        order={editingOrder}
-        onSuccess={() => {
-          triggerSuccess(editingOrder ? "Pedido atualizado com sucesso!" : "Pedido de venda emitido com sucesso!");
-          loadAllData(true);
-        }}
-      />
+
 
       {/* Modal 3: Cadastro / Edição de Cliente Unificado */}
       <Modal
@@ -2840,23 +2869,12 @@ export const Sales: React.FC = () => {
         </div>
       </Modal>
 
-      <CustomerModal
-        isOpen={isCustomerModalOpen}
-        onClose={() => {
-          setIsCustomerModalOpen(false);
-          setEditingCustomer(null);
-        }}
-        customer={editingCustomer}
-        onSuccess={() => {
-          triggerSuccess(editingCustomer ? "Cliente atualizado com sucesso!" : "Cliente cadastrado com sucesso!");
-          loadAllData(true);
-        }}
-      />
+
 
       {/* Modal 4: Nova Meta Comercial */}
-      <Modal
+      <RecordEditorSurface page saving={isSaving}
         isOpen={isGoalModalOpen}
-        onClose={() => setIsGoalModalOpen(false)}
+        onClose={backToList}
         title="Nova Meta Comercial de Vendas"
         subtitle="Definição de objetivos por vendedor e comissão"
         size="sm"
@@ -2911,7 +2929,7 @@ export const Sales: React.FC = () => {
             />
           </div>
           <div className="modal-footer ui-form__actions">
-            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsGoalModalOpen(false)}>
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={backToList}>
               Cancelar
             </button>
             <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
@@ -2919,12 +2937,12 @@ export const Sales: React.FC = () => {
             </button>
           </div>
         </form>
-      </Modal>
+      </RecordEditorSurface>
 
       {/* Modal 5: Nova Tabela de Preços */}
-      <Modal
+      <RecordEditorSurface page saving={isSaving}
         isOpen={isPriceTableModalOpen}
-        onClose={() => setIsPriceTableModalOpen(false)}
+        onClose={backToList}
         title="Nova Tabela de Preços"
         subtitle="Precificação diferenciada por canal de venda"
         size="md"
@@ -3019,7 +3037,7 @@ export const Sales: React.FC = () => {
           </div>
 
           <div className="modal-footer ui-form__actions">
-            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsPriceTableModalOpen(false)}>
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={backToList}>
               Cancelar
             </button>
             <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
@@ -3027,12 +3045,12 @@ export const Sales: React.FC = () => {
             </button>
           </div>
         </form>
-      </Modal>
+      </RecordEditorSurface>
 
       {/* Modal 6: Registrar Devolução / Pós-Venda */}
-      <Modal
+      <RecordEditorSurface page saving={isSaving}
         isOpen={isReturnModalOpen}
-        onClose={() => setIsReturnModalOpen(false)}
+        onClose={backToList}
         title="Registrar Devolução ou Troca (Pós-Venda)"
         subtitle="Estorno financeiro e reestocagem auditada no Kardex"
         size="md"
@@ -3129,7 +3147,7 @@ export const Sales: React.FC = () => {
           </div>
 
           <div className="modal-footer ui-form__actions">
-            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setIsReturnModalOpen(false)}>
+            <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={backToList}>
               Cancelar
             </button>
             <button type="submit" className="btn-primary ui-button ui-button--primary" disabled={isSaving}>
@@ -3137,12 +3155,12 @@ export const Sales: React.FC = () => {
             </button>
           </div>
         </form>
-      </Modal>
+      </RecordEditorSurface>
 
       {/* CONFIRM MODAL GENÉRICO */}
-      <Modal
+      <RecordEditorSurface page saving={isSaving}
         isOpen={Boolean(selectedReturn)}
-        onClose={() => setSelectedReturn(null)}
+        onClose={backToList}
         title={`Pós-venda · ${selectedReturn?.return_type || ''}`}
         subtitle="Registro concluído preservado para auditoria; os vínculos abaixo abrem os objetos de origem."
         size="lg"
@@ -3173,11 +3191,11 @@ export const Sales: React.FC = () => {
             </div>
             <div className="modal-footer ui-form__actions">
               <DocumentLink documentId={selectedReturn.document_id}>Abrir na Central de Documentos</DocumentLink>
-              <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={() => setSelectedReturn(null)}>Fechar</button>
+              <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={backToList}>Fechar</button>
             </div>
           </div>
         )}
-      </Modal>
+      </RecordEditorSurface>
 
       <Modal
         isOpen={Boolean(logisticsDetail)}
@@ -3309,3 +3327,12 @@ export const Sales: React.FC = () => {
 };
 
 export default Sales;
+
+
+export function SalesRoute() {
+  const [params] = useSearchParams();
+  const ref = parseRecordReference(params);
+  const href = ref ? buildRecordHref(ref.type, ref.id) : null;
+  if (href?.startsWith('/vendas/')) return <Navigate to={href} replace />;
+  return <Sales />;
+}

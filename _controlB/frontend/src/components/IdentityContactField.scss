@@ -1,0 +1,16 @@
+.identity-contact-field {
+  width: 100%;
+  min-width: 0;
+
+  &__details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 12px 0;
+    dt { font-size: .8rem; opacity: .7; margin-bottom: 4px; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+  }
+
+  &__actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+  > small { line-height: 1.5; opacity: .75; }
+}

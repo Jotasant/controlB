@@ -42,6 +42,7 @@ with _maintenance_engine.connect() as connection:
 
 _test_url = _postgres_driver_url(_source_url, _test_database)
 os.environ["DATABASE_URL"] = _test_url.render_as_string(hide_password=False)
+os.environ["CHAT_AUDIO_WORKER_ENABLED"] = "false"
 
 # As importações abaixo precisam acontecer somente depois de DATABASE_URL apontar
 # para o banco efêmero. Elas também registram o catálogo ORM completo, tornando cada
@@ -81,6 +82,9 @@ def _drop_test_database() -> None:
     _cleaned_up = True
 
     engine.dispose()
+    if os.environ.get("CONTROLB_KEEP_TEST_DATABASE") == "1":
+        _maintenance_engine.dispose()
+        return
     with _maintenance_engine.connect() as connection:
         connection.execute(
             text(

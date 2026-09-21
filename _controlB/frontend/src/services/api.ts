@@ -9,6 +9,7 @@
  */
 
 import axios from 'axios';
+import { createRequestId } from '@/utils/requestId';
 import { 
   User, UserMe, Role, Organization, Permission, TokenResponse,
   Supplier, CostCenter, ProductCategory, Product, PurchaseRequest, PurchaseOrder,
@@ -503,6 +504,16 @@ export const identityService = {
     );
   },
 
+  async getContact(id: string): Promise<import('@/types').Contact> {
+    const response = await api.get(`/identity/contacts/${id}`);
+    return response.data;
+  },
+
+  async getContactDirectory(params: { search?: string; connection_id?: string; contact_id?: string; origin_module?: string; is_active?: boolean; page?: number; page_size?: number } = {}): Promise<{ items: import('@/types').ContactDirectoryEntry[]; total: number; page: number }> {
+    const response = await api.get('/identity/contact-directory', { params });
+    return response.data;
+  },
+
   async createContact(data: Partial<import('@/types').Contact>): Promise<import('@/types').Contact> {
     const response = await api.post<import('@/types').Contact>('/identity/contacts', data);
     cacheManager.invalidate('identity:contacts');
@@ -517,6 +528,12 @@ export const identityService = {
 
   async deleteContact(contactId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/identity/contacts/${contactId}`);
+    cacheManager.invalidate('identity:contacts');
+    return response.data;
+  },
+
+  async bulkDeleteContacts(contactIds: string[]): Promise<{ message: string; deleted_count: number }> {
+    const response = await api.post<{ message: string; deleted_count: number }>('/identity/contacts/bulk-delete', { contact_ids: contactIds });
     cacheManager.invalidate('identity:contacts');
     return response.data;
   },
@@ -897,6 +914,7 @@ export const purchasingService = {
     cnpj_cpf: string;
     state_registration?: string;
     contact_name?: string;
+    contact_id?: string | null;
     segments?: string;
     payment_terms?: string;
     min_order_amount?: number;
@@ -1879,11 +1897,19 @@ export const crmService = {
     company_name?: string;
     email?: string;
     phone?: string;
+    secondary_phone?: string;
+    position?: string;
+    segment?: string;
+    address_city?: string;
+    address_state?: string;
+    annual_revenue?: number;
     source?: string;
+    contact_origin_id?: string;
     status?: string;
     notes?: string;
     assigned_to_id?: string;
     customer_id?: string;
+    contact_id?: string;
     document?: string;
     person_type?: string;
   }): Promise<import('@/types').Lead> {
@@ -1901,6 +1927,35 @@ export const crmService = {
   async deleteLead(leadId: string): Promise<{ message: string }> {
     const response = await api.delete<{ message: string }>(`/crm/leads/${leadId}`);
     cacheManager.invalidate('crm:leads');
+    return response.data;
+  },
+
+  async convertLeadToCustomer(leadId: string): Promise<import('@/types').Customer> {
+    const response = await api.post<import('@/types').Customer>(`/crm/leads/${leadId}/convert-customer`);
+    cacheManager.invalidate('crm:leads');
+    cacheManager.invalidate('sales:customers');
+    return response.data;
+  },
+
+  async convertLeadToOpportunity(leadId: string): Promise<import('@/types').Opportunity> {
+    const response = await api.post<import('@/types').Opportunity>(`/crm/leads/${leadId}/convert-opportunity`);
+    cacheManager.invalidate('crm:leads');
+    cacheManager.invalidate('crm:opportunities');
+    cacheManager.invalidate('sales:customers');
+    return response.data;
+  },
+
+  async convertContactToLead(contactId: string): Promise<import('@/types').Lead> {
+    const response = await api.post<import('@/types').Lead>(`/crm/contacts/${contactId}/convert-lead`);
+    cacheManager.invalidate('crm:leads');
+    return response.data;
+  },
+
+  async convertContactToOpportunity(contactId: string): Promise<import('@/types').Opportunity> {
+    const response = await api.post<import('@/types').Opportunity>(`/crm/contacts/${contactId}/convert-opportunity`);
+    cacheManager.invalidate('crm:opportunities');
+    cacheManager.invalidate('crm:interactions');
+    cacheManager.invalidate('sales:customers');
     return response.data;
   },
 
@@ -2033,12 +2088,6 @@ export const crmService = {
     return response.data;
   },
 
-  async convertLeadToCustomer(leadId: string): Promise<import('@/types').Customer> {
-    const response = await api.post<import('@/types').Customer>(`/crm/leads/${leadId}/convert-customer`);
-    cacheManager.invalidate('crm:leads');
-    cacheManager.invalidate('sales:customers');
-    return response.data;
-  },
 
   async createQuoteFromOpportunity(oppId: string, items?: any[]): Promise<import('@/types').SalesQuote> {
     const response = await api.post<import('@/types').SalesQuote>(`/crm/opportunities/${oppId}/create-quote`, items ? { items } : {});
@@ -2985,4 +3034,222 @@ export const projectsService = {
       forceRefresh
     );
   }
+};
+
+export const chatService = {
+  async refreshContact(conversationId: string): Promise<import('@/types/chat').ChatConversation> {
+    return (await api.post(`/chat/conversations/${conversationId}/refresh-contact`)).data;
+  },
+  async openGroupParticipant(conversationId: string, messageId: string): Promise<import('@/types/chat').ChatConversation> {
+    const { data } = await api.post(`/chat/conversations/${conversationId}/participants/${messageId}/direct`);
+    return data;
+  },
+
+  async startConversation(connectionId: string, contactId: string): Promise<import('@/types/chat').ChatConversation> {
+    return (await api.post('/chat/conversations/start', { connection_id: connectionId, contact_id: contactId })).data;
+  },
+  async getAudioRuntime(): Promise<{ configured: boolean; worker_enabled: boolean }> {
+    return (await api.get('/chat/audio/runtime')).data;
+  },
+
+  async getAudio(id: string): Promise<Blob> {
+    return (await api.get(`/chat/messages/${id}/audio`, { responseType: 'blob' })).data;
+  },
+
+  async transcribe(id: string): Promise<import('@/types/chat').ChatMessage> {
+    return (await api.post(`/chat/messages/${id}/transcribe`)).data;
+  },
+
+  async getTranscription(id: string): Promise<import('@/types/chat').ChatMessage> {
+    return (await api.get(`/chat/messages/${id}/transcription`)).data;
+  },
+  async getEligibleUsers(): Promise<{ id: string; full_name: string }[]> {
+    const response = await api.get('/chat/eligible-users');
+    return response.data;
+  },
+  async updateConversation(id: string, payload: import('@/types/chat').ChatConversationUpdate): Promise<import('@/types/chat').ChatConversation> {
+    const response = await api.patch(`/chat/conversations/${id}`, payload);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async getConversationContact(id: string): Promise<import('@/types/chat').ChatContact> {
+    const response = await api.get(`/chat/conversations/${id}/contact`);
+    return response.data;
+  },
+
+  async getContactOrigins(): Promise<import('@/types/chat').ContactOrigin[]> {
+    const response = await api.get('/identity/contact-origins');
+    return response.data;
+  },
+
+  async createContactOrigin(payload: { name: string; description?: string | null; channel_type?: string; is_active?: boolean }): Promise<import('@/types/chat').ContactOrigin> {
+    const response = await api.post('/identity/contact-origins', payload);
+    return response.data;
+  },
+
+  async updateContactOriginRecord(id: string, payload: { name?: string; description?: string | null; channel_type?: string; is_active?: boolean }): Promise<import('@/types/chat').ContactOrigin> {
+    const response = await api.patch(`/identity/contact-origins/${id}`, payload);
+    return response.data;
+  },
+
+  async updateContactOrigin(id: string, payload: { origin_id?: string | null; name?: string }): Promise<import('@/types/chat').ChatContact> {
+    const response = await api.patch(`/chat/conversations/${id}/contact-origin`, payload);
+    cacheManager.invalidate('identity:contacts');
+    return response.data;
+  },
+  async getTeams(): Promise<{ id: string; name: string }[]> {
+    const response = await api.get<{ id: string; name: string }[]>('/chat/teams');
+    return response.data;
+  },
+  async getInstanceDetails(id: string): Promise<import('@/types/chat').ChatInstanceDetails> {
+    const response = await api.get(`/chat/connections/${id}/details`);
+    return response.data;
+  },
+
+  async syncHistory(id: string, page = 1, snapshotAt?: string): Promise<import('@/types/chat').ChatHistoryResult> {
+    const response = await api.post(`/chat/connections/${id}/sync`, {
+      page, page_size: 100, ...(snapshotAt ? { snapshot_at: snapshotAt } : {}),
+    });
+    return response.data;
+  },
+
+  async getProviders(): Promise<import('@/types/chat').ChatProvider[]> {
+    const response = await api.get<import('@/types/chat').ChatProvider[]>('/chat/providers');
+    return response.data;
+  },
+
+  async getChannels(): Promise<import('@/types/chat').ChatChannel[]> {
+    const response = await api.get<import('@/types/chat').ChatChannel[]>('/chat/channels');
+    return response.data;
+  },
+
+  async getMedia(id: string): Promise<Blob> {
+    return (await api.get(`/chat/messages/${id}/media`, { responseType: 'blob', timeout: 60000 })).data;
+  },
+  async getGallery(id: string, params: { page?: number; page_size?: number; search?: string; kind?: string }): Promise<import('@/types/chat').ChatMessagePage> {
+    return (await api.get(`/chat/conversations/${id}/media`, { params })).data;
+  },
+  async sendAttachment(id: string, file: File, caption: string, requestId: string): Promise<import('@/types/chat').ChatMessage> {
+    return (await api.post(`/chat/conversations/${id}/media`, file, { params: { client_request_id: requestId, filename: file.name, caption }, headers: { 'Content-Type': file.type || 'application/octet-stream' }, timeout: 90000 })).data;
+  },
+  async deleteMessage(id: string, everyone = false): Promise<{ deleted: boolean; error?: string }> {
+    return (await (everyone ? api.post(`/chat/messages/${id}/delete-for-everyone`) : api.delete(`/chat/messages/${id}`))).data;
+  },
+  async deleteChannel(id: string): Promise<void> {
+    await api.delete(`/chat/conversations/${id}`);
+  },
+  async replaceContactName(id: string): Promise<import('@/types/chat').ChatConversation> {
+    return (await api.post(`/chat/conversations/${id}/refresh-contact`, null, { params: { replace_manual: true } })).data;
+  },
+
+  async getNotifications(params: { since?: string; until?: string; page?: number } = {}): Promise<import('@/types/chat').ChatNotificationPage> {
+    return (await api.get('/chat/notifications', { params })).data;
+  },
+
+  async configureGroups(id: string): Promise<{ groups_enabled: boolean; synced: number }> {
+    return (await api.post(`/chat/connections/${id}/groups`)).data;
+  },
+
+  async getConnections(forceRefresh = false): Promise<import('@/types/chat').ChatConnection[]> {
+    return cacheManager.fetchWithCache(
+      'chat:connections',
+      async () => {
+        const response = await api.get<import('@/types/chat').ChatConnection[]>('/chat/connections');
+        return response.data;
+      },
+      30 * 1000,
+      forceRefresh,
+    );
+  },
+
+  async getConnection(id: string): Promise<import('@/types/chat').ChatConnection> {
+    const response = await api.get<import('@/types/chat').ChatConnection>(`/chat/connections/${id}`);
+    return response.data;
+  },
+
+  async createConnection(payload: import('@/types/chat').ChatConnectionCreatePayload): Promise<import('@/types/chat').ChatConnection> {
+    const response = await api.post<import('@/types/chat').ChatConnection>('/chat/connections', payload);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async updateConnection(id: string, payload: import('@/types/chat').ChatConnectionUpdatePayload): Promise<import('@/types/chat').ChatConnection> {
+    const response = await api.patch<import('@/types/chat').ChatConnection>(`/chat/connections/${id}`, payload);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async checkConnection(id: string): Promise<import('@/types/chat').ChatConnection> {
+    const response = await api.post<import('@/types/chat').ChatConnection>(`/chat/connections/${id}/check`);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async provisionInstance(id: string): Promise<import('@/types/chat').ChatInstanceProvision> {
+    const response = await api.post<import('@/types/chat').ChatInstanceProvision>(`/chat/connections/${id}/instance`);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async getPairing(id: string): Promise<import('@/types/chat').ChatPairing> {
+    const response = await api.post<import('@/types/chat').ChatPairing>(`/chat/connections/${id}/pairing`);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async configureWebhook(id: string): Promise<{ configured: boolean; url: string }> {
+    const response = await api.post<{ configured: boolean; url: string }>(`/chat/connections/${id}/webhook`);
+    return response.data;
+  },
+
+  async getConversations(params?: import('@/types/chat').ChatConversationFilters): Promise<import('@/types/chat').ChatConversationPage> {
+    const response = await api.get<import('@/types/chat').ChatConversationPage>('/chat/conversations', { params });
+    return response.data;
+  },
+
+  async getConversation(id: string): Promise<import('@/types/chat').ChatConversation> {
+    const response = await api.get<import('@/types/chat').ChatConversation>(`/chat/conversations/${id}`);
+    return response.data;
+  },
+
+  async markRead(id: string): Promise<import('@/types/chat').ChatConversation> {
+    const response = await api.post<import('@/types/chat').ChatConversation>(`/chat/conversations/${id}/read`);
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async getAvatar(conversationId: string): Promise<Blob> {
+    return (await api.get(`/chat/conversations/${conversationId}/avatar`, { responseType: 'blob' })).data;
+  },
+
+  async getMessages(conversationId: string, page = 1, pageSize = 50): Promise<import('@/types/chat').ChatMessagePage> {
+    const response = await api.get<import('@/types/chat').ChatMessagePage>(
+      `/chat/conversations/${conversationId}/messages`,
+      { params: { page, page_size: pageSize } },
+    );
+    return response.data;
+  },
+
+  async sendMessage(conversationId: string, text: string, clientRequestId?: string, replyToMessageId?: string | null): Promise<import('@/types/chat').ChatMessage> {
+    const response = await api.post<import('@/types/chat').ChatMessage>(
+      `/chat/conversations/${conversationId}/messages`,
+      {
+        client_request_id: clientRequestId || createRequestId(),
+        text,
+        ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+      },
+    );
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
+
+  async sendReaction(messageId: string, emoji: string, clientRequestId?: string): Promise<import('@/types/chat').ChatMessage> {
+    const response = await api.post<import('@/types/chat').ChatMessage>(
+      `/chat/messages/${messageId}/reactions`,
+      { client_request_id: clientRequestId || createRequestId(), emoji },
+    );
+    cacheManager.invalidate('chat:');
+    return response.data;
+  },
 };

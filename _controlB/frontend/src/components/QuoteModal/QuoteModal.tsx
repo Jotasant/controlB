@@ -1,9 +1,11 @@
+import { useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
 import {
   Plus, Trash2, DollarSign,
   AlertTriangle, Check, Package, Tag, Sparkles
 } from 'lucide-react';
 import { Modal } from '@/components/Modal/Modal';
+import { RecordEditorSurface } from '@/components/RecordForm/RecordEditorSurface';
 import { CustomerPicker } from '@/components/CustomerPicker/CustomerPicker';
 import { useToast } from '@/components/Toast/ToastContext';
 import { salesService, inventoryService, formatApiError } from '@/services/api';
@@ -12,13 +14,14 @@ import { formatCurrency } from '@/utils/formatters';
 import './QuoteModal.scss';
 
 export interface QuoteModalProps {
+  page?: boolean;
   isOpen: boolean;
   onClose: () => void;
   quote?: SalesQuote | null;
   fixedCustomerId?: string | null;
   fixedOpportunityId?: string | null;
   fixedCustomerName?: string | null;
-  onSuccess?: (quote: SalesQuote) => void;
+  onSuccess?: (quote: SalesQuote) => void | Promise<void>;
 }
 
 interface FormQuoteItem {
@@ -31,6 +34,7 @@ interface FormQuoteItem {
 }
 
 export const QuoteModal: React.FC<QuoteModalProps> = ({
+  page = false,
   isOpen,
   onClose,
   quote,
@@ -40,6 +44,8 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
   onSuccess
 }) => {
   const toast = useToast();
+  const navigate = useNavigate();
+  const [formTab, setFormTab] = useState('customer');
   const isEditing = Boolean(quote?.id);
 
   // Estados de Cabeçalho e Cliente
@@ -151,6 +157,18 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
     }
   };
 
+  useEffect(() => {
+    const id = quote?.customer_id || fixedCustomerId;
+    if (!isOpen || !id) return;
+    let cancelled = false;
+    void salesService.getCustomer(id).then(customer => {
+      if (cancelled) return;
+      setSelectedCustomer(customer);
+      if (!quote) { setCustomerName(customer.trade_name || customer.name); setCustomerDocument(customer.document || ''); setCustomerEmail(customer.email || ''); setCustomerPhone(customer.phone || ''); }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [isOpen, quote, fixedCustomerId]);
+
   // Gerenciamento de Itens
   const handleAddItem = () => {
     if (products.length === 0) {
@@ -212,10 +230,12 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim()) {
+      setFormTab('customer');
       setModalError('Informe ou selecione o cliente para a cotação.');
       return;
     }
     if (items.length === 0) {
+      setFormTab('items');
       setModalError('Adicione pelo menos um produto ou serviço à cotação.');
       return;
     }
@@ -223,10 +243,12 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
     // Validar se todos os itens têm produto selecionado
     for (let i = 0; i < items.length; i++) {
       if (!items[i].product_id) {
+      setFormTab('items');
         setModalError(`Selecione o produto no item #${i + 1}.`);
         return;
       }
       if (items[i].quantity <= 0) {
+      setFormTab('items');
         setModalError(`A quantidade no item #${i + 1} deve ser maior que zero.`);
         return;
       }
@@ -265,9 +287,9 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
       }
 
       if (onSuccess) {
-        onSuccess(savedQuote);
+        await onSuccess(savedQuote);
       }
-      onClose();
+      if (!page) onClose();
     } catch (err: unknown) {
       const msg = formatApiError(err, 'Erro ao salvar cotação comercial.');
       setModalError(msg);
@@ -288,8 +310,8 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
     try {
       const updated = await salesService.updateQuoteStatus(quote.id, newStatus);
       toast.success(`Cotação atualizada para status: ${newStatus}`);
-      if (onSuccess) onSuccess(updated);
-      onClose();
+      if (onSuccess) await onSuccess(updated);
+      if (!page) onClose();
     } catch (err) {
       const msg = formatApiError(err, 'Erro ao atualizar status da cotação');
       toast.error(msg);
@@ -309,8 +331,8 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
       const updated = await salesService.cancelQuote(quote.id, cancelReason.trim());
       toast.success(`Cotação #${updated.quote_number} cancelada com sucesso.`);
       setIsCancelModalOpen(false);
-      if (onSuccess) onSuccess(updated);
-      onClose();
+      if (onSuccess) await onSuccess(updated);
+      if (!page) onClose();
     } catch (err) {
       const msg = formatApiError(err, 'Erro ao cancelar cotação');
       toast.error(msg);
@@ -325,7 +347,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
     try {
       const createdOrder = await salesService.convertQuoteToOrder(quote.id);
       toast.success(`Cotação convertida com sucesso no Pedido de Venda #${createdOrder.order_number}!`);
-      onClose();
+      if (page) navigate('/vendas/pedidos/' + createdOrder.id); else onClose();
     } catch (err) {
       const msg = formatApiError(err, 'Erro ao converter cotação em pedido');
       toast.error(msg);
@@ -336,7 +358,9 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
 
   return (
     <>
-      <Modal
+      <RecordEditorSurface
+        page={page} saving={isSaving} resetKey={quote} activeTab={formTab} onTabChange={setFormTab}
+        tabs={[{"id":"customer","label":"Cliente"},{"id":"items","label":"Itens e valores"},{"id":"terms","label":"Condições comerciais"}]}
         isOpen={isOpen}
         onClose={onClose}
         title={isEditing ? `Cotação #${quote?.quote_number || ''}` : 'Nova Cotação Comercial'}
@@ -387,7 +411,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
           )}
 
         {/* 1. SEÇÃO DO CLIENTE */}
-        <div className="quote-modal-section">
+        <div data-record-tab="customer" hidden={page && formTab !== 'customer'} className="quote-modal-section">
           <div className="quote-modal-section__header">
             <Tag size={16} className="quote-modal-section__icon" />
             <h4 className="quote-modal-section__title">Dados do Cliente & Contato</h4>
@@ -451,7 +475,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
         </div>
 
         {/* 2. SEÇÃO DE ITENS E PRODUTOS */}
-        <div className="quote-modal-section">
+        <div data-record-tab="items" hidden={page && formTab !== 'items'} className="quote-modal-section">
           <div className="quote-modal-section__header-row">
             <div className="quote-modal-section__header">
               <Package size={16} className="quote-modal-section__icon" />
@@ -460,7 +484,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
             <button
               type="button"
               className="btn-add-item"
-              onClick={handleAddItem}
+              data-record-change onClick={handleAddItem}
             >
               <Plus size={14} /> Adicionar Produto
             </button>
@@ -473,7 +497,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
               <button
                 type="button"
                 className="btn-add-first-item"
-                onClick={handleAddItem}
+                data-record-change onClick={handleAddItem}
               >
                 <Plus size={14} /> Adicionar Primeiro Produto
               </button>
@@ -549,7 +573,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
                           <button
                             type="button"
                             className="btn-remove-row"
-                            onClick={() => handleRemoveItem(idx)}
+                            data-record-change onClick={() => handleRemoveItem(idx)}
                             title="Remover item"
                           >
                             <Trash2 size={15} />
@@ -565,7 +589,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
         </div>
 
         {/* 3. SEÇÃO DE CONDIÇÕES COMERCIAIS & RESUMO */}
-        <div className="quote-modal-section">
+        <div data-record-tab="terms" hidden={page && formTab !== 'terms'} className="quote-modal-section">
           <div className="quote-modal-section__header">
             <DollarSign size={16} className="quote-modal-section__icon" />
             <h4 className="quote-modal-section__title">Condições Comerciais & Totais</h4>
@@ -741,7 +765,7 @@ export const QuoteModal: React.FC<QuoteModalProps> = ({
           </div>
         </div>
       </form>
-    </Modal>
+    </RecordEditorSurface>
 
     {/* SUBMODAL DE JUSTIFICATIVA DE CANCELAMENTO */}
     {isCancelModalOpen && (

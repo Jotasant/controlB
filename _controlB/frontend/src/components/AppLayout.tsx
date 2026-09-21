@@ -9,13 +9,16 @@
 import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
+import { ChatShell } from '@/components/ChatWidget/ChatWidget';
 
 export const AppLayout: React.FC = () => {
   return (
-    <div className="app-root-layout">
-      <Navbar />
-      <Outlet />
-    </div>
+    <ChatShell>
+      <div className="app-root-layout">
+        <Navbar />
+        <Outlet />
+      </div>
+    </ChatShell>
   );
 };
 

@@ -12,8 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Numeric, String, Table, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Numeric, String, Table, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
@@ -164,6 +164,19 @@ class User(Base):
 # 5. MODELO CONTATO / PARCEIRO UNIFICADO (Contact - Padrão Odoo res.partner)
 # ==============================================================================
 
+class ContactOrigin(Base):
+    __tablename__ = "contact_origin"
+    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_contact_origin_name"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    channel_type: Mapped[str] = mapped_column(String(50), default="OTHER", server_default="OTHER", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class Contact(Base):
     """
     Tabela 'contact' - Cadastro Unificado de Parceiros e Contatos (Padrão Odoo res.partner).
@@ -174,6 +187,7 @@ class Contact(Base):
     - Interlocutores/Contatos Institucionais (position, mobile, etc.)
     """
     __tablename__ = "contact"
+    __table_args__ = (UniqueConstraint("organization_id", "normalized_phone", name="uq_contact_org_phone"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
@@ -186,11 +200,16 @@ class Contact(Base):
 
     # Interlocutor / Pessoa de contato institucional
     full_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    name_manually_set: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     position: Mapped[str | None] = mapped_column(String(100), nullable=True)  # Cargo / Função
 
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     mobile: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    normalized_phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    contact_origin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contact_origin.id", ondelete="SET NULL"))
+    first_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Endereço
     address_street: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -257,3 +276,24 @@ class Team(Base):
     organization: Mapped["Organization"] = relationship(back_populates="teams")
     leader: Mapped["User | None"] = relationship(foreign_keys=[leader_id], lazy="selectin")
     members: Mapped[list["User"]] = relationship(secondary=team_member, back_populates="teams", lazy="selectin")
+
+
+class ContactIdentifier(Base):
+    __tablename__ = "contact_identifier"
+    __table_args__ = (UniqueConstraint("organization_id", "kind", "value", name="uq_contact_identifier_org_value"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    contact_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("contact.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    original_value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ContactMigrationRun(Base):
+    __tablename__ = "contact_migration_run"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
+    backup_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="APPLIED", nullable=False)
+    journal: Mapped[dict] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

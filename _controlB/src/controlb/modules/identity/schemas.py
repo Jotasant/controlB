@@ -256,6 +256,7 @@ class ContactCreate(BaseModel):
 
 
 class ContactUpdate(BaseModel):
+    contact_origin_id: uuid.UUID | None = None
     person_type: str | None = None
     document: str | None = None
     name: str | None = None
@@ -285,6 +286,10 @@ class ContactUpdate(BaseModel):
 
 
 class ContactResponse(ContactBase):
+    contact_origin_id: uuid.UUID | None = None
+    normalized_phone: str | None = None
+    first_contact_at: datetime | None = None
+    last_contact_at: datetime | None = None
     id: uuid.UUID
     organization_id: uuid.UUID
     created_at: datetime
@@ -347,4 +352,3 @@ class TeamResponse(TeamBase):
 
 class TeamMemberAddRequest(BaseModel):
     user_ids: list[uuid.UUID]
-

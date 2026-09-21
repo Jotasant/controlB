@@ -5,7 +5,7 @@ modules/sales/schemas.py - Schemas Pydantic do Módulo de Vendas & PDV
 import uuid
 from datetime import datetime, date
 from decimal import Decimal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import model_validator, BaseModel, ConfigDict, Field
 
 
 # ==============================================================================
@@ -20,6 +20,10 @@ class CustomerBase(BaseModel):
     state_registration: str | None = None
     email: str | None = None
     phone: str | None = None
+    secondary_phone: str | None = None
+    website: str | None = None
+    segment: str | None = None
+    contact_role: str | None = None
     address_street: str | None = None
     address_number: str | None = None
     address_neighborhood: str | None = None
@@ -45,6 +49,10 @@ class CustomerUpdate(BaseModel):
     state_registration: str | None = None
     email: str | None = None
     phone: str | None = None
+    secondary_phone: str | None = None
+    website: str | None = None
+    segment: str | None = None
+    contact_role: str | None = None
     address_street: str | None = None
     address_number: str | None = None
     address_neighborhood: str | None = None
@@ -59,6 +67,13 @@ class CustomerUpdate(BaseModel):
 
 
 class CustomerResponse(CustomerBase):
+    @model_validator(mode="before")
+    @classmethod
+    def identity_details(cls, value):
+        from controlb.modules.identity.contact_identity import contact_response
+        return contact_response(value, cls.model_fields, {"email":"email","phone":"phone","secondary_phone":"mobile","contact_role":"position"})
+
+
     id: uuid.UUID
     organization_id: uuid.UUID
     created_at: datetime

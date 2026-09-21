@@ -14,12 +14,13 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, Sun, Moon, ChevronDown, User,
   LayoutDashboard, Building2, Settings, UserCheck, ShoppingCart, Package,
-  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store, Files, Kanban
+  Layers, Landmark, ReceiptText, Users, ShoppingBag, Store, Files, Kanban, MessageCircle
 } from 'lucide-react';
 import { authService } from '@/services/api';
 import { useTheme } from '@/context/ThemeContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { Logo } from '@/components/Logo';
+import { useChatUi } from '@/components/ChatWidget/ChatContext';
 import './Navbar.scss';
 
 export const Navbar: React.FC = () => {
@@ -27,6 +28,7 @@ export const Navbar: React.FC = () => {
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
   const { user, hasPermission, hasAnyPermission } = usePermissions();
+  const { canAccess: canAccessChat, unreadCount, toggle: toggleChat } = useChatUi();
 
   // Estado do menu de perfil, configurações e módulos
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -82,7 +84,7 @@ export const Navbar: React.FC = () => {
   ]);
 
   // Verifica se está dentro de alguma rota de módulo para destacar o menu "Módulos"
-  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras', '/documentos', '/projetos'].some(path =>
+  const isModuleActive = ['/crm', '/vendas', '/pdv', '/faturamento', '/financeiro', '/estoque', '/compras', '/documentos', '/projetos', '/chat', '/contatos'].some(path =>
     location.pathname.startsWith(path)
   );
 
@@ -116,8 +118,11 @@ export const Navbar: React.FC = () => {
   ]);
 
   // O menu "Módulos" só é renderizado se o usuário tiver acesso a ao menos um módulo
+  const canConfigureChat = hasPermission('chat:manage_connectors');
+  const canAccessContacts = Boolean(user);
+  const canManageChat = canConfigureChat && canAccessChat;
   const canAccessAnyModule = canAccessCRM || canAccessSales || canAccessPOS ||
-    canAccessBilling || canAccessFinance || canAccessInventory || canAccessPurchasing || canAccessDocuments || canAccessProjects;
+    canAccessBilling || canAccessFinance || canAccessInventory || canAccessPurchasing || canAccessDocuments || canAccessProjects || canManageChat || canAccessContacts;
 
   return (
     <header className="slim-navbar">
@@ -274,6 +279,27 @@ export const Navbar: React.FC = () => {
                   </NavLink>
                 )}
 
+                {canManageChat && (
+                  <NavLink
+                    to="/chat/conexoes"
+                    className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                    onClick={() => setIsModulesOpen(false)}
+                  >
+                    <MessageCircle size={16} className="icon-module" />
+                    <div className="item-text">
+                      <span className="title">Chat</span>
+                      <span className="desc">Conexões e pareamento WhatsApp</span>
+                    </div>
+                  </NavLink>
+                )}
+
+                {canAccessContacts && <NavLink to="/contatos"
+                  className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                  onClick={() => setIsModulesOpen(false)}>
+                  <Users size={16} className="icon-module" />
+                  <div className="item-text"><span className="title">Contatos</span><span className="desc">Identity, WhatsApp e vínculos da organização</span></div>
+                </NavLink>}
+
                 {/* 📋 Projetos & Operações */}
                 {canAccessProjects && (
                   <NavLink
@@ -294,7 +320,7 @@ export const Navbar: React.FC = () => {
         )}
 
         {/* Menu Pai: Configurações com Dropdown (Ocultado se o usuário não tiver permissão) */}
-        {canAccessSettings && (
+        {(canAccessSettings || canConfigureChat) && (
           <div className="dropdown-wrapper" ref={configRef}>
             <button
               type="button"
@@ -309,7 +335,7 @@ export const Navbar: React.FC = () => {
             {/* Submenu Suspenso */}
             {isConfigOpen && (
               <div className="dropdown-popover">
-                <NavLink
+                {canAccessSettings && <NavLink
                   to="/cadastros"
                   className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
                   onClick={() => setIsConfigOpen(false)}
@@ -319,7 +345,14 @@ export const Navbar: React.FC = () => {
                     <span className="title">Identidade & Acessos</span>
                     <span className="desc">Usuários, Organizações e Cargos</span>
                   </div>
-                </NavLink>
+                </NavLink>}
+
+                {canConfigureChat && <NavLink to="/chat/conexoes"
+                  className={({ isActive }) => isActive ? 'popover-item active' : 'popover-item'}
+                  onClick={() => setIsConfigOpen(false)}>
+                  <Settings size={14} />
+                  <div className="item-text"><span className="title">Conectores</span><span className="desc">Configurar instâncias e equipes</span></div>
+                </NavLink>}
 
                 <div className="popover-item disabled">
                   <Settings size={14} />
@@ -336,6 +369,12 @@ export const Navbar: React.FC = () => {
 
       {/* 3. Ações da Direita (Tema + Perfil do Usuário) */}
       <div className="navbar-actions">
+        {canAccessChat && (
+          <button type="button" className="btn-theme-toggle" onClick={toggleChat}
+            title="Abrir conversas" aria-label={`Abrir conversas, ${unreadCount} não lidas`}>
+            <MessageCircle size={15} />
+          </button>
+        )}
         {/* Alternador de Tema (Dark / Light) */}
         <button
           type="button"

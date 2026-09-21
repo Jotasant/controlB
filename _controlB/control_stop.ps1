@@ -3,7 +3,7 @@
 # ==============================================================================
 # 1. Encerra processos nas portas 8000 (Backend) e 9090 (Frontend Vite).
 # 2. Encerra processos Python/Node remanescentes por padrao de linha de comando.
-# 3. Para os containers Nginx e PostgreSQL.
+# 3. Para os containers Nginx, Evolution API e PostgreSQL.
 # ==============================================================================
 
 $ProjectRoot = $PSScriptRoot
@@ -76,6 +76,17 @@ else {
         Write-Host "  -> Parando container nginx-proxy..." -ForegroundColor Yellow
         docker stop nginx-proxy | Out-Null
         Write-Host "[OK] Container nginx-proxy parado." -ForegroundColor Green
+    }
+
+    # Para os containers da Evolution API
+    $evoContainers = @("evolution_api", "evolution_postgres", "evolution_redis")
+    foreach ($evoName in $evoContainers) {
+        $evoStatus = docker inspect --format='{{.State.Running}}' $evoName 2>$null
+        if ($evoStatus -eq 'true') {
+            Write-Host "  -> Parando container $evoName..." -ForegroundColor Yellow
+            docker stop $evoName | Out-Null
+            Write-Host "[OK] Container $evoName parado." -ForegroundColor Green
+        }
     }
 
     # Para os containers do Docker Compose (PostgreSQL)

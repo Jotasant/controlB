@@ -93,11 +93,24 @@ class Lead(Base):
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("customer.id", ondelete="SET NULL"), index=True, nullable=True
     )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contact.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    
+    contact_origin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contact_origin.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    position: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    segment: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    address_city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    address_state: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    annual_revenue: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    secondary_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source: Mapped[str] = mapped_column(String(100), default="Indicação", nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="NEW", index=True, nullable=False)  # NEW, CONTACTED, QUALIFIED, CONVERTED, DISQUALIFIED
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -111,6 +124,8 @@ class Lead(Base):
 
     # Relacionamentos
     customer: Mapped["Customer | None"] = relationship(foreign_keys=[customer_id], lazy="select")
+    contact: Mapped["Contact | None"] = relationship(foreign_keys=[contact_id], lazy="select")
+    contact_origin: Mapped["ContactOrigin | None"] = relationship(foreign_keys=[contact_origin_id], lazy="select")
     document: Mapped["BusinessDocument"] = relationship(lazy="select")
     assigned_to: Mapped["User | None"] = relationship(foreign_keys=[assigned_to_id], lazy="select")
     opportunities: Mapped[list["Opportunity"]] = relationship(back_populates="lead", lazy="select")

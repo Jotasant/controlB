@@ -239,6 +239,33 @@ def convert_lead_to_customer(
     return service.convert_lead_to_customer(db, lead_id, current_user.organization_id, current_user)
 
 
+@router.post("/leads/{lead_id}/convert-opportunity", summary="Converter Lead em Oportunidade no Funil de Vendas")
+def convert_lead_to_opportunity(
+    lead_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.convert_lead_to_opportunity(db, lead_id, current_user.organization_id, current_user)
+
+
+@router.post("/contacts/{contact_id}/convert-lead", summary="Converter Contato (ex: WhatsApp) em Lead no CRM")
+def convert_contact_to_lead(
+    contact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.convert_contact_to_lead(db, contact_id, current_user.organization_id, current_user)
+
+
+@router.post("/contacts/{contact_id}/convert-opportunity", response_model=schemas.OpportunityResponse, status_code=status.HTTP_201_CREATED, summary="Converter Contato (ex: WhatsApp) em Oportunidade no CRM")
+def convert_contact_to_opportunity(
+    contact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user = Depends(identity_service.get_current_user)
+):
+    return service.convert_contact_to_opportunity(db, contact_id, current_user.organization_id, current_user=current_user)
+
+
 @router.get("/opportunities/{opp_id}/quotations", summary="Listar Cotações Vinculadas à Oportunidade")
 def list_opportunity_quotations(
     opp_id: uuid.UUID,

@@ -68,18 +68,16 @@ def create_supplier(db: Session, supplier_data: SupplierCreate) -> Supplier:
     """Cria e persiste um novo fornecedor no banco."""
     db_supplier = Supplier(
         organization_id=supplier_data.organization_id,
+        contact_id=supplier_data.contact_id,
         name=supplier_data.name,
         trade_name=supplier_data.trade_name,
         cnpj_cpf=supplier_data.cnpj_cpf,
         state_registration=supplier_data.state_registration,
-        contact_name=supplier_data.contact_name,
         segments=supplier_data.segments,
         payment_terms=supplier_data.payment_terms,
         min_order_amount=supplier_data.min_order_amount,
         anvisa_license=supplier_data.anvisa_license,
         notes=supplier_data.notes,
-        email=supplier_data.email,
-        phone=supplier_data.phone,
         address=supplier_data.address,
         city=supplier_data.city,
         state=supplier_data.state,
@@ -96,7 +94,8 @@ def update_supplier(db: Session, db_supplier: Supplier, supplier_data: SupplierU
     """Atualiza dados do fornecedor utilizando model_dump(exclude_unset=True)."""
     update_data = supplier_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
-        setattr(db_supplier, field, value)
+        if field not in {"contact_name", "email", "phone"}:
+            setattr(db_supplier, field, value)
     
     db.commit()
     db.refresh(db_supplier)

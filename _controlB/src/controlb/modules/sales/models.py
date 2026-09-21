@@ -20,6 +20,7 @@ import controlb.modules.crm.models  # noqa: F401
 
 if TYPE_CHECKING:
     from controlb.modules.crm.models import Opportunity
+    from controlb.modules.identity.models import Contact
 
 
 def utcnow() -> datetime:
@@ -36,6 +37,7 @@ class Customer(Base):
     Compartilhado e acessível por todos os módulos do ERP (Vendas, PDV, Faturamento, CRM).
     """
     __tablename__ = "customer"
+    identity_contact: Mapped["Contact | None"] = relationship("Contact", foreign_keys="[Customer.contact_id]", lazy="selectin")
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
@@ -49,6 +51,10 @@ class Customer(Base):
 
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    secondary_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    segment: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    contact_role: Mapped[str | None] = mapped_column(String(100), nullable=True)
     
     # Endereço
     address_street: Mapped[str | None] = mapped_column(String(255), nullable=True)

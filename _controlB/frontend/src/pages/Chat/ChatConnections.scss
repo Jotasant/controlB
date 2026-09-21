@@ -1,0 +1,29 @@
+.chat-connections-page {
+  .chat-sidebar-hint {
+    margin: auto 0.75rem 0;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.45;
+  }
+
+  .chat-provider-label {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+
+  .chat-url-cell {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+  }
+
+  .chat-status-pill {
+    &.is-connected { color: #10b981; }
+    &.is-connecting { color: #f59e0b; }
+    &.is-disconnected { color: var(--text-muted); }
+    &.is-error { color: #ef4444; }
+  }
+}

@@ -348,13 +348,24 @@ def get_customer(
     return customer
 
 
+def _normalize_phone_number(phone: str | None) -> str | None:
+    if not phone:
+        return None
+    digits = re.sub(r"\D", "", phone)
+    if not digits:
+        return None
+    if len(digits) in (10, 11) and not digits.startswith("55"):
+        return f"55{digits}"
+    return digits
+
+
 def create_customer(
     db: Session,
     organization_id: uuid.UUID,
     payload: schemas.CustomerCreate,
 ) -> models.Customer:
     """
-    Cadastra um cliente no módulo de Vendas e sincroniza o perfil unificado Contact em Identity.
+    Cadastra o cliente referenciando um contato existente, sem alterar o Identity.
     """
     doc_clean = payload.document.strip() if payload.document else ""
     if not doc_clean:
@@ -377,59 +388,12 @@ def create_customer(
             detail=f"Já existe um cliente cadastrado com o documento '{doc_clean}' ({existing.name}).",
         )
 
-    # 2. Sincroniza / Garante Contact unificado em Identity
-    from controlb.modules.identity import repository as identity_repo
-    from controlb.modules.identity import schemas as identity_schemas
-    contact = None
-    if payload.contact_id:
-        contact = identity_repo.get_contact_by_id(db, payload.contact_id, organization_id)
-        if contact:
-            contact.is_customer = True
-            db.flush()
-
-    if not contact:
-        contact = identity_repo.get_contact_by_document(db, doc_clean, organization_id)
-        if contact:
-            contact.is_customer = True
-            if not contact.name:
-                contact.name = name_clean
-            db.flush()
-        else:
-            contact_create = identity_schemas.ContactCreate(
-                person_type=payload.person_type,
-                document=doc_clean,
-                name=name_clean,
-                trade_name=payload.trade_name.strip() if payload.trade_name else None,
-                state_registration=payload.state_registration.strip() if payload.state_registration else None,
-                full_name=name_clean,
-                email=payload.email.strip() if payload.email else None,
-                phone=payload.phone.strip() if payload.phone else None,
-                address_street=payload.address_street,
-                address_number=payload.address_number,
-                address_neighborhood=payload.address_neighborhood,
-                address_city=payload.address_city,
-                address_state=payload.address_state,
-                address_zip_code=payload.address_zip_code,
-                is_customer=True,
-                is_supplier=False,
-                is_carrier=False,
-                origin_module="SALES",
-                credit_limit=payload.credit_limit,
-                is_active=payload.is_active,
-                notes=payload.notes,
-            )
-            contact = identity_repo.create_contact(db, organization_id, contact_create)
-
+    from controlb.modules.identity.contact_identity import reject_legacy_fields, validate_link
+    reject_legacy_fields(payload, ("email", "phone", "secondary_phone", "contact_role"))
+    validate_link(db, organization_id, payload.contact_id)
     payload.document = doc_clean
     payload.name = name_clean
-    cid = contact.id if contact else None
-
-    created = repository.create_customer(db, organization_id, payload, contact_id=cid)
-    if cid and not created.contact_id:
-        created.contact_id = cid
-        db.commit()
-        db.refresh(created)
-    return created
+    return repository.create_customer(db, organization_id, payload)
 
 
 def update_customer(
@@ -438,7 +402,7 @@ def update_customer(
     organization_id: uuid.UUID,
     payload: schemas.CustomerUpdate,
 ) -> models.Customer:
-    """Atualiza dados cadastrais de um cliente e mantém sincronismo com o Contact em Identity."""
+    """Atualiza o cliente; dados pessoais pertencem exclusivamente ao Identity."""
     customer = get_customer(db, customer_id, organization_id)
 
     if payload.document is not None:
@@ -465,32 +429,10 @@ def update_customer(
             )
         payload.name = name_clean
 
-    # Sincroniza com contact em Identity se existir
-    if customer.contact_id:
-        from controlb.modules.identity import repository as identity_repo
-        from controlb.modules.identity import schemas as identity_schemas
-        contact = identity_repo.get_contact_by_id(db, customer.contact_id, organization_id)
-        if contact:
-            contact_update = identity_schemas.ContactUpdate(
-                person_type=payload.person_type,
-                document=payload.document,
-                name=payload.name,
-                trade_name=payload.trade_name,
-                state_registration=payload.state_registration,
-                email=payload.email,
-                phone=payload.phone,
-                address_street=payload.address_street,
-                address_number=payload.address_number,
-                address_neighborhood=payload.address_neighborhood,
-                address_city=payload.address_city,
-                address_state=payload.address_state,
-                address_zip_code=payload.address_zip_code,
-                credit_limit=payload.credit_limit,
-                is_active=payload.is_active,
-                notes=payload.notes,
-            )
-            identity_repo.update_contact(db, contact, contact_update)
-
+    from controlb.modules.identity.contact_identity import reject_legacy_fields, validate_link
+    reject_legacy_fields(payload, ("email", "phone", "secondary_phone", "contact_role"))
+    if "contact_id" in payload.model_fields_set:
+        validate_link(db, organization_id, payload.contact_id)
     return repository.update_customer(db, customer, payload)
 
 

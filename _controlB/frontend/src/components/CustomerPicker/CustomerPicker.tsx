@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Building2, Check, ChevronDown, Loader2, Plus, Search, UserRound, X } from 'lucide-react';
 
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Modal } from '@/components/Modal/Modal';
 import { useToast } from '@/components/Toast/ToastContext';
 import { formatApiError, salesService } from '@/services/api';
 import type { Customer } from '@/types';
 
 import './CustomerPicker.scss';
+import { IdentityContactField } from '@/components/IdentityContactField';
 
 export interface CustomerPickerProps {
   value?: string | null;
@@ -23,8 +25,7 @@ interface CustomerDraft {
   document: string;
   name: string;
   trade_name: string;
-  email: string;
-  phone: string;
+  contact_id: string;
 }
 
 const EMPTY_DRAFT: CustomerDraft = {
@@ -32,8 +33,7 @@ const EMPTY_DRAFT: CustomerDraft = {
   document: '',
   name: '',
   trade_name: '',
-  email: '',
-  phone: '',
+  contact_id: '',
 };
 
 const displayName = (customer: Customer) => customer.trade_name || customer.name;
@@ -48,6 +48,18 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
   initialCustomer = null,
 }) => {
   const toast = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const returnedCustomer = useRef<string | null>(null);
+  const selectionCallback = useRef(onChange);
+  selectionCallback.current = onChange;
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('selectedCustomer');
+    if (!id || returnedCustomer.current === id) return;
+    let cancelled = false;
+    void salesService.getCustomer(id).then(customer => { if (!cancelled) { returnedCustomer.current = id; selectionCallback.current(customer); } }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [location.search]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [customers, setCustomers] = useState<Customer[]>(initialCustomer ? [initialCustomer] : []);
   const [query, setQuery] = useState('');
@@ -125,8 +137,7 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
         document: draft.document.trim(),
         name: draft.name.trim(),
         trade_name: draft.trade_name.trim() || undefined,
-        email: draft.email.trim() || undefined,
-        phone: draft.phone.trim() || undefined,
+        contact_id: draft.contact_id || null,
         credit_limit: 0,
         is_active: true,
       });
@@ -252,7 +263,8 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
                 className="customer-picker__new"
                 onClick={() => {
                   setDraft({ ...EMPTY_DRAFT, name: query.trim() });
-                  setCreateOpen(true);
+                  if (/^\/(crm|vendas)(\/|$)/.test(location.pathname)) navigate('/vendas/clientes/novo', { state: { returnTo: location.pathname + location.search, selectCustomerOnReturn: true, opportunityId: /^\/crm\/oportunidades\/(?!novo$)([^/]+)$/.exec(location.pathname)?.[1] } });
+                  else setCreateOpen(true);
                   setOpen(false);
                 }}
               >
@@ -325,25 +337,7 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
             </div>
           )}
 
-          <div className="ui-form__row">
-            <div className="ui-form__group">
-              <label htmlFor="customer-email">E-mail</label>
-              <input
-                id="customer-email"
-                type="email"
-                value={draft.email}
-                onChange={(event) => setDraft({ ...draft, email: event.target.value })}
-              />
-            </div>
-            <div className="ui-form__group">
-              <label htmlFor="customer-phone">Telefone / WhatsApp</label>
-              <input
-                id="customer-phone"
-                value={draft.phone}
-                onChange={(event) => setDraft({ ...draft, phone: event.target.value })}
-              />
-            </div>
-          </div>
+          <IdentityContactField value={draft.contact_id} onChange={(id) => setDraft({ ...draft, contact_id: id })} />
 
           <div className="ui-form__actions">
             <button
@@ -377,4 +371,3 @@ export const CustomerPicker: React.FC<CustomerPickerProps> = ({
     </>
   );
 };
-

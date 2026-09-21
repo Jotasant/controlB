@@ -34,7 +34,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
 from controlb.db import Base
 from controlb.modules.documents.models import BusinessDocument
@@ -48,6 +48,38 @@ def utcnow() -> datetime:
 # ==============================================================================
 # 1. CADASTROS DE APOIO — Tipos e Configurações
 # ==============================================================================
+
+class ExecutionTypeRevision(Base):
+    """Published snapshot. No update/delete endpoint; records pin this revision."""
+    __tablename__ = "execution_type_revision"
+    __table_args__ = (UniqueConstraint("organization_id", "kind", "type_id", "version", name="uq_execution_type_version"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    type_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration: Mapped[dict] = mapped_column(JSON, nullable=False)
+    workflow_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    checklist_snapshot: Mapped[list] = mapped_column(JSON, nullable=False)
+    published_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ExecutionRecordMixin:
+    type_revision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("execution_type_revision.id", ondelete="RESTRICT"))
+
+    @declared_attr
+    def type_revision(cls) -> Mapped[ExecutionTypeRevision | None]:
+        return relationship(ExecutionTypeRevision, foreign_keys=[cls.type_revision_id], lazy="selectin")
+
+    @property
+    def execution_schema(self) -> dict | None:
+        revision = self.type_revision
+        if not revision:
+            return None
+        return {"id": str(revision.id), "version": revision.version, "configuration": revision.configuration,
+                "workflow": revision.workflow_snapshot}
+
 
 class ProjectType(Base):
     """
@@ -73,6 +105,8 @@ class ProjectType(Base):
     color: Mapped[str] = mapped_column(String(20), default="#6366f1", nullable=False)
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     prefix: Mapped[str] = mapped_column(String(10), default="PRJ", nullable=False)
+    configuration: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    published_revision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("execution_type_revision.id", ondelete="RESTRICT"))
 
     default_workflow_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workflow_template.id", ondelete="SET NULL"), nullable=True
@@ -111,6 +145,8 @@ class WorkOrderType(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     color: Mapped[str] = mapped_column(String(20), default="#8b5cf6", nullable=False)
     prefix: Mapped[str] = mapped_column(String(10), default="OS", nullable=False)
+    configuration: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    published_revision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("execution_type_revision.id", ondelete="RESTRICT"))
 
     default_workflow_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("workflow_template.id", ondelete="SET NULL"), nullable=True
@@ -217,7 +253,7 @@ class WorkflowStage(Base):
 # 3. PROJETOS — Entidade Central do Módulo
 # ==============================================================================
 
-class Project(Base):
+class Project(ExecutionRecordMixin, Base):
     """
     Tabela 'project' - Projeto operacional.
 
@@ -444,7 +480,7 @@ class ProjectStageHistory(Base):
 # 4. ORDENS DE TRABALHO — Unidades de Execução
 # ==============================================================================
 
-class WorkOrder(Base):
+class WorkOrder(ExecutionRecordMixin, Base):
     """
     Tabela 'work_order' - Ordem de trabalho / serviço / produção.
 
@@ -870,6 +906,11 @@ class Checklist(Base):
     Pode ser instanciado a partir de um template ou criado avulso.
     """
     __tablename__ = "checklist"
+    __table_args__ = (UniqueConstraint("project_id", "engine_key", name="uq_project_engine_checklist"),
+                      UniqueConstraint("work_order_id", "engine_key", name="uq_order_engine_checklist"))
+
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("project.id", ondelete="SET NULL"))
+    engine_key: Mapped[str | None] = mapped_column(String(100))
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(

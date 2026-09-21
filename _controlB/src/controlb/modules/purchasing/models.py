@@ -9,6 +9,7 @@ Define a estrutura de dados relacional para:
 """
 
 import uuid
+from typing import TYPE_CHECKING
 from decimal import Decimal
 from datetime import datetime, timezone
 
@@ -32,6 +33,10 @@ from controlb.modules.documents.models import BusinessDocument
 from controlb.modules.inventory.models import Product, ProductCategory
 
 
+if TYPE_CHECKING:
+    from controlb.modules.identity.models import Contact
+
+
 def utcnow() -> datetime:
     """Função utilitária que retorna o horário atual com fuso horário UTC padronizado."""
     return datetime.now(timezone.utc)
@@ -46,9 +51,13 @@ class Supplier(Base):
     Tabela 'supplier' - Fornecedores homologados e parceiros de negócio.
     """
     __tablename__ = "supplier"
+    identity_contact: Mapped["Contact | None"] = relationship("Contact", foreign_keys="[Supplier.contact_id]", lazy="selectin")
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), nullable=False)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contact.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     trade_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     cnpj_cpf: Mapped[str] = mapped_column(String(100), nullable=False, index=True)

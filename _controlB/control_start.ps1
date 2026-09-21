@@ -1,7 +1,7 @@
 # ==============================================================================
 # control_start.ps1 - Inicializacao completa do ecossistema ControlB
 # ==============================================================================
-# 1. Sobe containers Docker (PostgreSQL e Nginx Proxy).
+# 1. Sobe containers Docker (PostgreSQL, Nginx Proxy e Evolution API).
 # 2. Aguarda o PostgreSQL inicializar.
 # 3. Executa migracoes do Alembic.
 # 4. Inicia o servidor Backend FastAPI (Uvicorn porta 8000).
@@ -70,7 +70,7 @@ if (-not $dockerReady) {
 Write-Host "[OK] Docker Engine operacional!" -ForegroundColor Green
 
 # ------------------------------------------------------------------------------
-# 2. SUBIR CONTAINERS DOCKER (POSTGRESQL E NGINX)
+# 2. SUBIR CONTAINERS DOCKER (POSTGRESQL, NGINX E EVOLUTION API)
 # ------------------------------------------------------------------------------
 Write-Host "`n2. Subindo containers do Docker (PostgreSQL e Nginx)..." -ForegroundColor Yellow
 Set-Location $ProjectRoot
@@ -93,6 +93,34 @@ else {
     Write-Host "[INFO] Criando e iniciando container nginx-proxy..." -ForegroundColor Yellow
     $NginxConfigPath = Join-Path (Split-Path $ProjectRoot -Parent) "nginx\nginx.conf"
     docker run -d --name nginx-proxy -p 80:80 -v "${NginxConfigPath}:/etc/nginx/nginx.conf:ro" nginx | Out-Null
+}
+
+# 2.1 Subir Evolution API (evolution_redis, evolution_postgres e evolution_api)
+Write-Host "`n2.1. Subindo container da Evolution API (Porta 8080)..." -ForegroundColor Yellow
+$evoDir = Join-Path $env:USERPROFILE "evolution-api"
+$evoCompose = Join-Path $evoDir "compose.yaml"
+
+if (Test-Path $evoCompose) {
+    docker compose --project-directory "$evoDir" -f "$evoCompose" up -d 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Evolution API e servicos dependentes iniciados via Docker Compose." -ForegroundColor Green
+    }
+    else {
+        Write-Host "[WARN] Falha ao subir Evolution API via Compose. Tentando docker start direto..." -ForegroundColor Yellow
+        docker start evolution_redis evolution_postgres evolution_api 2>$null | Out-Null
+        Write-Host "[OK] Containers da Evolution API iniciados diretamente." -ForegroundColor Green
+    }
+}
+else {
+    # Fallback para containers criados diretamente no Docker Engine
+    $evoContainers = @("evolution_redis", "evolution_postgres", "evolution_api")
+    foreach ($c in $evoContainers) {
+        $cStatus = docker inspect --format='{{.State.Running}}' $c 2>$null
+        if ($cStatus -ne 'true') {
+            docker start $c 2>$null | Out-Null
+        }
+    }
+    Write-Host "[OK] Containers da Evolution API iniciados." -ForegroundColor Green
 }
 
 # ------------------------------------------------------------------------------
@@ -153,6 +181,7 @@ Write-Host "-> Acesso Principal: http://localhost (Nginx Porta 80)" -ForegroundC
 Write-Host "-> Frontend Vite:    http://localhost:9090 (HMR Ativo)" -ForegroundColor Cyan
 Write-Host "-> Backend API:      http://localhost:8000" -ForegroundColor Cyan
 Write-Host "-> Swagger Docs:     http://localhost:8000/docs" -ForegroundColor Cyan
+Write-Host "-> Evolution API:    http://localhost:8080" -ForegroundColor Cyan
 Write-Host "-> PostgreSQL:       localhost:5433 (controlb)" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "Dica: Para parar todos os servicos, execute: .\control_stop" -ForegroundColor Yellow

@@ -4,7 +4,8 @@ import {
   Package, Truck, AlertTriangle, ShieldCheck, Plus, Trash2,
   FileText
 } from 'lucide-react';
-import { Modal } from '@/components/Modal/Modal';
+import { RecordEditorSurface } from '@/components/RecordForm/RecordEditorSurface';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { CustomerPicker } from '@/components/CustomerPicker/CustomerPicker';
 import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
 import { useToast } from '@/components/Toast/ToastContext';
@@ -14,10 +15,11 @@ import { formatCurrency } from '@/utils/formatters';
 import './OrderModal.scss';
 
 export interface OrderModalProps {
+  page?: boolean;
   isOpen: boolean;
   onClose: () => void;
   order?: SalesOrder | null;
-  onSuccess?: (order: SalesOrder) => void;
+  onSuccess?: (order: SalesOrder) => void | Promise<void>;
 }
 
 interface FormOrderItem {
@@ -36,12 +38,15 @@ interface FormOrderItem {
 }
 
 export const OrderModal: React.FC<OrderModalProps> = ({
+  page = false,
   isOpen,
   onClose,
   order,
   onSuccess
 }) => {
   const toast = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
   const isEditing = Boolean(order?.id);
 
   // Etapa atual do Wizard (1: Cliente, 2: Itens/Estoque, 3: Condições, 4: Resumo)
@@ -200,6 +205,14 @@ export const OrderModal: React.FC<OrderModalProps> = ({
       setDeliveryAddress('');
     }
   };
+
+  useEffect(() => {
+    const customerId = new URLSearchParams(location.search).get('selectedCustomer');
+    if (!page || !isOpen || !customerId || order) return;
+    let cancelled = false;
+    void salesService.getCustomer(customerId).then(customer => { if (!cancelled) handleCustomerSelect(customer); }).catch(err => toast.error(formatApiError(err, 'Não foi possível selecionar o cliente.')));
+    return () => { cancelled = true; };
+  }, [page, isOpen, location.search, order, toast]);
 
   const handleCustomerCreated = (newCust: Customer) => {
     setIsCustomerModalOpen(false);
@@ -366,7 +379,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   // Submissão Final do Pedido
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validateStep(1) || !validateStep(2) || !validateStep(3)) return;
+    for (const step of [1, 2, 3]) { if (!validateStep(step)) { setCurrentStep(step); return; } }
 
     setIsSaving(true);
     setModalError(null);
@@ -396,7 +409,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
           notes: payload.notes
         });
         toast.success(`Pedido #${updated.order_number} atualizado com sucesso!`);
-        if (onSuccess) onSuccess(updated);
+        if (onSuccess) await onSuccess(updated);
       } else {
         const created = await salesService.createOrder(payload);
         if (created.credit_status === 'PENDING') {
@@ -406,9 +419,9 @@ export const OrderModal: React.FC<OrderModalProps> = ({
         } else {
           toast.success(`Pedido #${created.order_number} emitido com sucesso!`);
         }
-        if (onSuccess) onSuccess(created);
+        if (onSuccess) await onSuccess(created);
       }
-      onClose();
+      if (!page) onClose();
     } catch (err: unknown) {
       const msg = formatApiError(err, 'Erro ao salvar pedido de venda.');
       setModalError(msg);
@@ -427,16 +440,18 @@ export const OrderModal: React.FC<OrderModalProps> = ({
 
   return (
     <>
-      <Modal
+      <RecordEditorSurface
+        page={page} saving={isSaving} resetKey={order} activeTab={String(currentStep)} onTabChange={(id) => setCurrentStep(Number(id))}
+        tabs={[{ id: '1', label: 'Cliente e crédito' }, { id: '2', label: 'Itens e estoque' }, { id: '3', label: 'Condições e entrega' }, { id: '4', label: 'Resumo' }]}
         isOpen={isOpen}
         onClose={onClose}
         title={isEditing ? `Editar Pedido #${order?.order_number}` : "Novo Pedido de Venda"}
-        subtitle="Wizard operacional: selecione o cliente, confira a disponibilidade física de estoque e formalize a venda."
+        subtitle="Dados do cliente, itens, condições comerciais e resumo do pedido."
         size="xl"
       >
         <div className="order-wizard">
           {/* STEPPER BAR */}
-          <div className="order-wizard__stepper" role="navigation" aria-label="Etapas do Pedido">
+          <div hidden={page} className="order-wizard__stepper" role="navigation" aria-label="Etapas do Pedido">
             <div className={`step-item ${currentStep === 1 ? 'active' : ''} ${currentStep > 1 ? 'completed' : ''}`}>
               <div className="step-item__number">1</div>
               <span className="step-item__label">Cliente & Crédito</span>
@@ -491,7 +506,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                       <button
                         type="button"
                         className="btn-new-cust ui-button ui-button--secondary"
-                        onClick={() => setIsCustomerModalOpen(true)}
+                        onClick={() => page ? navigate('/vendas/clientes/novo', { state: { returnTo: location.pathname + location.search, selectCustomerOnReturn: true } }) : setIsCustomerModalOpen(true)}
                         title="Cadastrar Novo Cliente"
                       >
                         <Plus size={15} /> Novo Cliente
@@ -594,7 +609,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                 <div className="order-step-pane__header">
                   <Package size={18} className="text-primary" />
                   <h4>2. Itens do Pedido & Disponibilidade de Estoque (Kardex)</h4>
-                  <button type="button" className="btn-add-item ui-button ui-button--primary" onClick={handleAddItem}>
+                  <button type="button" className="btn-add-item ui-button ui-button--primary" data-record-change onClick={handleAddItem}>
                     <Plus size={15} /> Adicionar Produto
                   </button>
                 </div>
@@ -603,7 +618,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                   <div className="empty-items-box">
                     <Package size={32} />
                     <p>Nenhum produto adicionado ao pedido.</p>
-                    <button type="button" className="btn-secondary ui-button ui-button--secondary" onClick={handleAddItem}>
+                    <button type="button" className="btn-secondary ui-button ui-button--secondary" data-record-change onClick={handleAddItem}>
                       <Plus size={15} /> Adicionar Primeiro Item
                     </button>
                   </div>
@@ -692,7 +707,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                                 <button
                                   type="button"
                                   className="btn-trash-row"
-                                  onClick={() => handleRemoveItem(idx)}
+                                  data-record-change onClick={() => handleRemoveItem(idx)}
                                   title="Remover item"
                                 >
                                   <Trash2 size={15} />
@@ -852,7 +867,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             {/* NAVEGAÇÃO DO WIZARD */}
             <div className="order-wizard__footer">
               <div className="footer-left">
-                {currentStep > 1 && (
+                {!page && currentStep > 1 && (
                   <button type="button" className="btn-wizard-prev ui-button ui-button--secondary" onClick={handlePrev} disabled={isSaving}>
                     <ChevronLeft size={16} /> Voltar
                   </button>
@@ -864,7 +879,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
                   Cancelar
                 </button>
 
-                {currentStep < 4 ? (
+                {!page && currentStep < 4 ? (
                   <button type="button" className="btn-wizard-next ui-button ui-button--primary" onClick={handleNext}>
                     <span>Próximo</span> <ChevronRight size={16} />
                   </button>
@@ -882,7 +897,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             </div>
           </form>
         </div>
-      </Modal>
+      </RecordEditorSurface>
 
       {/* Modal Embutido para Cadastrar Novo Cliente sem perder o Wizard */}
       <CustomerModal

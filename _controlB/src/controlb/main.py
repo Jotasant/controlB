@@ -9,8 +9,11 @@ Responsabilidades:
 5. Tratar e logar 100% de exceções do sistema (4xx, 422 validações, 5xx e tracebacks).
 """
 
+import asyncio
+import threading
 import time
 import traceback
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,13 +35,33 @@ from controlb.modules.finance.api import router as finance_router
 from controlb.modules.documents.api import router as documents_router
 from controlb.modules.projects.api import router as projects_router
 from controlb.modules.chat.api import router as chat_router
+from controlb.modules.identity.messaging import router as contact_directory_router
 
 
 # Carrega as configurações centralizadas
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(app):
+    from controlb.modules.chat.audio import run_worker
+
+    stop = threading.Event()
+    worker = None
+    if settings.chat_audio_worker_enabled:
+        worker = threading.Thread(target=run_worker, args=(stop,), daemon=True, name="chat-audio")
+        worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        if worker:
+            await asyncio.to_thread(worker.join, 2)
+
+
 # 1. Instanciação da aplicação FastAPI
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.app_name,
     version="0.1.0",
     description="API do ecossistema ControlB para compras, estoque, CRM, vendas, faturamento, financeiro e projetos & operações.",
@@ -151,5 +174,6 @@ app.include_router(finance_router)
 app.include_router(documents_router)
 app.include_router(projects_router)
 app.include_router(chat_router)
+app.include_router(contact_directory_router)
 
 logger.info("🚀 Sistema ControlB API inicializado com sucesso e pronto para requisições.")

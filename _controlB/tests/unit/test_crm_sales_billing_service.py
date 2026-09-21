@@ -27,7 +27,9 @@ from controlb.modules.documents.models import (
 from controlb.modules.finance import service as finance_service
 from controlb.modules.finance import schemas as finance_schemas
 from controlb.modules.finance.models import FiscalDocument, Payable
-from controlb.modules.identity.models import Organization, Permission, Role, User
+from controlb.modules.identity import schemas as identity_schemas
+from controlb.modules.identity import service as identity_service
+from controlb.modules.identity.models import Contact, Organization, Permission, Role, User
 from controlb.modules.inventory.models import (
     InventoryReceipt,
     Product,
@@ -121,25 +123,23 @@ def test_crm_lead_and_opportunity_pipeline_flow(db: Session, mock_org: Organizat
     assert lead.id is not None
     assert lead.document_id is not None
     assert lead.name == "Hospital São Lucas"
-    assert lead.customer_id is not None  # Integrado automaticamente com Vendas!
+    assert lead.customer_id is None  # Lead inicial não exige cliente pré-cadastrado
+    assert lead.contact_id is not None  # Contato criado/vinculado no Identity
 
-    # 2. Cria Oportunidade no Pipeline
-    opp = crm_service.create_opportunity(
+    # 2. Converte Lead em Oportunidade no Pipeline (cria cliente e contato sem duplicidade)
+    opp = crm_service.convert_lead_to_opportunity(
         db,
+        lead.id,
         mock_org.id,
-        crm_schemas.OpportunityCreate(
-            lead_id=lead.id,
-            customer_id=lead.customer_id,
-            title="Fornecimento Mensal de Insumos",
-            customer_name="Hospital São Lucas",
-            estimated_amount=Decimal("50000.00"),
-            probability_percent=80,
-            expected_closing_date=date.today() + timedelta(days=15),
-            stage="PROPOSAL"
-        )
+        title="Fornecimento Mensal de Insumos",
+        estimated_amount=Decimal("50000.00"),
+        probability_percent=80,
+        expected_closing_date=date.today() + timedelta(days=15),
+        stage="PROPOSAL"
     )
     assert opp.stage == "PROPOSAL"
     assert opp.document_id is not None
+    assert opp.customer_id is not None
     assert opp.customer_id == lead.customer_id
     assert opp.estimated_amount == Decimal("50000.00")
 
@@ -1316,7 +1316,6 @@ def test_identity_contact_and_sales_customer_relationship(db: Session, mock_org:
             name="Hospital Alvorada Diagnósticos S.A.",
             trade_name="Hospital Alvorada",
             state_registration="123456789",
-            email="contato@hospitalalvorada.com.br",
             credit_limit=Decimal("50000.00")
         )
     )
@@ -2098,7 +2097,7 @@ def test_crm_convert_lead_to_customer(db: Session, mock_org: Organization, mock_
     assert customer.id is not None
     assert customer.name == "Clínica Médica Martins Ltda"
     assert customer.person_type == "PJ"
-    assert customer.email == "roberta@clinicamartins.com.br"
+    assert sales_schemas.CustomerResponse.model_validate(customer).email == "roberta@clinicamartins.com.br"
     assert customer.contact_id is not None
 
     db.refresh(lead)
@@ -2191,7 +2190,7 @@ def test_crm_lead_conversion_to_customer_and_opportunity_quote_flow(db: Session,
     customer = crm_service.convert_lead_to_customer(db, lead.id, mock_org.id, mock_user)
     assert customer.id is not None
     assert customer.name == "Clínica Oftalmológica Visão Ltda"
-    assert customer.email == "roberto@visaoclinica.com.br"
+    assert sales_schemas.CustomerResponse.model_validate(customer).email == "roberto@visaoclinica.com.br"
     assert customer.contact_id is not None
 
     db.refresh(lead)
@@ -3281,3 +3280,66 @@ def test_identity_contact_partner_odoo_pattern_and_role_filtering(db, mock_org, 
             )
         )
     assert exc.value.status_code == 409
+
+
+def test_crm_lead_always_creates_contact_even_without_phone_or_email(
+    db: Session, mock_org: Organization, mock_user: User
+):
+    """Garante que todo Lead criado gera compulsoriamente um Contato no Identity."""
+    lead = crm_service.create_lead(
+        db,
+        mock_org.id,
+        crm_schemas.LeadCreate(
+            name="Lead Sem Telefone Nem Email",
+            company_name="Empresa Prospecção",
+            source="Prospecção Ativa",
+            notes="Identificado em evento de tecnologia",
+        ),
+    )
+    assert lead.id is not None
+    assert lead.contact_id is not None
+
+    # Verifica se o Contato realmente foi persistido no Identity
+    contact = db.get(Contact, lead.contact_id)
+    assert contact is not None
+    assert contact.name == "Empresa Prospecção"
+    assert contact.full_name == "Lead Sem Telefone Nem Email"
+    assert contact.organization_id == mock_org.id
+
+
+def test_crm_convert_contact_directly_to_opportunity(
+    db: Session, mock_org: Organization, mock_user: User
+):
+    """Valida o fluxo direto Contato/Chat -> Oportunidade, sem passagem obrigatória por Lead."""
+    # 1. Cria um Contato (simulando contato recebido via WhatsApp/Chat)
+    contact = identity_service.create_contact(
+        db,
+        mock_org.id,
+        identity_schemas.ContactCreate(
+            name="Carlos WhatsApp",
+            phone="11988887777",
+            email="carlos.whats@exemplo.com",
+        ),
+    )
+    assert contact.id is not None
+    assert contact.is_customer is False
+
+    # 2. Converte diretamente o Contato em Oportunidade
+    opp = crm_service.convert_contact_to_opportunity(
+        db,
+        contact.id,
+        mock_org.id,
+        title="Projeto Automação Comercial",
+        estimated_amount=Decimal("15000.00"),
+        current_user=mock_user,
+    )
+
+    assert opp.id is not None
+    assert opp.title == "Projeto Automação Comercial"
+    assert opp.estimated_amount == Decimal("15000.00")
+    assert opp.contact_id == contact.id
+    assert opp.customer_id is not None
+
+    # 3. Verifica se o Contato foi promovido a Cliente
+    db.refresh(contact)
+    assert contact.is_customer is True

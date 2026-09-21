@@ -41,6 +41,7 @@ import { useListPagination } from '@/hooks/useListPagination';
 import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
 import { useToast } from '@/components/Toast/ToastContext';
 import './Purchasing.scss';
+import { IdentityContactField } from '@/components/IdentityContactField';
 
 const ALLOWED_PURCHASING_MENUS = [
   'solicitacoes',
@@ -171,15 +172,13 @@ export const Purchasing: React.FC = () => {
   const [supplierTradeName, setSupplierTradeName] = useState('');
   const [supplierCnpj, setSupplierCnpj] = useState('');
   const [supplierStateRegistration, setSupplierStateRegistration] = useState('');
-  const [supplierContactName, setSupplierContactName] = useState('');
+  const [supplierContactId, setSupplierContactId] = useState('');
   const [supplierSegments, setSupplierSegments] = useState<string[]>([]);
   const [supplierCustomSegment, setSupplierCustomSegment] = useState('');
   const [supplierPaymentTerms, setSupplierPaymentTerms] = useState('30 DDL');
   const [supplierMinOrderAmount, setSupplierMinOrderAmount] = useState('0');
   const [supplierAnvisaLicense, setSupplierAnvisaLicense] = useState('');
   const [supplierNotes, setSupplierNotes] = useState('');
-  const [supplierEmail, setSupplierEmail] = useState('');
-  const [supplierPhone, setSupplierPhone] = useState('');
   const [supplierAddress, setSupplierAddress] = useState('');
   const [supplierCity, setSupplierCity] = useState('');
   const [supplierState, setSupplierState] = useState('');
@@ -655,15 +654,14 @@ export const Purchasing: React.FC = () => {
     setSupplierTradeName(sup.trade_name || '');
     setSupplierCnpj(sup.cnpj_cpf || '');
     setSupplierStateRegistration(sup.state_registration || '');
-    setSupplierContactName(sup.contact_name || '');
+    setSupplierContactId(sup.contact_id || '');
     setSupplierSegments(sup.segments ? sup.segments.split(',').map(s => s.trim()).filter(Boolean) : []);
     setSupplierCustomSegment('');
     setSupplierPaymentTerms(sup.payment_terms || '30 DDL');
     setSupplierMinOrderAmount(sup.min_order_amount !== undefined ? String(sup.min_order_amount) : '0');
     setSupplierAnvisaLicense(sup.anvisa_license || '');
     setSupplierNotes(sup.notes || '');
-    setSupplierEmail(sup.email || '');
-    setSupplierPhone(sup.phone || '');
+
     setSupplierAddress(sup.address || '');
     setSupplierCity(sup.city || '');
     setSupplierState(sup.state || '');
@@ -1102,15 +1100,14 @@ export const Purchasing: React.FC = () => {
       setSupplierTradeName('');
       setSupplierCnpj('');
       setSupplierStateRegistration('');
-      setSupplierContactName('');
+      setSupplierContactId('');
       setSupplierSegments([]);
       setSupplierCustomSegment('');
       setSupplierPaymentTerms('30 DDL');
       setSupplierMinOrderAmount('0');
       setSupplierAnvisaLicense('');
       setSupplierNotes('');
-      setSupplierEmail('');
-      setSupplierPhone('');
+
       setSupplierAddress('');
       setSupplierCity('');
       setSupplierState('');
@@ -1193,14 +1190,12 @@ export const Purchasing: React.FC = () => {
           trade_name: supplierTradeName || undefined,
           cnpj_cpf: supplierCnpj || '00.000.000/0000-00',
           state_registration: supplierStateRegistration || undefined,
-          contact_name: supplierContactName || undefined,
+          contact_id: supplierContactId || null,
           segments: supplierSegments.length > 0 ? supplierSegments.join(', ') : undefined,
           payment_terms: supplierPaymentTerms || undefined,
           min_order_amount: parseFloat(supplierMinOrderAmount) || 0,
           anvisa_license: supplierAnvisaLicense || undefined,
           notes: supplierNotes || undefined,
-          email: supplierEmail || undefined,
-          phone: supplierPhone || undefined,
           address: supplierAddress || undefined,
           city: supplierCity || undefined,
           state: supplierState || undefined,
@@ -4221,10 +4216,6 @@ export const Purchasing: React.FC = () => {
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Nome do Representante / Vendedor</label>
-                    <input type="text" value={supplierContactName} onChange={e => setSupplierContactName(e.target.value)} placeholder="Ex: Carlos Silva" />
-                  </div>
-                  <div className="form-group">
                     <label>Condição de Pagamento Padrão</label>
                     <input type="text" value={supplierPaymentTerms} onChange={e => setSupplierPaymentTerms(e.target.value)} placeholder="Ex: 30 DDL, 15/30/45 DDL, À Vista" />
                   </div>
@@ -4239,16 +4230,7 @@ export const Purchasing: React.FC = () => {
                   <span>4. Contato & Endereço</span>
                 </div>
 
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>E-mail Corporativo / Pedidos</label>
-                    <input type="email" value={supplierEmail} onChange={e => setSupplierEmail(e.target.value)} placeholder="pedidos@fornecedor.com.br" />
-                  </div>
-                  <div className="form-group">
-                    <label>Telefone / WhatsApp Comercial</label>
-                    <input type="text" value={supplierPhone} onChange={e => setSupplierPhone(e.target.value)} placeholder="(11) 98765-4321" />
-                  </div>
-                </div>
+                <IdentityContactField value={supplierContactId} onChange={setSupplierContactId} />
 
                 <div className="form-row">
                   <div className="form-group" style={{ flex: 2 }}>

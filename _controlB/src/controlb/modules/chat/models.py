@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Column,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
+    Table,
     Text,
     UniqueConstraint,
 )
@@ -24,9 +27,33 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from controlb.db import Base
 
+if TYPE_CHECKING:
+    from controlb.modules.identity.models import User
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+chat_team_member = Table(
+    "chat_team_member",
+    Base.metadata,
+    Column("team_id", ForeignKey("chat_team.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", ForeignKey("user.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+class ChatTeam(Base):
+    """Grupo de acesso próprio de uma instância, independente das equipes comerciais."""
+
+    __tablename__ = "chat_team"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organization.id", ondelete="CASCADE")
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    members: Mapped[list[User]] = relationship(secondary=chat_team_member, lazy="selectin")
 
 
 class ChatConnection(Base):
@@ -34,6 +61,7 @@ class ChatConnection(Base):
 
     __tablename__ = "chat_connection"
     __table_args__ = (
+        UniqueConstraint("team_id", name="uq_chat_connection_own_team"),
         UniqueConstraint("id", "organization_id", name="uq_chat_connection_id_org"),
         UniqueConstraint(
             "organization_id",
@@ -59,6 +87,19 @@ class ChatConnection(Base):
     credentials_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     credentials_hint: Mapped[str | None] = mapped_column(String(50), nullable=True)
     configuration: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    groups_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_team.id", ondelete="RESTRICT"), index=True
+    )
+    instance_phone: Mapped[str | None] = mapped_column(String(40))
+    provider_instance_id: Mapped[str | None] = mapped_column(String(255))
+    transcription_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    sync_checkpoint_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_page: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    recovery_pending: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     status: Mapped[str] = mapped_column(String(30), default="DISCONNECTED", nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -76,6 +117,12 @@ class ChatConnection(Base):
     conversations: Mapped[list[ChatConversation]] = relationship(
         back_populates="connection", cascade="all, delete-orphan", lazy="noload"
     )
+    team: Mapped[ChatTeam | None] = relationship(lazy="selectin")
+
+    @property
+    def member_ids(self) -> list[uuid.UUID]:
+        return [member.id for member in self.team.members if member.is_active] if self.team else []
+
     webhook_events: Mapped[list[ChatWebhookEvent]] = relationship(
         back_populates="connection", cascade="all, delete-orphan", lazy="noload"
     )
@@ -95,7 +142,7 @@ class ChatConversation(Base):
         UniqueConstraint("id", "organization_id", name="uq_chat_conversation_id_org"),
         UniqueConstraint("connection_id", "external_chat_id", name="uq_chat_conversation_external"),
         CheckConstraint(
-            "status IN ('OPEN', 'CLOSED', 'ARCHIVED')",
+            "status IN ('OPEN', 'CLOSED')",
             name="ck_chat_conversation_status",
         ),
         CheckConstraint("unread_count >= 0", name="ck_chat_conversation_unread"),
@@ -115,8 +162,23 @@ class ChatConversation(Base):
     connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     external_chat_id: Mapped[str] = mapped_column(String(255), nullable=False)
     remote_phone: Mapped[str] = mapped_column(String(40), nullable=False)
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleared_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_team.id", ondelete="RESTRICT"), index=True
+    )
+    instance_phone: Mapped[str | None] = mapped_column(String(40))
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL")
+    )
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    avatar_blob: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    avatar_mime: Mapped[str | None] = mapped_column(String(100))
+    avatar_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     contact_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("contact.id", ondelete="SET NULL"), nullable=True
     )
@@ -138,6 +200,18 @@ class ChatConversation(Base):
     )
 
     connection: Mapped[ChatConnection] = relationship(back_populates="conversations")
+    assignee: Mapped[User | None] = relationship(
+        "User",
+        foreign_keys=[assigned_user_id],
+        lazy="selectin",
+        viewonly=True,
+        primaryjoin="and_(ChatConversation.assigned_user_id == User.id, ChatConversation.organization_id == User.organization_id)",
+    )
+
+    @property
+    def assigned_user_name(self) -> str | None:
+        return self.assignee.full_name if self.assignee else None
+
     messages: Mapped[list[ChatMessage]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
@@ -219,20 +293,44 @@ class ChatMessage(Base):
     conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_team.id", ondelete="RESTRICT"), index=True
+    )
+    instance_phone: Mapped[str | None] = mapped_column(String(40))
+    transcription: Mapped[str | None] = mapped_column(Text)
+    transcription_status: Mapped[str] = mapped_column(
+        String(30), default="NOT_REQUESTED", server_default="NOT_REQUESTED"
+    )
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
     message_type: Mapped[str] = mapped_column(String(30), default="TEXT", nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     media_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     media_mime_type: Mapped[str | None] = mapped_column(String(150), nullable=True)
     media_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    media_blob: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    media_sha256: Mapped[str | None] = mapped_column(String(64))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL")
+    )
+    revoke_status: Mapped[str | None] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sender_phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    sender_external_id: Mapped[str | None] = mapped_column(String(255))
+    notify_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     reply_to_message_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("chat_message.id", ondelete="SET NULL"), nullable=True
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    reply_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    reaction_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
+
+    @property
+    def reactions(self) -> list[dict[str, Any]]:
+        return [value for value in (self.reaction_data or {}).values() if value.get("emoji")]
+
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
@@ -248,6 +346,30 @@ class ChatMessage(Base):
     conversation: Mapped[ChatConversation] = relationship(
         back_populates="messages", foreign_keys=[conversation_id]
     )
+    author: Mapped[User | None] = relationship(
+        "User",
+        foreign_keys=[created_by_id],
+        lazy="selectin",
+        viewonly=True,
+        primaryjoin="and_(ChatMessage.created_by_id == User.id, ChatMessage.organization_id == User.organization_id)",
+    )
+
+    @property
+    def author_name(self) -> str | None:
+        return self.author.full_name if self.author else None
+
+
+class ChatReactionRequest(Base):
+    """Intenção durável: reações incertas nunca são reenviadas automaticamente."""
+
+    __tablename__ = "chat_reaction_request"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"))
+    message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_message.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"))
+    emoji: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ChatWebhookEvent(Base):

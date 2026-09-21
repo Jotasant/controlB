@@ -345,6 +345,17 @@ def delete_contact(
     return service.delete_contact(db, contact_id, current_user.organization_id)
 
 
+@router.post("/contacts/bulk-delete", status_code=status.HTTP_200_OK, summary="Excluir Múltiplos Contatos em Massa")
+def bulk_delete_contacts(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user = Depends(service.get_current_user)
+):
+    """Remove múltiplos contatos cadastrados de uma vez."""
+    contact_ids = [uuid.UUID(cid) for cid in payload.get("contact_ids", [])]
+    return service.bulk_delete_contacts(db, current_user.organization_id, contact_ids)
+
+
 # ==============================================================================
 # 7. ENDPOINTS DE EQUIPES E GRUPOS MULTIMODULARES (Team)
 # ==============================================================================

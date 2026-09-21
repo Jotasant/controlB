@@ -333,6 +333,17 @@ def get_contact_by_document(db: Session, document: str, organization_id: uuid.UU
 
 def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate) -> Contact:
     """Cria e persiste um novo contato/parceiro unificado."""
+    from .contact_identity import identifiers, lock_contacts, find_contact, claim_identifiers
+    lock_contacts(db, organization_id)
+    try:
+        keys = identifiers(data.phone, data.mobile, data.email)
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(422, str(exc)) from exc
+    existing = find_contact(db, organization_id, keys)
+    if existing:
+        from fastapi import HTTPException
+        raise HTTPException(409, f"Contato já cadastrado no Identity: {existing.id}.")
     new_id = uuid.uuid4()
     contact = Contact(
         id=new_id,
@@ -347,6 +358,8 @@ def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate)
         email=data.email.strip() if data.email else None,
         phone=data.phone.strip() if data.phone else None,
         mobile=data.mobile.strip() if data.mobile else None,
+        normalized_phone=next((value for kind, value in keys if kind == "PHONE"), None),
+        name_manually_set=True,
         address_street=data.address_street,
         address_number=data.address_number,
         address_neighborhood=data.address_neighborhood,
@@ -362,13 +375,28 @@ def create_contact(db: Session, organization_id: uuid.UUID, data: ContactCreate)
         notes=data.notes
     )
     db.add(contact)
+    claim_identifiers(db, contact, keys)
     db.commit()
     db.refresh(contact)
     return contact
 
 
 def update_contact(db: Session, contact: Contact, data: ContactUpdate) -> Contact:
-    """Atualiza dados cadastrais e perfis de um contato."""
+    """Atualiza o contato canônico e registra seus identificadores na mesma transação."""
+    from .contact_identity import identifiers, lock_contacts, find_contact, claim_identifiers
+    from fastapi import HTTPException
+    lock_contacts(db, contact.organization_id)
+    values = {field: getattr(data, field) if field in data.model_fields_set else getattr(contact, field)
+              for field in ("phone", "mobile", "email")}
+    try:
+        keys = identifiers(**values)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    existing = find_contact(db, contact.organization_id, keys)
+    if existing and existing.id != contact.id:
+        raise HTTPException(409, f"Contato já cadastrado no Identity: {existing.id}.")
+    claim_identifiers(db, contact, keys)
+    contact.normalized_phone = next((value for kind, value in keys if kind == "PHONE"), None)
     if data.person_type is not None:
         contact.person_type = data.person_type
     if data.document is not None:

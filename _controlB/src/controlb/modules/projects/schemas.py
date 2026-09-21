@@ -14,12 +14,14 @@ from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from controlb.modules.projects.engine_schema import TypeConfiguration
 
 # ==============================================================================
 # 1. PROJECT TYPE
 # ==============================================================================
 
 class ProjectTypeCreate(BaseModel):
+    configuration: TypeConfiguration | None = None
     name: str = Field(..., min_length=1, max_length=200)
     code: str = Field(..., min_length=1, max_length=50)
     description: str | None = None
@@ -29,6 +31,7 @@ class ProjectTypeCreate(BaseModel):
     default_workflow_id: uuid.UUID | None = None
 
 class ProjectTypeUpdate(BaseModel):
+    configuration: TypeConfiguration | None = None
     name: str | None = None
     code: str | None = None
     description: str | None = None
@@ -47,6 +50,8 @@ class ProjectTypeUpdate(BaseModel):
         return data
 
 class ProjectTypeResponse(BaseModel):
+    configuration: dict | None = None
+    published_revision_id: uuid.UUID | None = None
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -67,6 +72,7 @@ class ProjectTypeResponse(BaseModel):
 # ==============================================================================
 
 class WorkOrderTypeCreate(BaseModel):
+    configuration: TypeConfiguration | None = None
     name: str = Field(..., min_length=1, max_length=200)
     code: str = Field(..., min_length=1, max_length=50)
     description: str | None = None
@@ -75,6 +81,7 @@ class WorkOrderTypeCreate(BaseModel):
     default_workflow_id: uuid.UUID | None = None
 
 class WorkOrderTypeUpdate(BaseModel):
+    configuration: TypeConfiguration | None = None
     name: str | None = None
     code: str | None = None
     description: str | None = None
@@ -92,6 +99,8 @@ class WorkOrderTypeUpdate(BaseModel):
         return data
 
 class WorkOrderTypeResponse(BaseModel):
+    configuration: dict | None = None
+    published_revision_id: uuid.UUID | None = None
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -313,6 +322,8 @@ class ProjectTypeSummary(BaseModel):
     prefix: str
 
 class ProjectResponse(BaseModel):
+    type_revision_id: uuid.UUID | None = None
+    execution_schema: dict | None = None
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -443,6 +454,7 @@ class ProjectStageHistoryResponse(BaseModel):
 # ==============================================================================
 
 class WorkOrderCreate(BaseModel):
+    current_stage_id: uuid.UUID | None = None
     title: str = Field(..., min_length=1, max_length=500)
     description: str | None = None
     project_id: uuid.UUID | None = None
@@ -473,6 +485,7 @@ class WorkOrderCreate(BaseModel):
         return data
 
 class WorkOrderUpdate(BaseModel):
+    current_stage_id: uuid.UUID | None = None
     title: str | None = None
     name: str | None = None
     description: str | None = None
@@ -513,6 +526,9 @@ class WorkOrderStatusChange(BaseModel):
     notes: str | None = None
 
 class WorkOrderResponse(BaseModel):
+    type_revision_id: uuid.UUID | None = None
+    execution_schema: dict | None = None
+    current_stage_id: uuid.UUID | None = None
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     organization_id: uuid.UUID

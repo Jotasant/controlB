@@ -49,7 +49,15 @@ export default defineConfig({
         },
       },
       '/documents': 'http://localhost:8000',
-      '/chat': 'http://localhost:8000',
+      '/chat': {
+        target: 'http://localhost:8000',
+        bypass: (req) => {
+          const pathname = req.url?.split('?')[0];
+          if (pathname === '/chat' || pathname === '/chat/conexoes' || pathname?.startsWith('/chat/conexoes/')) {
+            return '/index.html';
+          }
+        },
+      },
       '/projects': {
         target: 'http://localhost:8000',
         changeOrigin: true,

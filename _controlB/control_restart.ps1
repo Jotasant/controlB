@@ -2,7 +2,7 @@
 # control_restart.ps1 - Reinicializacao automatica de todo o ecossistema ControlB
 # ==============================================================================
 # Executa a parada limpa (control_stop.ps1), aguarda 1 segundo e reinicia todos
-# os servicos (control_start.ps1), aplicando migracoes e atualizando codigo.
+# os servicos (control_start.ps1), incluindo Postgres, Nginx, Evolution API, Backend e Frontend.
 # ==============================================================================
 
 # Caminho absoluto da pasta raiz do projeto (_controlB)

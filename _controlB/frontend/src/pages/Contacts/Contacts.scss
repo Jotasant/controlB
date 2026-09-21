@@ -1,0 +1,136 @@
+.contacts-page {
+  color: var(--text-primary);
+  .contacts-filters { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-bottom: 1rem; }
+  .contacts-filters label { display: flex; flex: 1; min-width: 160px; flex-direction: column; gap: 0.35rem; font-size: 0.8rem; color: var(--text-secondary); }
+  .contacts-filters input, .contacts-filters select { color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.65rem; min-width: 0; }
+  .contacts-table-wrap { overflow: auto; border: 1px solid var(--border-subtle); border-radius: 10px; }
+  .contacts-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.82rem; }
+  .contacts-table th, .contacts-table td { padding: 0.8rem; border-bottom: 1px solid var(--border-subtle); }
+  .contacts-table th { background: var(--bg-surface-elevated); color: var(--text-secondary); white-space: nowrap; }
+  .contacts-table small { display: block; color: var(--text-muted); }
+  .contacts-table a { color: var(--accent-brand); font-weight: 600; }
+  .contacts-pagination { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.7rem; margin-top: 1rem; font-size: 0.82rem; }
+  .contacts-pagination > span:first-child { margin-right: auto; }
+
+  /* Células de seleção e ordenação */
+  .ui-selection-cell { width: 40px; text-align: center; }
+  .ui-selection-checkbox { cursor: pointer; accent-color: var(--accent-brand); width: 15px; height: 15px; }
+  tr.is-selected { background: var(--accent-brand-subtle, rgba(59, 130, 246, 0.08)) !important; }
+
+  .sortable-th {
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+    &:hover { background: var(--bg-surface, #252836); }
+    .th-content {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .active-sort { color: var(--accent-brand); }
+  }
+
+  /* Badges de vínculos comerciais */
+  .contact-badge {
+    display: inline-block;
+    padding: 0.18rem 0.45rem;
+    border-radius: 5px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    margin-right: 0.35rem;
+    &--customer {
+      background: rgba(16, 185, 129, 0.12);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    &--supplier {
+      background: rgba(59, 130, 246, 0.12);
+      color: #3b82f6;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+  }
+
+  /* Status Pill */
+  .status-pill {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    &.is-active { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+    &.is-inactive { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+  }
+
+  /* Ações Rápidas por linha */
+  .contacts-quick-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    justify-content: center;
+  }
+
+  .btn-quick-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover:not(:disabled) {
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &.btn-wa:hover:not(:disabled) {
+      background: #25D366;
+      border-color: #25D366;
+    }
+
+    &.btn-lead:hover:not(:disabled) {
+      background: var(--accent-brand);
+      border-color: var(--accent-brand);
+    }
+
+    &.btn-link:hover:not(:disabled) {
+      background: #8b5cf6;
+      border-color: #8b5cf6;
+    }
+
+    &.btn-danger:hover:not(:disabled) {
+      background: #ef4444;
+      border-color: #ef4444;
+    }
+  }
+}
+.contact-links-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  > * { min-width: 0; margin: 0; }
+}
+.contact-facts {
+  display: grid; gap: 1.25rem; padding: .25rem 0; margin: 0;
+  > div { min-width: 0; }
+  dt { color: var(--text-muted); font-size: .75rem; margin-bottom: .4rem; }
+  dd { margin: 0; display: flex; flex-wrap: wrap; gap: .4rem; font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; }
+}
+.contact-tag { display: inline-flex; padding: .25rem .6rem; border-radius: 6px; background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); font-size: .8rem; }
+.contact-empty { color: var(--text-muted); font-size: .82rem; line-height: 1.6; margin: 0; }
+.contact-channel-list {
+  list-style: none; padding: 0; margin: 0; display: grid; gap: .7rem;
+  li { display: flex; align-items: center; flex-wrap: wrap; gap: .8rem; padding: .85rem; background: var(--bg-app); border: 1px solid var(--border-subtle); border-radius: 10px; }
+  li > div { flex: 1; min-width: 130px; strong, span { display: block; overflow-wrap: anywhere; } strong { font-size: .86rem; } span { margin-top: .25rem; color: var(--text-muted); font-size: .78rem; } }
+}
+.contact-channel-icon { color: var(--accent-brand); background: var(--accent-brand-subtle); padding: .6rem; border-radius: 9px; display: inline-flex; }
+@media (max-width: 900px) { .contact-links-layout { grid-template-columns: 1fr; } }

@@ -163,6 +163,7 @@ export interface TokenResponse {
 // ==============================================================================
 
 export interface Supplier {
+  contact_id?: string | null;
   id: string;
   organization_id: string;
   name: string;
@@ -961,10 +962,19 @@ export interface Lead {
   id: string;
   organization_id: string;
   customer_id?: string | null;
+  contact_id?: string | null;
+  contact_origin_id?: string | null;
   name: string;
   company_name?: string | null;
+  document?: string | null;
+  position?: string | null;
+  segment?: string | null;
+  address_city?: string | null;
+  address_state?: string | null;
+  annual_revenue?: number | null;
   email?: string | null;
   phone?: string | null;
+  secondary_phone?: string | null;
   source: string;
   status: 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'DISQUALIFIED' | 'CONVERTED';
   notes?: string | null;
@@ -1026,6 +1036,10 @@ export interface CustomerInteraction {
 // ==============================================================================
 
 export interface Contact {
+  contact_origin_id?: string | null;
+  normalized_phone?: string | null;
+  first_contact_at?: string | null;
+  last_contact_at?: string | null;
   id: string;
   organization_id: string;
   person_type?: 'PJ' | 'PF';
@@ -1055,6 +1069,13 @@ export interface Contact {
   updated_at: string;
 }
 
+export interface ContactDirectoryEntry extends Contact {
+  origin_name: string | null;
+  customers: { id: string; name: string }[];
+  suppliers: { id: string; name: string }[];
+  channels: { id: string; connection_id: string; name: string; instance_phone: string | null; team_id: string }[];
+}
+
 export interface Customer {
   id: string;
   organization_id: string;
@@ -1066,6 +1087,10 @@ export interface Customer {
   state_registration?: string | null;
   email?: string | null;
   phone?: string | null;
+  secondary_phone?: string | null;
+  website?: string | null;
+  segment?: string | null;
+  contact_role?: string | null;
   address_street?: string | null;
   address_number?: string | null;
   address_neighborhood?: string | null;
@@ -1548,4 +1573,3 @@ export interface StagnantInventoryReport {
 // 12. PROJETOS & OPERAÇÕES
 // ==============================================================================
 export * from './projects';
-

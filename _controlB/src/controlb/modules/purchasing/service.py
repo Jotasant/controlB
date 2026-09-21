@@ -49,6 +49,9 @@ def create_new_supplier(db: Session, supplier_data: schemas.SupplierCreate) -> m
             detail="Já existe um fornecedor cadastrado com este CNPJ/CPF nesta organização."
         )
 
+    from controlb.modules.identity.contact_identity import reject_legacy_fields, validate_link
+    reject_legacy_fields(supplier_data, ("contact_name", "email", "phone"))
+    validate_link(db, supplier_data.organization_id, supplier_data.contact_id)
     return repository.create_supplier(db, supplier_data=supplier_data)
 
 
@@ -66,6 +69,10 @@ def update_supplier_data(
             detail="Fornecedor não encontrado."
         )
 
+    from controlb.modules.identity.contact_identity import reject_legacy_fields, validate_link
+    reject_legacy_fields(supplier_data, ("contact_name", "email", "phone"))
+    if "contact_id" in supplier_data.model_fields_set:
+        validate_link(db, organization_id, supplier_data.contact_id)
     return repository.update_supplier(db, db_supplier=db_supplier, supplier_data=supplier_data)
 
 

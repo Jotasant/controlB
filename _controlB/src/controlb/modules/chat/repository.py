@@ -11,9 +11,60 @@ from controlb.modules.chat.models import (
     ChatConversation,
     ChatConversationLink,
     ChatMessage,
+    ChatTeam,
+    chat_team_member,
 )
 from controlb.modules.documents.models import BusinessDocument
 from controlb.modules.documents.security import DOCUMENT_VIEW_PERMISSIONS
+from controlb.modules.identity.models import User
+
+
+def member_teams(org_id, user_id):
+    return (
+        select(ChatTeam.id)
+        .join(chat_team_member, chat_team_member.c.team_id == ChatTeam.id)
+        .join(User, User.id == chat_team_member.c.user_id)
+        .where(
+            ChatTeam.organization_id == org_id,
+            ChatTeam.is_active.is_(True),
+            User.organization_id == org_id,
+            User.is_active.is_(True),
+            User.id == user_id,
+        )
+    )
+
+
+def team_is_active(db, org_id, team_id):
+    return bool(
+        db.scalar(
+            select(ChatTeam.id).where(
+                ChatTeam.id == team_id,
+                ChatTeam.organization_id == org_id,
+                ChatTeam.is_active.is_(True),
+            )
+        )
+    )
+
+
+def is_member(db, org_id, user_id, team_id):
+    return bool(db.scalar(member_teams(org_id, user_id).where(ChatTeam.id == team_id)))
+
+
+def configured_teams():
+    return (
+        select(chat_team_member.c.team_id)
+        .join(User, User.id == chat_team_member.c.user_id)
+        .where(User.is_active.is_(True))
+    )
+
+
+def is_unassigned(db, connection):
+    return connection.team_id is None or not db.scalar(
+        select(chat_team_member.c.team_id)
+        .join(User, User.id == chat_team_member.c.user_id)
+        .where(chat_team_member.c.team_id == connection.team_id, User.is_active.is_(True))
+        .limit(1)
+    )
 
 
 def lock_connection(db: Session, connection_id: uuid.UUID) -> None:
@@ -30,16 +81,21 @@ def get_connection(db, org_id, connection_id):
     )
 
 
-def conversations_query(org_id, permissions: set[str]):
-    query = select(ChatConversation).where(ChatConversation.organization_id == org_id)
+def conversations_query(org_id, permissions: set[str], user_id):
+    query = select(ChatConversation).where(
+        ChatConversation.deleted_at.is_(None),
+        ChatConversation.organization_id == org_id,
+        ChatConversation.team_id.in_(member_teams(org_id, user_id)),
+        ChatConversation.connection_id.in_(
+            select(ChatConnection.id).where(
+                ChatConnection.organization_id == org_id,
+                ChatConnection.team_id == ChatConversation.team_id,
+            )
+        ),
+    )
     if "*:*" in permissions:
         return query
     link = ChatConversationLink
-    linked = exists(
-        select(link.id).where(
-            link.conversation_id == ChatConversation.id, link.organization_id == org_id
-        )
-    )
     allowed_types = [key for key, perm in DOCUMENT_VIEW_PERMISSIONS.items() if perm in permissions]
     allowed = BusinessDocument.document_type.in_(allowed_types)
     if "documents:view" in permissions:
@@ -51,13 +107,13 @@ def conversations_query(org_id, permissions: set[str]):
             link.conversation_id == ChatConversation.id, link.organization_id == org_id, ~allowed
         )
     )
-    # Entradas não classificadas são visíveis apenas a quem pode vinculá-las.
-    return query.where(~denied) if "chat:link" in permissions else query.where(linked, ~denied)
+    # Atendimento sem documento também é permitido aos membros da equipe.
+    return query.where(~denied)
 
 
-def get_conversation(db, org_id, conversation_id, permissions):
+def get_conversation(db, org_id, conversation_id, permissions, user_id):
     return db.scalar(
-        conversations_query(org_id, permissions)
+        conversations_query(org_id, permissions, user_id)
         .where(ChatConversation.id == conversation_id)
         .execution_options(populate_existing=True)
     )

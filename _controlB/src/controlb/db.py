@@ -30,6 +30,7 @@ settings = get_settings()
 # Engine: O motor principal que gerencia o pool de conexões com o PostgreSQL
 engine = create_engine(
     settings.database_url,
+    hide_parameters=True,                  # Não registrar mensagens, anexos ou credenciais nos parâmetros SQL.
     pool_pre_ping=True,                     # Testa a conexão antes de usá-la, evitando quedas por timeout
     echo=settings.app_env == "development", # Em desenvolvimento, exibe todas as queries SQL no terminal
 )

@@ -35,7 +35,8 @@ from controlb.modules.sales.schemas import CustomerCreate, CustomerUpdate
 # ==============================================================================
 
 def list_customers(db: Session, organization_id: uuid.UUID, search: str | None = None, is_active: bool | None = None) -> list[Customer]:
-    stmt = select(Customer).where(Customer.organization_id == organization_id)
+    from controlb.modules.identity.models import Contact
+    stmt = select(Customer).outerjoin(Contact, (Customer.contact_id == Contact.id) & (Contact.organization_id == organization_id)).where(Customer.organization_id == organization_id)
     if is_active is not None:
         stmt = stmt.where(Customer.is_active == is_active)
     if search:
@@ -44,8 +45,9 @@ def list_customers(db: Session, organization_id: uuid.UUID, search: str | None =
             (Customer.name.ilike(term)) |
             (Customer.document.ilike(term)) |
             (Customer.trade_name.ilike(term)) |
-            (Customer.email.ilike(term)) |
-            (Customer.phone.ilike(term))
+            (Contact.email.ilike(term)) |
+            (Contact.phone.ilike(term)) |
+            (Contact.mobile.ilike(term))
         )
     stmt = stmt.order_by(Customer.name)
     return list(db.scalars(stmt).all())
@@ -92,8 +94,8 @@ def create_customer(
         name=data.name,
         trade_name=data.trade_name,
         state_registration=data.state_registration,
-        email=data.email,
-        phone=data.phone,
+        website=data.website,
+        segment=data.segment,
         address_street=data.address_street,
         address_number=data.address_number,
         address_neighborhood=data.address_neighborhood,
@@ -113,7 +115,8 @@ def create_customer(
 
 def update_customer(db: Session, customer: Customer, data: CustomerUpdate) -> Customer:
     for field, val in data.model_dump(exclude_unset=True).items():
-        setattr(customer, field, val)
+        if field not in {"email", "phone", "secondary_phone", "contact_role"}:
+            setattr(customer, field, val)
     db.commit()
     db.refresh(customer)
     return customer

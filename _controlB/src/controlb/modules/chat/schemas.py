@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 def validate_url(value: str) -> str:
@@ -55,6 +55,9 @@ class ChatInput(BaseModel):
 
 
 class ChatConnectionCreate(ChatInput):
+    groups_enabled: bool = True
+    member_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+    transcription_enabled: bool = False
     provider: str = "EVOLUTION"
     name: str = Field(..., min_length=2, max_length=120)
     base_url: str = Field(..., min_length=8, max_length=500)
@@ -84,6 +87,9 @@ class ChatConnectionCreate(ChatInput):
 
 
 class ChatConnectionUpdate(ChatInput):
+    groups_enabled: bool | None = None
+    member_ids: list[uuid.UUID] | None = Field(None, min_length=1, max_length=500)
+    transcription_enabled: bool | None = None
     name: str | None = Field(None, min_length=2, max_length=120)
     base_url: str | None = Field(None, min_length=8, max_length=500)
     external_instance_id: str | None = Field(None, min_length=1, max_length=200)
@@ -106,9 +112,17 @@ class ChatConnectionUpdate(ChatInput):
 
 
 class ChatConnectionResponse(BaseModel):
+    groups_enabled: bool
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    team_id: uuid.UUID | None
+    member_ids: list[uuid.UUID]
+    instance_phone: str | None
+    provider_instance_id: str | None
+    transcription_enabled: bool
+    recovery_pending: bool
+    sync_checkpoint_at: datetime | None
     organization_id: uuid.UUID
     provider: str
     name: str
@@ -124,6 +138,51 @@ class ChatConnectionResponse(BaseModel):
     updated_at: datetime
 
 
+class ChatInstanceProvisionResponse(BaseModel):
+    created: bool
+    already_existed: bool
+    qr_code_base64: str | None = None
+    pairing_code: str | None = None
+    connection: ChatConnectionResponse
+
+
+class ChatPairingResponse(BaseModel):
+    qr_code_base64: str | None = None
+    pairing_code: str | None = None
+    state: str
+    connection: ChatConnectionResponse
+
+
+class ChatInstanceDetailsResponse(BaseModel):
+    instance_id: str | None
+    instance_name: str
+    phone: str | None
+    profile_name: str | None
+    integration: str | None
+    state: str
+    message_count: int | None
+    chat_count: int | None
+    local_message_count: int
+    local_conversation_count: int
+    last_webhook_at: datetime | None
+
+
+class ChatHistoryRequest(ChatInput):
+    page: int = Field(1, ge=1, le=1000000)
+    page_size: int = Field(100, ge=1, le=100)
+    snapshot_at: AwareDatetime | None = None
+
+
+class ChatHistoryResponse(BaseModel):
+    imported: int
+    skipped: int
+    existing: int
+    scanned: int
+    total: int
+    next_page: int | None
+    snapshot_at: datetime
+
+
 class ChatConversationLinkCreate(ChatInput):
     business_document_id: uuid.UUID
     link_type: str = Field("RELATED", pattern="^(ORIGIN|RELATED)$")
@@ -132,7 +191,7 @@ class ChatConversationLinkCreate(ChatInput):
 
 class ChatConversationCreate(ChatInput):
     connection_id: uuid.UUID
-    business_document_id: uuid.UUID
+    business_document_id: uuid.UUID | None = None
     remote_phone: str
     display_name: str | None = Field(None, max_length=255)
     contact_id: uuid.UUID | None = None
@@ -149,11 +208,22 @@ class ChatConversationCreate(ChatInput):
         return number
 
 
+class ChatConversationStart(ChatInput):
+    connection_id: uuid.UUID
+    contact_id: uuid.UUID
+
+
 class ChatConversationUpdate(ChatInput):
-    status: str | None = Field(None, pattern="^(OPEN|CLOSED|ARCHIVED)$")
+    status: str | None = Field(None, pattern="^(OPEN|CLOSED)$")
+    is_archived: bool | None = None
     assigned_user_id: uuid.UUID | None = None
     contact_id: uuid.UUID | None = None
     customer_id: uuid.UUID | None = None
+
+
+class ChatContactOriginUpdate(ChatInput):
+    origin_id: uuid.UUID | None = None
+    name: str | None = Field(None, min_length=1, max_length=100)
 
 
 class ChatLinkResponse(BaseModel):
@@ -165,9 +235,16 @@ class ChatLinkResponse(BaseModel):
 
 
 class ChatConversationResponse(BaseModel):
+    is_group: bool
+    assigned_user_name: str | None
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    team_id: uuid.UUID | None
+    instance_phone: str | None
+    is_archived: bool
+    closed_at: datetime | None
+    closed_by_id: uuid.UUID | None
     organization_id: uuid.UUID
     connection_id: uuid.UUID
     external_chat_id: str
@@ -188,6 +265,7 @@ class ChatConversationResponse(BaseModel):
 
 class SendTextMessageRequest(ChatInput):
     client_request_id: uuid.UUID
+    reply_to_message_id: uuid.UUID | None = None
     text: str = Field(..., min_length=1, max_length=10000)
 
     @field_validator("text")
@@ -200,9 +278,21 @@ class SendTextMessageRequest(ChatInput):
 
 
 class ChatMessageResponse(BaseModel):
+    reply_to_message_id: uuid.UUID | None
+    reply_snapshot: dict[str, Any] | None
+    reactions: list[dict[str, Any]] = Field(default_factory=list)
+    deleted_at: datetime | None
+    revoke_status: str | None
+    sender_external_id: str | None
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    created_by_id: uuid.UUID | None
+    author_name: str | None
+    team_id: uuid.UUID | None
+    instance_phone: str | None
+    transcription: str | None
+    transcription_status: str
     organization_id: uuid.UUID
     conversation_id: uuid.UUID
     external_message_id: str | None
@@ -228,6 +318,11 @@ class ConversationPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ChatReactionRequest(ChatInput):
+    client_request_id: uuid.UUID
+    emoji: str = Field(pattern="^(👍|❤️|😂|😮|😢|🙏|)$")
 
 
 class MessagePage(BaseModel):

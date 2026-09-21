@@ -1,23 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Building2, UserRound, Mail, Phone, MapPin, CreditCard,
+  Building2, UserRound, Phone, MapPin, CreditCard,
   FileText, Check, AlertTriangle, Hash, Landmark
 } from 'lucide-react';
-import { Modal } from '@/components/Modal/Modal';
+import { RecordEditorSurface } from '@/components/RecordForm/RecordEditorSurface';
 import { useToast } from '@/components/Toast/ToastContext';
-import { salesService, identityService, formatApiError } from '@/services/api';
-import type { Customer, Contact } from '@/types';
+import { salesService, formatApiError } from '@/services/api';
+import type { Customer } from '@/types';
 import './CustomerModal.scss';
+import { IdentityContactField } from '@/components/IdentityContactField';
 
 export interface CustomerModalProps {
+  page?: boolean;
   isOpen: boolean;
   onClose: () => void;
   customer?: Customer | null;
-  onSuccess?: (customer: Customer) => void;
+  onSuccess?: (customer: Customer) => void | Promise<void>;
   initialPersonType?: 'PJ' | 'PF';
 }
 
 export const CustomerModal: React.FC<CustomerModalProps> = ({
+  page = false,
   isOpen,
   onClose,
   customer,
@@ -25,6 +28,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
   initialPersonType = 'PJ'
 }) => {
   const toast = useToast();
+  const [formTab, setFormTab] = useState('identity');
   const isEditing = Boolean(customer?.id);
 
   // Estados dos Campos
@@ -33,8 +37,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
   const [tradeName, setTradeName] = useState<string>('');
   const [document, setDocument] = useState<string>('');
   const [stateRegistration, setStateRegistration] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
-  const [phone, setPhone] = useState<string>('');
+  const [website, setWebsite] = useState<string>('');
+  const [segment, setSegment] = useState<string>('');
   const [creditLimit, setCreditLimit] = useState<string>('50000.00');
   const [addressStreet, setAddressStreet] = useState<string>('');
   const [addressNumber, setAddressNumber] = useState<string>('');
@@ -45,16 +49,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
   const [contactId, setContactId] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
 
-  const [contacts, setContacts] = useState<Contact[]>([]);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [modalError, setModalError] = useState<string | null>(null);
-
-  // Carregar contatos para vínculo
-  useEffect(() => {
-    if (isOpen) {
-      identityService.getContacts().then(setContacts).catch(() => {});
-    }
-  }, [isOpen]);
 
   // Preencher formulário ao abrir para criação ou edição
   useEffect(() => {
@@ -67,8 +63,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       setTradeName(customer.trade_name || '');
       setDocument(customer.document || '');
       setStateRegistration(customer.state_registration || '');
-      setEmail(customer.email || '');
-      setPhone(customer.phone || '');
+      setWebsite(customer.website || '');
+      setSegment(customer.segment || '');
       setCreditLimit(String(customer.credit_limit ?? 50000.00));
       setAddressStreet(customer.address_street || '');
       setAddressNumber(customer.address_number || '');
@@ -84,8 +80,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       setTradeName('');
       setDocument('');
       setStateRegistration('');
-      setEmail('');
-      setPhone('');
+      setWebsite('');
+      setSegment('');
       setCreditLimit('50000.00');
       setAddressStreet('');
       setAddressNumber('');
@@ -101,10 +97,12 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
+      setFormTab('identity');
       setModalError('Informe a Razão Social ou Nome do cliente.');
       return;
     }
     if (!document.trim()) {
+      setFormTab('identity');
       setModalError(personType === 'PJ' ? 'Informe o CNPJ da empresa.' : 'Informe o CPF do cliente.');
       return;
     }
@@ -118,8 +116,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       trade_name: tradeName.trim() || undefined,
       document: document.trim(),
       state_registration: stateRegistration.trim() || undefined,
-      email: email.trim() || undefined,
-      phone: phone.trim() || undefined,
+      website: website.trim() || undefined,
+      segment: segment.trim() || undefined,
       credit_limit: parseFloat(creditLimit) || 0,
       address_street: addressStreet.trim() || undefined,
       address_number: addressNumber.trim() || undefined,
@@ -127,7 +125,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       address_city: addressCity.trim() || undefined,
       address_state: addressState.trim() || undefined,
       address_zip_code: addressZipCode.trim() || undefined,
-      contact_id: contactId.trim() || undefined,
+      contact_id: contactId || null,
       notes: notes.trim() || undefined,
       is_active: true
     };
@@ -143,9 +141,9 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       }
 
       if (onSuccess) {
-        onSuccess(saved);
+        await onSuccess(saved);
       }
-      onClose();
+      if (!page) onClose();
     } catch (err: unknown) {
       const msg = formatApiError(err, 'Erro ao salvar dados do cliente.');
       setModalError(msg);
@@ -156,7 +154,9 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
   };
 
   return (
-    <Modal
+    <RecordEditorSurface
+        page={page} saving={isSaving} resetKey={customer} activeTab={formTab} onTabChange={setFormTab}
+        tabs={[{"id":"identity","label":"Identificação"},{"id":"contact","label":"Contato"},{"id":"address","label":"Endereço"},{"id":"credit","label":"Crédito e observações"}]}
       isOpen={isOpen}
       onClose={onClose}
       title={isEditing ? 'Editar Cliente' : 'Cadastrar Novo Cliente'}
@@ -172,7 +172,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
         )}
 
         {/* 1. SEÇÃO DE IDENTIFICAÇÃO */}
-        <div className="customer-modal-section">
+        <div data-record-tab="identity" hidden={page && formTab !== 'identity'} className="customer-modal-section">
           <div className="customer-modal-section__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Building2 size={16} className="customer-modal-section__icon" />
@@ -271,64 +271,43 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
               </div>
             </div>
           </div>
+
+          <div className="customer-form-grid-2">
+            <div className="form-group">
+              <label>Segmento / Ramo de Atuação</label>
+              <input
+                type="text"
+                placeholder="Ex: Distribuição, Tecnologia, Saúde"
+                value={segment}
+                onChange={(e) => setSegment(e.target.value)}
+                className="ui-input"
+              />
+            </div>
+            <div className="form-group">
+              <label>Site / Portal Institucional</label>
+              <input
+                type="text"
+                placeholder="https://www.empresa.com.br"
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+                className="ui-input"
+              />
+            </div>
+          </div>
         </div>
 
         {/* 2. SEÇÃO DE CONTATO */}
-        <div className="customer-modal-section">
+        <div data-record-tab="contact" hidden={page && formTab !== 'contact'} className="customer-modal-section">
           <div className="customer-modal-section__header">
             <Phone size={16} className="customer-modal-section__icon" />
             <h4 className="customer-modal-section__title">Contato Comercial & Representante</h4>
           </div>
 
-          <div className="customer-form-grid-3">
-            <div className="form-group">
-              <label>E-mail Comercial</label>
-              <div className="input-with-icon-box">
-                <Mail size={15} className="input-prefix-icon" />
-                <input
-                  type="email"
-                  placeholder="comercial@empresa.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="ui-input has-prefix-icon"
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Telefone / WhatsApp</label>
-              <div className="input-with-icon-box">
-                <Phone size={15} className="input-prefix-icon" />
-                <input
-                  type="text"
-                  placeholder="(11) 99999-9999"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="ui-input has-prefix-icon"
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Contato Identity Vinculado</label>
-              <select
-                value={contactId}
-                onChange={(e) => setContactId(e.target.value)}
-                className="ui-input"
-              >
-                <option value="">Nenhum contato vinculado</option>
-                {contacts.map((ct) => (
-                  <option key={ct.id} value={ct.id}>
-                    {ct.full_name} {ct.email ? `(${ct.email})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          <IdentityContactField value={contactId} onChange={setContactId} />
         </div>
 
         {/* 3. SEÇÃO DE ENDEREÇO */}
-        <div className="customer-modal-section">
+        <div data-record-tab="address" hidden={page && formTab !== 'address'} className="customer-modal-section">
           <div className="customer-modal-section__header">
             <MapPin size={16} className="customer-modal-section__icon" />
             <h4 className="customer-modal-section__title">Endereço & Praça de Atendimento</h4>
@@ -403,7 +382,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
         </div>
 
         {/* 4. SEÇÃO FINANCEIRA & OBSERVAÇÕES */}
-        <div className="customer-modal-section">
+        <div data-record-tab="credit" hidden={page && formTab !== 'credit'} className="customer-modal-section">
           <div className="customer-modal-section__header">
             <CreditCard size={16} className="customer-modal-section__icon" />
             <h4 className="customer-modal-section__title">Crédito & Observações Comerciais</h4>
@@ -460,6 +439,6 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
           </button>
         </div>
       </form>
-    </Modal>
+    </RecordEditorSurface>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   Edit3,
   Plus,
@@ -11,7 +11,9 @@ import {
 
 import { Can } from '@/components/Can';
 import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
-import { Modal } from '@/components/Modal/Modal';
+import { RecordEditorSurface } from '@/components/RecordForm/RecordEditorSurface';
+import { RecordFormPage } from '@/components/RecordForm';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useToast } from '@/components/Toast/ToastContext';
 import { formatApiError, identityService } from '@/services/api';
 import type { Team, TeamMemberInfo } from '@/types';
@@ -38,7 +40,18 @@ const EMPTY_FORM: TeamFormState = {
   is_active: true,
 };
 
-export const CommercialTeamsSettings: React.FC = () => {
+export function CommercialTeamRecordFormPage() {
+  const { recordId } = useParams(); const location = useLocation();
+  return <CommercialTeamsSettings key={location.key} recordId={recordId} />;
+}
+
+export const CommercialTeamsSettings: React.FC<{ recordId?: string }> = ({ recordId }) => {
+  const navigate = useNavigate(); const location = useLocation();
+  const modulePath = location.pathname.startsWith('/crm') ? '/crm' : '/vendas';
+  const initialized = useRef(false);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const [tab, setTab] = useState('identity');
+
   const toast = useToast();
   const [teams, setTeams] = useState<Team[]>([]);
   const [candidates, setCandidates] = useState<TeamMemberInfo[]>([]);
@@ -75,13 +88,15 @@ export const CommercialTeamsSettings: React.FC = () => {
     [teams],
   );
 
-  const openCreate = () => {
+  const openCreate = (hydrate = false) => {
+    if (!hydrate) { navigate(modulePath + '/equipes/novo'); return; }
     setEditingTeam(null);
     setForm(EMPTY_FORM);
     setIsEditorOpen(true);
   };
 
-  const openEdit = (team: Team) => {
+  const openEdit = (team: Team, hydrate = false) => {
+    if (!hydrate) { navigate(modulePath + '/equipes/' + team.id); return; }
     setEditingTeam(team);
     setForm({
       name: team.name,
@@ -96,6 +111,7 @@ export const CommercialTeamsSettings: React.FC = () => {
 
   const closeEditor = () => {
     if (saving) return;
+    if (recordId) { navigate(modulePath + '?view=' + (modulePath === '/crm' ? 'stages' : 'settings')); return; }
     setIsEditorOpen(false);
     setEditingTeam(null);
     setForm(EMPTY_FORM);
@@ -135,22 +151,24 @@ export const CommercialTeamsSettings: React.FC = () => {
         member_ids: form.member_ids,
         is_active: form.is_active,
       };
+      let savedId = editingTeam?.id;
       if (editingTeam?.id) {
         await identityService.updateTeam(editingTeam.id, payload);
         toast.success('Equipe comercial atualizada.');
       } else {
-        await identityService.createTeam({
+        const created = await identityService.createTeam({
           ...payload,
           code: payload.code ?? undefined,
           description: payload.description ?? undefined,
           leader_id: payload.leader_id ?? undefined,
         });
+        savedId = created.id;
         toast.success('Equipe comercial criada.');
       }
       setIsEditorOpen(false);
       setEditingTeam(null);
       setForm(EMPTY_FORM);
-      await loadData(true);
+      navigate(modulePath + '/equipes/' + savedId, { replace: true });
     } catch (error) {
       toast.error(formatApiError(error, 'Não foi possível salvar a equipe comercial.'));
     } finally {
@@ -173,8 +191,25 @@ export const CommercialTeamsSettings: React.FC = () => {
     }
   };
 
+  const hydrateRecord = useRef<() => void>(() => {});
+  hydrateRecord.current = () => {
+    if (recordId === 'novo') openCreate(true);
+    else {
+      const team = teams.find(item => item.id === recordId);
+      if (team) openEdit(team, true); else setRecordError('Equipe não encontrada ou sem acesso.');
+    }
+  };
+  useEffect(() => {
+    if (!recordId || loading || initialized.current) return;
+    initialized.current = true;
+    hydrateRecord.current();
+  }, [recordId, loading]);
+
+
   return (
     <section className="commercial-teams-settings" aria-labelledby="commercial-teams-title">
+      {recordId && !isEditorOpen && <RecordFormPage title="Equipe comercial" isLoading={!recordError} error={recordError} onBack={closeEditor} />}
+      {!recordId && <>
       <div className="commercial-teams-header">
         <div className="commercial-teams-title-wrap">
           <div className="commercial-teams-icon"><Users size={21} /></div>
@@ -196,7 +231,7 @@ export const CommercialTeamsSettings: React.FC = () => {
             <RefreshCw size={16} className={loading ? 'spinning' : ''} />
           </button>
           <Can anyOf={MANAGE_PERMISSIONS}>
-            <button type="button" className="commercial-team-primary-button" onClick={openCreate}>
+            <button type="button" className="commercial-team-primary-button" onClick={() => openCreate()}>
               <Plus size={16} /> Nova equipe
             </button>
           </Can>
@@ -259,7 +294,8 @@ export const CommercialTeamsSettings: React.FC = () => {
         </div>
       )}
 
-      <Modal
+      </>}
+      <RecordEditorSurface page saving={saving} activeTab={tab} onTabChange={setTab} tabs={[{id: 'identity', label: 'Identificação'}, {id: 'members', label: 'Equipe e integrantes'}]}
         isOpen={isEditorOpen}
         onClose={closeEditor}
         title={editingTeam ? 'Editar equipe comercial' : 'Nova equipe comercial'}
@@ -267,7 +303,8 @@ export const CommercialTeamsSettings: React.FC = () => {
         size="lg"
       >
         <form className="commercial-team-form" onSubmit={handleSubmit}>
-          <div className="commercial-team-form-row">
+          <div data-record-tab="identity" hidden={tab !== 'identity'}>
+<div className="commercial-team-form-row">
             <label>
               <span>Nome da equipe *</span>
               <input required maxLength={100} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex: Equipe Nordeste" />
@@ -294,7 +331,8 @@ export const CommercialTeamsSettings: React.FC = () => {
               <span>Equipe ativa</span>
             </label>
           </div>
-          <fieldset className="commercial-team-member-selector">
+          </div>
+<fieldset data-record-tab="members" hidden={tab !== 'members'} className="commercial-team-member-selector">
             <legend>Integrantes ({form.member_ids.length})</legend>
             {candidates.length === 0 ? (
               <p>Nenhum colaborador ativo disponível.</p>
@@ -325,7 +363,7 @@ export const CommercialTeamsSettings: React.FC = () => {
             </button>
           </div>
         </form>
-      </Modal>
+      </RecordEditorSurface>
 
       <ConfirmModal
         isOpen={teamToDelete !== null}

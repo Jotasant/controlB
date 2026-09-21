@@ -4,6 +4,7 @@ modules/crm/service.py - Regras de Negócio e Serviços do CRM
 
 import uuid
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from controlb.modules.identity.models import User
@@ -148,44 +149,82 @@ def create_lead(
         if not cust:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente especificado não encontrado no módulo de Vendas.")
     else:
-        customer_name = payload.company_name.strip() if payload.company_name else payload.name.strip()
-        person_type = payload.person_type or ("PJ" if payload.company_name else "PF")
+        # Tenta buscar cliente existente por documento ou telefone para vincular sem criar duplicidade
+        if payload.document:
+            existing_cust = sales_repo.get_customer_by_document(db, payload.document.strip(), organization_id)
+            if existing_cust:
+                customer_id = existing_cust.id
+        if not customer_id and payload.phone:
+            norm_phone = sales_service._normalize_phone_number(payload.phone)
+            if norm_phone:
+                from controlb.modules.sales.models import Customer
+                existing_cust = db.scalar(
+                    select(Customer).where(
+                        Customer.organization_id == organization_id,
+                        Customer.phone == norm_phone,
+                    )
+                )
+                if existing_cust:
+                    customer_id = existing_cust.id
 
-        # Criação obrigatória/automática do Cliente em Vendas e Contato no Identity (Odoo Partner Pattern)
-        contact = identity_service.create_contact(
-            db,
-            organization_id,
-            identity_schemas.ContactCreate(
-                person_type=person_type,
-                name=customer_name,
-                trade_name=payload.name.strip() if payload.company_name else None,
-                full_name=payload.name.strip(),
-                document=payload.document.strip() if payload.document else None,
-                email=payload.email.strip() if payload.email else None,
-                phone=payload.phone.strip() if payload.phone else None,
-                position="Contato Comercial (Lead)",
-                is_customer=True,
-                origin_module="CRM",
-                notes=f"Origem Lead CRM: {payload.source}"
-            )
-        )
-        doc = payload.document.strip() if payload.document else f"LEAD-{uuid.uuid4().hex[:8].upper()}"
+    # Resolução / Desduplicação do Contato (Identity)
+    from controlb.modules.identity.models import Contact
+    contact_id = payload.contact_id
+    if contact_id:
+        existing_contact = identity_service.get_contact(db, contact_id, organization_id)
+        if not existing_contact:
+            contact_id = None
 
-        cust = sales_service.create_customer(
-            db,
-            organization_id,
-            sales_schemas.CustomerCreate(
-                person_type=person_type,
-                document=doc,
-                name=customer_name,
-                trade_name=payload.name.strip() if payload.company_name else None,
-                email=payload.email.strip() if payload.email else None,
-                phone=payload.phone.strip() if payload.phone else None,
-                contact_id=contact.id,
-                notes=f"Criado automaticamente a partir de Lead CRM ({payload.source})"
+    if not contact_id:
+        norm_phone = sales_service._normalize_phone_number(payload.phone) if payload.phone else None
+        existing_contact = None
+        if norm_phone:
+            existing_contact = db.scalar(
+                select(Contact).where(
+                    Contact.organization_id == organization_id,
+                    Contact.normalized_phone == norm_phone,
+                )
             )
-        )
-        customer_id = cust.id
+        if not existing_contact and payload.document:
+            doc_digits = "".join(filter(str.isdigit, payload.document))
+            if doc_digits:
+                existing_contact = db.scalar(
+                    select(Contact).where(
+                        Contact.organization_id == organization_id,
+                        Contact.document == doc_digits,
+                    )
+                )
+        if not existing_contact and payload.email:
+            existing_contact = db.scalar(
+                select(Contact).where(
+                    Contact.organization_id == organization_id,
+                    Contact.email == payload.email.strip().lower(),
+                )
+            )
+        if existing_contact:
+            contact_id = existing_contact.id
+        else:
+            # O lead quando criado precisa cadastrar automaticamente um contato para que seja possível tratar no whatsapp
+            person_type = payload.person_type or ("PJ" if payload.company_name else "PF")
+            new_contact = identity_service.create_contact(
+                db,
+                organization_id,
+                identity_schemas.ContactCreate(
+                    person_type=person_type,
+                    name=payload.company_name.strip() if payload.company_name else payload.name.strip(),
+                    trade_name=payload.name.strip() if payload.company_name else None,
+                    full_name=payload.name.strip(),
+                    document=payload.document.strip() if payload.document else None,
+                    email=payload.email.strip() if payload.email else None,
+                    phone=payload.phone.strip() if payload.phone else None,
+                    position=payload.position or "Contato Comercial (Lead)",
+                    is_customer=bool(customer_id),
+                    origin_module="CRM",
+                    contact_origin_id=payload.contact_origin_id,
+                    notes=f"Origem Lead CRM: {payload.source}",
+                ),
+            )
+            contact_id = new_contact.id
 
     from controlb.modules.documents import schemas as document_schemas
     from controlb.modules.documents import service as documents_service
@@ -207,19 +246,42 @@ def create_lead(
         current_user=current_user,
     )
 
+    contact_origin_id = payload.contact_origin_id
+    source_name = payload.source or "Indicação"
+    if contact_origin_id:
+        from controlb.modules.identity.models import ContactOrigin
+        origin_obj = db.scalar(
+            select(ContactOrigin).where(
+                ContactOrigin.id == contact_origin_id,
+                ContactOrigin.organization_id == organization_id,
+            )
+        )
+        if origin_obj:
+            source_name = origin_obj.name
+        else:
+            contact_origin_id = None
+
     lead = models.Lead(
         id=lead_id,
         organization_id=organization_id,
         document_id=lead_document.id,
         customer_id=customer_id,
+        contact_id=contact_id,
+        contact_origin_id=contact_origin_id,
         name=lead_document.title,
         company_name=payload.company_name.strip() if payload.company_name else None,
+        position=payload.position.strip() if payload.position else None,
+        segment=payload.segment.strip() if payload.segment else None,
+        address_city=payload.address_city.strip() if payload.address_city else None,
+        address_state=payload.address_state.strip() if payload.address_state else None,
+        annual_revenue=payload.annual_revenue,
         email=payload.email.strip() if payload.email else None,
         phone=payload.phone.strip() if payload.phone else None,
-        source=payload.source,
+        secondary_phone=payload.secondary_phone.strip() if payload.secondary_phone else None,
+        source=source_name,
         status=lead_document.current_status,
         notes=payload.notes,
-        assigned_to_id=payload.assigned_to_id
+        assigned_to_id=payload.assigned_to_id,
     )
     return repository.create_lead(db, lead)
 
@@ -250,12 +312,40 @@ def update_lead(
     if payload.name is not None:
         lead.name = payload.name.strip()
     if payload.company_name is not None:
-        lead.company_name = payload.company_name.strip()
+        lead.company_name = payload.company_name.strip() or None
+    if payload.position is not None:
+        lead.position = payload.position.strip() or None
+    if payload.segment is not None:
+        lead.segment = payload.segment.strip() or None
+    if payload.address_city is not None:
+        lead.address_city = payload.address_city.strip() or None
+    if payload.address_state is not None:
+        lead.address_state = payload.address_state.strip() or None
+    if payload.annual_revenue is not None:
+        lead.annual_revenue = payload.annual_revenue
     if payload.email is not None:
-        lead.email = payload.email.strip()
+        lead.email = payload.email.strip() or None
     if payload.phone is not None:
-        lead.phone = payload.phone.strip()
-    if payload.source is not None:
+        lead.phone = payload.phone.strip() or None
+    if payload.secondary_phone is not None:
+        lead.secondary_phone = payload.secondary_phone.strip() or None
+    if payload.contact_origin_id is not None:
+        if payload.contact_origin_id:
+            from controlb.modules.identity.models import ContactOrigin
+            origin_obj = db.scalar(
+                select(ContactOrigin).where(
+                    ContactOrigin.id == payload.contact_origin_id,
+                    ContactOrigin.organization_id == organization_id,
+                )
+            )
+            if origin_obj:
+                lead.contact_origin_id = origin_obj.id
+                lead.source = origin_obj.name
+            else:
+                lead.contact_origin_id = None
+        else:
+            lead.contact_origin_id = None
+    if payload.source is not None and payload.contact_origin_id is None:
         lead.source = payload.source
     if payload.status is not None:
         lead.status = payload.status
@@ -264,7 +354,9 @@ def update_lead(
     if payload.assigned_to_id is not None:
         lead.assigned_to_id = payload.assigned_to_id
     if payload.customer_id is not None:
-        lead.customer_id = payload.customer_id
+        lead.customer_id = payload.customer_id or None
+    if payload.contact_id is not None:
+        lead.contact_id = payload.contact_id or None
 
     from controlb.modules.documents import schemas as document_schemas
     from controlb.modules.documents import service as documents_service
@@ -872,23 +964,30 @@ def convert_lead_to_customer(
     from controlb.modules.identity import service as identity_service, schemas as identity_schemas
     from controlb.modules.sales import service as sales_service, schemas as sales_schemas
 
-    # 1. Cria Contato no Identity (Padrão Odoo Partner)
-    contact = identity_service.create_contact(
-        db,
-        organization_id,
-        identity_schemas.ContactCreate(
-            person_type="PJ" if lead.company_name else "PF",
-            name=lead.company_name or lead.name,
-            trade_name=lead.name if lead.company_name else None,
-            full_name=lead.name,
-            email=lead.email,
-            phone=lead.phone,
-            position="Contato Comercial (Lead)",
-            is_customer=True,
-            origin_module="CRM",
-            notes=f"Origem Lead CRM: {lead.source}"
+    # Reuse Identity's canonical contact instead of duplicating it during conversion.
+    from controlb.modules.identity.contact_identity import find_contact, identifiers, lock_contacts
+    lock_contacts(db, organization_id)
+    contact = identity_service.get_contact(db, lead.contact_id, organization_id) if lead.contact_id else find_contact(
+        db, organization_id, identifiers(lead.phone, lead.secondary_phone, lead.email))
+    if contact is None:
+        contact = identity_service.create_contact(
+            db,
+            organization_id,
+            identity_schemas.ContactCreate(
+                person_type="PJ" if lead.company_name else "PF",
+                name=lead.company_name or lead.name,
+                trade_name=lead.name if lead.company_name else None,
+                full_name=lead.name,
+                email=lead.email,
+                phone=lead.phone,
+                position="Contato Comercial (Lead)",
+                is_customer=True,
+                origin_module="CRM",
+                notes=f"Origem Lead CRM: {lead.source}"
+            )
         )
-    )
+    lead.contact_id = contact.id
+    contact.is_customer = True
 
     # 2. Cria Cliente no Módulo de Vendas
     doc = f"LEAD-{uuid.uuid4().hex[:8].upper()}"
@@ -903,8 +1002,6 @@ def convert_lead_to_customer(
             document=doc,
             name=customer_name,
             trade_name=lead.name if lead.company_name else None,
-            email=lead.email,
-            phone=lead.phone,
             contact_id=contact.id,
             origin_module="CRM",
             notes=f"Convertido a partir do Lead CRM #{str(lead.id)[:8]} ({lead.source})"
@@ -925,6 +1022,339 @@ def convert_lead_to_customer(
     lead.status = lead_document.current_status
     db.commit()
     return customer
+
+
+def convert_lead_to_opportunity(
+    db: Session,
+    lead_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User | None = None,
+    title: str | None = None,
+    estimated_amount: Decimal | None = None,
+    stage: str | None = None,
+    probability_percent: int | None = None,
+    expected_closing_date: date | None = None,
+) -> models.Opportunity:
+    lead = repository.get_lead_by_id(db, lead_id, organization_id)
+    if not lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado.")
+
+    from controlb.modules.identity import service as identity_service, schemas as identity_schemas
+    from controlb.modules.identity.models import Contact
+    from controlb.modules.sales import service as sales_service, schemas as sales_schemas, repository as sales_repo
+    from controlb.modules.sales.models import Customer
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    # 1. Garantir que o Lead possua Contato (Identity)
+    contact = None
+    if lead.contact_id:
+        contact = identity_service.get_contact(db, lead.contact_id, organization_id)
+    elif lead.phone or lead.email:
+        norm_phone = sales_service._normalize_phone_number(lead.phone) if lead.phone else None
+        if norm_phone:
+            contact = db.scalar(
+                select(Contact).where(
+                    Contact.organization_id == organization_id,
+                    Contact.normalized_phone == norm_phone,
+                )
+            )
+        if not contact and lead.email:
+            contact = db.scalar(
+                select(Contact).where(
+                    Contact.organization_id == organization_id,
+                    Contact.email == lead.email.strip().lower(),
+                )
+            )
+        if not contact:
+            person_type = "PJ" if lead.company_name else "PF"
+            contact = identity_service.create_contact(
+                db,
+                organization_id,
+                identity_schemas.ContactCreate(
+                    person_type=person_type,
+                    name=lead.company_name or lead.name,
+                    trade_name=lead.name if lead.company_name else None,
+                    full_name=lead.name,
+                    document=lead.document,
+                    email=lead.email,
+                    phone=lead.phone,
+                    position=lead.position or "Contato Comercial (Lead)",
+                    is_customer=True,
+                    origin_module="CRM",
+                    contact_origin_id=lead.contact_origin_id,
+                    notes=f"Origem Lead CRM: {lead.source}",
+                ),
+            )
+        lead.contact_id = contact.id
+
+    # 2. Garantir que o Lead possua Cliente (Vendas)
+    customer = None
+    if lead.customer_id:
+        customer = sales_repo.get_customer_by_id(db, lead.customer_id, organization_id)
+    
+    if not customer:
+        doc_str = contact.document if contact and contact.document else None
+        if doc_str:
+            customer = sales_repo.get_customer_by_document(db, doc_str.strip(), organization_id)
+        if not customer and lead.phone:
+            norm_phone = sales_service._normalize_phone_number(lead.phone)
+            if norm_phone:
+                customer = db.scalar(
+                    select(Customer).where(
+                        Customer.organization_id == organization_id,
+                        Customer.phone == norm_phone,
+                    )
+                )
+        
+        if not customer:
+            person_type = "PJ" if (lead.company_name or (doc_str and len(doc_str.replace(".", "").replace("/", "").replace("-", "")) > 11)) else "PF"
+            doc = doc_str or f"LEAD-{uuid.uuid4().hex[:8].upper()}"
+            customer = sales_service.create_customer(
+                db,
+                organization_id,
+                sales_schemas.CustomerCreate(
+                    person_type=person_type,
+                    document=doc,
+                    name=lead.company_name or lead.name,
+                    trade_name=lead.name if lead.company_name else None,
+                    segment=lead.segment,
+                    contact_id=contact.id if contact else None,
+                    origin_module="CRM",
+                    notes=f"Convertido a partir do Lead CRM #{str(lead.id)[:8]} ({lead.source})",
+                ),
+            )
+        lead.customer_id = customer.id
+
+    if contact and not contact.is_customer:
+        contact.is_customer = True
+
+    # 3. Criar Oportunidade no Funil de Vendas
+    opp_id = uuid.uuid4()
+    opp_title = title or (f"{lead.company_name} - Oportunidade" if lead.company_name else f"{lead.name} - Oportunidade")
+    
+    stages = list_stages(db, organization_id)
+    initial_stage_code = stage or (stages[0].code if stages else "PROSPECTING")
+    responsible_user_id = lead.assigned_to_id or (current_user.id if current_user else None)
+    
+    opp_document = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="crm.opportunity",
+            document_type="OPPORTUNITY",
+            native_id=opp_id,
+            title=opp_title,
+            current_status=initial_stage_code,
+            origin_module="CRM",
+            responsible_id=responsible_user_id,
+        ),
+        current_user=current_user,
+    )
+
+    opp = models.Opportunity(
+        id=opp_id,
+        organization_id=organization_id,
+        document_id=opp_document.id,
+        lead_id=lead.id,
+        customer_id=customer.id if customer else None,
+        contact_id=contact.id if contact else None,
+        title=opp_title,
+        customer_name=customer.trade_name or customer.name if customer else lead.name,
+        estimated_amount=estimated_amount or lead.annual_revenue or Decimal("0.00"),
+        probability_percent=probability_percent if probability_percent is not None else 20,
+        expected_closing_date=expected_closing_date,
+        stage=initial_stage_code,
+        assigned_to_id=responsible_user_id,
+    )
+    created_opp = repository.create_opportunity(db, opp)
+
+    # 4. Vincular na cadeia de rastreabilidade documental (Lead -> Oportunidade)
+    lead_document = _get_lead_document(db, lead, organization_id)
+    documents_service.relate_documents(
+        db,
+        organization_id=organization_id,
+        parent_document=lead_document,
+        child_document=opp_document,
+        relation_type="ORIGINATED_FROM",
+        relation_metadata={"conversion": "lead_to_opportunity", "source": lead.source},
+        created_by_id=current_user.id if current_user else None,
+    )
+
+    # 5. Atualizar status do Lead para CONVERTED
+    documents_service.update_document(
+        db,
+        lead_document.id,
+        organization_id,
+        document_schemas.DocumentUpdate(current_status="CONVERTED"),
+        current_user=current_user,
+    )
+    lead.status = "CONVERTED"
+    db.commit()
+    return created_opp
+
+
+def convert_contact_to_lead(
+    db: Session,
+    contact_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    current_user: User,
+) -> models.Lead:
+    from controlb.modules.identity import service as identity_service
+    from controlb.modules.sales.models import Customer
+
+    contact = identity_service.get_contact(db, contact_id, organization_id)
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contato não encontrado.")
+
+    # Verifica se já existe um Lead para este contato ou telefone para evitar duplicidade
+    existing_lead = None
+    if contact.normalized_phone:
+        existing_lead = db.scalar(
+            select(models.Lead).where(
+                models.Lead.organization_id == organization_id,
+                (models.Lead.contact_id == contact.id) | (models.Lead.phone == contact.normalized_phone) | (models.Lead.phone == contact.phone),
+            )
+        )
+    else:
+        existing_lead = db.scalar(
+            select(models.Lead).where(
+                models.Lead.organization_id == organization_id,
+                models.Lead.contact_id == contact.id,
+            )
+        )
+
+    if existing_lead:
+        return existing_lead
+
+    # Verifica se o contato já possui cliente associado
+    customer_id = None
+    customer = db.scalar(
+        select(Customer).where(
+            Customer.organization_id == organization_id,
+            Customer.contact_id == contact.id,
+        )
+    )
+    if customer:
+        customer_id = customer.id
+
+    lead_name = contact.full_name or contact.name
+    company_name = contact.name if (contact.full_name and contact.name != contact.full_name) else None
+    source = "WhatsApp" if contact.origin_module == "CHAT" else "Contato Identity"
+
+    payload = schemas.LeadCreate(
+        name=lead_name,
+        company_name=company_name,
+        document=contact.document,
+        email=contact.email,
+        phone=contact.phone or contact.mobile,
+        secondary_phone=contact.mobile if (contact.phone and contact.mobile != contact.phone) else None,
+        position=contact.position,
+        source=source,
+        contact_origin_id=contact.contact_origin_id,
+        contact_id=contact.id,
+        customer_id=customer_id,
+        status="NEW",
+        notes=f"Lead gerado a partir do Contato #{str(contact.id)[:8]} ({contact.origin_module})",
+    )
+    return create_lead(db, organization_id, payload, current_user=current_user)
+
+
+def convert_contact_to_opportunity(
+    db: Session,
+    contact_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    title: str | None = None,
+    estimated_amount: Decimal | None = None,
+    probability_percent: int | None = None,
+    expected_closing_date: date | None = None,
+    stage: str | None = None,
+    current_user: User | None = None,
+) -> models.Opportunity:
+    """Converte um contato (do Chat/WhatsApp ou Identity) diretamente em Oportunidade no CRM."""
+    from controlb.modules.identity import service as identity_service
+    from controlb.modules.sales import repository as sales_repo, schemas as sales_schemas, service as sales_service
+    from controlb.modules.sales.models import Customer
+
+    contact = identity_service.get_contact(db, contact_id, organization_id)
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contato não encontrado.")
+
+    # 1. Localiza ou cria Cliente correspondente no módulo de Vendas sem duplicidade
+    customer = None
+    if contact.document:
+        customer = sales_repo.get_customer_by_document(db, contact.document, organization_id)
+    if not customer and contact.normalized_phone:
+        customer = db.scalar(
+            select(Customer).where(
+                Customer.organization_id == organization_id,
+                Customer.phone == contact.normalized_phone,
+            )
+        )
+    if not customer:
+        doc = contact.document or f"CONT-{uuid.uuid4().hex[:8].upper()}"
+        customer = sales_service.create_customer(
+            db,
+            organization_id,
+            sales_schemas.CustomerCreate(
+                person_type=contact.person_type or "PF",
+                document=doc,
+                name=contact.name or contact.full_name or "Cliente Comercial",
+                trade_name=contact.trade_name,
+                contact_id=contact.id,
+                origin_module="CRM",
+                is_active=True,
+                notes="Cliente gerado a partir de contato comercial.",
+            ),
+        )
+
+    # 2. Garante que o contato está marcado como cliente
+    contact.is_customer = True
+    db.flush()
+
+    # 3. Cria Oportunidade no Funil de Vendas
+    opp_id = uuid.uuid4()
+    opp_title = title or f"{contact.name or contact.full_name} - Oportunidade"
+    stages = list_stages(db, organization_id)
+    initial_stage_code = stage or (stages[0].code if stages else "PROSPECTING")
+    responsible_user_id = current_user.id if current_user else None
+
+    from controlb.modules.documents import schemas as document_schemas
+    from controlb.modules.documents import service as documents_service
+
+    opp_document = documents_service.create_document(
+        db,
+        organization_id=organization_id,
+        payload=document_schemas.DocumentCreate(
+            category="crm.opportunity",
+            document_type="OPPORTUNITY",
+            native_id=opp_id,
+            title=opp_title,
+            current_status=initial_stage_code,
+            origin_module="CRM",
+            responsible_id=responsible_user_id,
+        ),
+        current_user=current_user,
+    )
+
+    opp = models.Opportunity(
+        id=opp_id,
+        organization_id=organization_id,
+        document_id=opp_document.id,
+        lead_id=None,
+        customer_id=customer.id if customer else None,
+        contact_id=contact.id,
+        title=opp_title,
+        customer_name=customer.trade_name or customer.name if customer else (contact.name or contact.full_name),
+        estimated_amount=estimated_amount or Decimal("0.00"),
+        probability_percent=probability_percent if probability_percent is not None else 20,
+        expected_closing_date=expected_closing_date,
+        stage=initial_stage_code,
+        assigned_to_id=responsible_user_id,
+    )
+    created_opp = repository.create_opportunity(db, opp)
+    db.commit()
+    return created_opp
 
 
 def list_opportunity_quotations(

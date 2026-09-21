@@ -1,6 +1,6 @@
 /**
  * pages/CRM/CRM.tsx - Módulo Central de CRM, Funil Comercial & Relacionamento (ControlB)
- * 
+ *
  * Funcionalidades das Fases 1 & 2:
  * 1. 📊 Menu Lateral Estruturado (Dashboard, Funil Kanban, Lista de Oportunidades, Leads, Atividades, Etapas)
  * 2. 🔀 Pipeline Kanban Moderno com Drag-and-Drop Nativo (HTML5) entre quaisquer etapas com contadores e totais em R$
@@ -11,8 +11,8 @@
  * 7. ⚙️ Gestão Dinâmica de Etapas do Funil com Cores, Ordenação e Contadores
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard, Kanban, Users,
   Clock, Phone, Mail, FileText,
@@ -31,13 +31,15 @@ import {
   FileCheck, ExternalLink, GitBranch,
   SlidersHorizontal, List, LayoutGrid
 } from 'lucide-react';
-import { crmService, salesService, inventoryService, documentService, formatApiError } from '@/services/api';
+import { crmService, salesService, inventoryService, documentService, chatService, formatApiError } from '@/services/api';
 import type { Lead, Opportunity, Product, SalesQuote, CRMStage, Customer, CustomerInteraction, BusinessDocumentChain, SellerResponse } from '@/types';
+import type { ContactOrigin } from '@/types/chat';
+import { useChatUi } from '@/components/ChatWidget/ChatContext';
+import { RecordEditorSurface } from '@/components/RecordForm/RecordEditorSurface';
+import { RecordFormPage, UnsavedChangesGuard } from '@/components/RecordForm';
 import { Modal } from '@/components/Modal/Modal';
 import { ConfirmModal } from '@/components/ConfirmModal/ConfirmModal';
 import { CustomerPicker } from '@/components/CustomerPicker';
-import { CustomerModal } from '@/components/CustomerModal/CustomerModal';
-import { QuoteModal } from '@/components/QuoteModal/QuoteModal';
 import { DocumentTimeline } from '@/components/DocumentTimeline/DocumentTimeline';
 import { CommercialTeamsSettings } from '@/components/CommercialTeamsSettings/CommercialTeamsSettings';
 import { CommercialPoliciesSettings } from '@/components/CommercialPoliciesSettings/CommercialPoliciesSettings';
@@ -46,7 +48,7 @@ import { BulkActionsBar } from '@/components/BulkActionsBar';
 import { ListPagination } from '@/components/ListPagination';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useListPagination } from '@/hooks/useListPagination';
-import { RecordLink, useRecordDeepLink, isRequestedView } from '@/components/RecordLink';
+import { RecordLink, useRecordDeepLink, isRequestedView, buildRecordHref, parseRecordReference } from '@/components/RecordLink';
 import './CRM.scss';
 
 const ALLOWED_CRM_TABS = ['dashboard', 'pipeline', 'leads', 'activities', 'stages', 'reports'] as const;
@@ -90,8 +92,29 @@ const DEFAULT_OPP_COLUMNS: Record<string, boolean> = {
   actions: true,
 };
 
-export const CRM: React.FC = () => {
+export function CRMRecordFormPage() {
+  const { resource, recordId } = useParams();
+  const location = useLocation();
+  if (!resource || !recordId || !['leads', 'oportunidades', 'atividades'].includes(resource)) return <Navigate to="/crm" replace />;
+  return <CRM key={location.key} recordKind={resource} recordId={recordId} />;
+}
+
+export const CRM: React.FC<{ recordKind?: string; recordId?: string }> = ({ recordKind, recordId }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const recordInitialized = useRef(false);
+  const [recordReady, setRecordReady] = useState(!recordKind);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const [recordAttempt, setRecordAttempt] = useState(0);
+  const [recordSaving, setRecordSaving] = useState(false);
+  const [recordDirty, setRecordDirty] = useState(false);
+  const [leadTab, setLeadTab] = useState('identity');
+  const recordList = '/crm?view=' + (recordKind === 'leads' ? 'leads' : recordKind === 'atividades' ? 'activities' : 'pipeline');
+  const closeRecord = () => navigate(recordList);
+  const openRecord = (resource: string, id = 'novo', query = '') => navigate(`/crm/${resource}/${id}${query}`);
+
   const toast = useToast();
+  const chat = useChatUi();
   const [searchParams] = useSearchParams();
   const initialCrmTab = isRequestedView(searchParams, ALLOWED_CRM_TABS, 'pipeline');
 
@@ -115,6 +138,7 @@ export const CRM: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [allInteractions, setAllInteractions] = useState<CustomerInteraction[]>([]);
   const [sellersList, setSellersList] = useState<SellerResponse[]>([]);
+  const [contactOrigins, setContactOrigins] = useState<ContactOrigin[]>([]);
   const [pendingSidebarActivities, setPendingSidebarActivities] = useState<any[]>([]);
   const opportunitySelection = useBulkSelection<Opportunity>();
   const leadSelection = useBulkSelection<Lead>();
@@ -198,9 +222,18 @@ export const CRM: React.FC = () => {
   const [editLeadForm, setEditLeadForm] = useState({
     name: '',
     company_name: '',
+    document: '',
     email: '',
     phone: '',
+    secondary_phone: '',
+    position: '',
+    segment: '',
+    address_city: '',
+    address_state: '',
+    annual_revenue: '',
     source: 'Indicação',
+    contact_origin_id: '',
+    customer_id: '',
     status: 'NEW',
     notes: ''
   });
@@ -290,9 +323,46 @@ export const CRM: React.FC = () => {
     document: '',
     email: '',
     phone: '',
+    secondary_phone: '',
+    position: '',
+    segment: '',
+    address_city: '',
+    address_state: '',
+    annual_revenue: '',
     lead_source: 'Indicação',
+    contact_origin_id: '',
     notes: ''
   });
+
+  // Criação Rápida de Origem Compartilhada (ContactOrigin)
+  const [isCreatingOrigin, setIsCreatingOrigin] = useState<boolean>(false);
+  const [newOriginName, setNewOriginName] = useState<string>('');
+  const [isSavingOrigin, setIsSavingOrigin] = useState<boolean>(false);
+
+  const handleCreateNewOrigin = async (targetForm: 'new' | 'edit') => {
+    const trimmed = newOriginName.trim();
+    if (!trimmed) return;
+    setIsSavingOrigin(true);
+    try {
+      const created = await chatService.createContactOrigin({ name: trimmed });
+      toast.success(`Origem "${created.name}" cadastrada com sucesso!`, "Origem Cadastrada");
+      setContactOrigins(prev => {
+        if (prev.some(o => o.id === created.id)) return prev;
+        return [...prev, created].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      if (targetForm === 'new') {
+        setLeadForm(prev => ({ ...prev, contact_origin_id: created.id, lead_source: created.name }));
+      } else {
+        setEditLeadForm(prev => ({ ...prev, contact_origin_id: created.id, source: created.name }));
+      }
+      setNewOriginName('');
+      setIsCreatingOrigin(false);
+    } catch (err: any) {
+      toast.error(formatApiError(err, "Não foi possível cadastrar a nova origem."));
+    } finally {
+      setIsSavingOrigin(false);
+    }
+  };
 
   // Form Nova Etapa
   const [newStageForm, setNewStageForm] = useState({
@@ -344,13 +414,10 @@ export const CRM: React.FC = () => {
 
   // Cliente vinculado à oportunidade e Wizard de Cadastro de Cliente (Módulo de Vendas)
   const [linkedCustomer, setLinkedCustomer] = useState<Customer | null>(null);
-  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
   const [isCustomerPickerModalOpen, setIsCustomerPickerModalOpen] = useState<boolean>(false);
 
   // Cotações vinculadas à oportunidade e Formulário Próprio de Cotação
   const [oppQuotations, setOppQuotations] = useState<SalesQuote[]>([]);
-  const [isDedicatedQuoteModalOpen, setIsDedicatedQuoteModalOpen] = useState<boolean>(false);
-  const [editingQuote, setEditingQuote] = useState<SalesQuote | null>(null);
 
   // Itens da Proposta Principal
   const [quoteItems, setQuoteItems] = useState<Array<{
@@ -377,13 +444,14 @@ export const CRM: React.FC = () => {
   const loadCRMData = async (forceRefresh = false) => {
     setLoading(true);
     try {
-      const [fetchedStages, fetchedLeads, fetchedOpps, fetchedProducts, fetchedInteractions, fetchedSellers] = await Promise.all([
+      const [fetchedStages, fetchedLeads, fetchedOpps, fetchedProducts, fetchedInteractions, fetchedSellers, fetchedOrigins] = await Promise.all([
         crmService.getStages(forceRefresh).catch(() => []),
         crmService.getLeads(undefined, forceRefresh).catch(() => []),
         crmService.getOpportunities(undefined, forceRefresh).catch(() => []),
         inventoryService.getProducts(undefined, forceRefresh).catch(() => []),
         crmService.getInteractions(undefined, undefined, forceRefresh).catch(() => []),
-        salesService.getSellers(forceRefresh).catch(() => [])
+        salesService.getSellers(forceRefresh).catch(() => []),
+        chatService.getContactOrigins().catch(() => [])
       ]);
 
       if (fetchedStages && fetchedStages.length > 0) {
@@ -398,6 +466,7 @@ export const CRM: React.FC = () => {
       setProducts(fetchedProducts || []);
       setAllInteractions(fetchedInteractions || []);
       setSellersList(fetchedSellers || []);
+      setContactOrigins(fetchedOrigins || []);
     } catch (err: any) {
       toast.error(formatApiError(err, "Falha ao carregar dados do CRM."));
     } finally {
@@ -433,12 +502,20 @@ export const CRM: React.FC = () => {
     return digits;
   };
 
-  const handleOpenWhatsApp = (phone?: string | null, name?: string) => {
+  const handleOpenWhatsApp = (phone?: string | null, name?: string, contactId?: string | null) => {
     const digits = cleanPhone(phone);
     if (!digits) {
       toast.warning("Este contato não possui telefone válido cadastrado.", "Telefone Ausente");
       return;
     }
+
+    // Se o usuário tiver canais atribuídos no Chat interno, abre diretamente no sistema
+    if (chat.canAccess) {
+      chat.startConversation(contactId || undefined);
+      return;
+    }
+
+    // Fallback externo para WhatsApp Web caso o usuário não tenha instâncias
     const msg = `Olá ${name || ''}! Tudo bem? Estou entrando em contato referente à sua solicitação na ControlB.`;
     window.open(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`, '_blank');
   };
@@ -486,18 +563,18 @@ export const CRM: React.FC = () => {
     if (!lossModalOpp) return;
 
     const opp = lossModalOpp;
-    const finalReason = lossCompetitor.trim() 
+    const finalReason = lossCompetitor.trim()
       ? `${lossReason} (Concorrente: ${lossCompetitor.trim()})`
       : lossReason;
 
     setIsSavingLoss(true);
     try {
       await crmService.updateOpportunityStage(opp.id, 'LOST', finalReason);
-      
-      setOpportunities(prev => prev.map(o => o.id === opp.id ? { 
-        ...o, 
-        stage: 'LOST', 
-        loss_reason: finalReason 
+
+      setOpportunities(prev => prev.map(o => o.id === opp.id ? {
+        ...o,
+        stage: 'LOST',
+        loss_reason: finalReason
       } : o));
 
       if (lossNotes.trim()) {
@@ -553,12 +630,13 @@ export const CRM: React.FC = () => {
     setDraggedOppId(null);
   };
 
-  const loadOpportunityDetails = async (opp: Opportunity) => {
+  const loadOpportunityDetails = async (opp: Opportunity, hydrate = false) => {
+    if (!hydrate) { openRecord('oportunidades', opp.id); return; }
     setSelectedOpp(opp);
     setSelectedOppForQuote(opp);
     setConvertingLead(null);
     setProposalActiveTab('general');
-    
+
     try {
       const [interactions, quotes] = await Promise.all([
         crmService.getInteractions(undefined, opp.id, true).catch(() => []),
@@ -642,11 +720,13 @@ export const CRM: React.FC = () => {
 
       setIsQuoteModalOpen(true);
     } catch (err: any) {
+      if (hydrate) throw err;
       toast.error(formatApiError(err, "Falha ao carregar detalhes completos da oportunidade."));
     }
   };
 
-  const handleOpenNewOppStudio = (leadToConvert?: Lead | null, initialStage?: string) => {
+  const handleOpenNewOppStudio = (leadToConvert?: Lead | null, initialStage?: string, hydrate = false) => {
+    if (!hydrate) { const query = new URLSearchParams(); if (leadToConvert) query.set('leadId', leadToConvert.id); if (initialStage) query.set('stage', initialStage); openRecord('oportunidades', 'novo', '?' + query); return; }
     setSelectedOpp(null);
     setSelectedOppForQuote(null);
     setConvertingLead(leadToConvert || null);
@@ -735,19 +815,28 @@ export const CRM: React.FC = () => {
 
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (recordSaving) return;
     if (!leadForm.name.trim()) {
       toast.warning("Informe o nome do contato.", "Nome Obrigatório");
       return;
     }
 
     try {
-      await crmService.createLead({
+      setRecordSaving(true);
+      const created = await crmService.createLead({
         name: leadForm.name.trim(),
         company_name: leadForm.company_name.trim() || undefined,
         document: leadForm.document.trim() || undefined,
         email: leadForm.email.trim() || undefined,
         phone: leadForm.phone.trim() || undefined,
+        secondary_phone: leadForm.secondary_phone.trim() || undefined,
+        position: leadForm.position.trim() || undefined,
+        segment: leadForm.segment.trim() || undefined,
+        address_city: leadForm.address_city.trim() || undefined,
+        address_state: leadForm.address_state.trim() || undefined,
+        annual_revenue: leadForm.annual_revenue ? parseFloat(leadForm.annual_revenue) : undefined,
         source: leadForm.lead_source,
+        contact_origin_id: leadForm.contact_origin_id || undefined,
         notes: leadForm.notes.trim() || undefined,
         customer_id: leadForm.customer_id || undefined
       });
@@ -759,25 +848,44 @@ export const CRM: React.FC = () => {
         document: '',
         email: '',
         phone: '',
+        secondary_phone: '',
+        position: '',
+        segment: '',
+        address_city: '',
+        address_state: '',
+        annual_revenue: '',
         lead_source: 'Indicação',
+        contact_origin_id: '',
         notes: ''
       });
       setIsLeadModalOpen(false);
+      navigate(`/crm/leads/${created.id}`, { replace: true });
       toast.success("Lead cadastrado com sucesso!", "Lead Adicionado");
       void loadCRMData();
     } catch (err: any) {
+      setRecordSaving(false);
       toast.error(formatApiError(err, "Erro ao cadastrar lead."));
     }
   };
 
-  const handleOpenEditLead = (lead: Lead) => {
+  const handleOpenEditLead = (lead: Lead, hydrate = false) => {
+    if (!hydrate) { openRecord('leads', lead.id); return; }
     setEditingLead(lead);
     setEditLeadForm({
       name: lead.name,
       company_name: lead.company_name || '',
+      document: lead.document || '',
       email: lead.email || '',
       phone: lead.phone || '',
+      secondary_phone: lead.secondary_phone || '',
+      position: lead.position || '',
+      segment: lead.segment || '',
+      address_city: lead.address_city || '',
+      address_state: lead.address_state || '',
+      annual_revenue: lead.annual_revenue ? String(lead.annual_revenue) : '',
       source: lead.source || 'Indicação',
+      contact_origin_id: lead.contact_origin_id || '',
+      customer_id: lead.customer_id || '',
       status: lead.status || 'NEW',
       notes: lead.notes || ''
     });
@@ -785,21 +893,32 @@ export const CRM: React.FC = () => {
 
   const handleSaveEditLead = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (recordSaving) return;
     if (!editingLead) return;
     try {
+      setRecordSaving(true);
       await crmService.updateLead(editingLead.id, {
         name: editLeadForm.name.trim(),
         company_name: editLeadForm.company_name.trim() || undefined,
+        document: editLeadForm.document.trim() || undefined,
         email: editLeadForm.email.trim() || undefined,
         phone: editLeadForm.phone.trim() || undefined,
+        secondary_phone: editLeadForm.secondary_phone.trim() || undefined,
+        position: editLeadForm.position.trim() || undefined,
+        segment: editLeadForm.segment.trim() || undefined,
+        address_city: editLeadForm.address_city.trim() || undefined,
+        address_state: editLeadForm.address_state.trim() || undefined,
+        annual_revenue: editLeadForm.annual_revenue ? parseFloat(editLeadForm.annual_revenue) : undefined,
         source: editLeadForm.source,
+        contact_origin_id: editLeadForm.contact_origin_id || undefined,
+        customer_id: editLeadForm.customer_id || undefined,
         status: editLeadForm.status as any,
         notes: editLeadForm.notes.trim() || undefined
       });
       toast.success("Dados do lead atualizados com sucesso!", "Lead Atualizado");
-      setEditingLead(null);
-      void loadCRMData();
+      navigate(`/crm/leads/${editingLead.id}`, { replace: true });
     } catch (err: any) {
+      setRecordSaving(false);
       toast.error(formatApiError(err, "Erro ao atualizar lead."));
     }
   };
@@ -834,8 +953,31 @@ export const CRM: React.FC = () => {
     }
   };
 
-  const handleStartConvertLead = (lead: Lead) => {
-    handleOpenNewOppStudio(lead);
+  const handleConvertLeadToOpp = (lead: Lead) => {
+    openConfirmModal({
+      title: 'Converter Lead em Oportunidade',
+      subtitle: lead.name,
+      message: (
+        <div>
+          <p>Deseja converter o lead <strong>{lead.name}</strong> em Oportunidade no Funil de Vendas?</p>
+          <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            O sistema verificará ou criará o cadastro de Cliente e Contato na organização sem duplicidades, vinculará a nova Oportunidade e atualizará o status do Lead para CONVERTIDO.
+          </p>
+        </div>
+      ),
+      confirmText: 'Converter em Oportunidade',
+      type: 'info',
+      onConfirm: async () => {
+        try {
+          const result = await crmService.convertLeadToOpportunity(lead.id);
+          closeConfirmModal();
+          toast.success(`Lead convertido com sucesso! Oportunidade "${result.title}" criada.`, 'Lead Convertido');
+          await loadCRMData();
+        } catch (err: any) {
+          toast.error(formatApiError(err, 'Falha ao converter lead em oportunidade.'));
+        }
+      }
+    });
   };
 
   // ===========================================================================
@@ -871,7 +1013,7 @@ export const CRM: React.FC = () => {
 
       const created = await crmService.createInteraction(payload);
       setAllInteractions(prev => [created, ...prev]);
-      setIsGlobalActivityModalOpen(false);
+      navigate(`/crm/atividades/${created.id}`, { replace: true });
       setGlobalActivityForm({
         type: 'CALL',
         linked_type: 'OPPORTUNITY',
@@ -891,7 +1033,8 @@ export const CRM: React.FC = () => {
     }
   };
 
-  const handleOpenInteractionEditor = (interaction: CustomerInteraction) => {
+  const handleOpenInteractionEditor = (interaction: CustomerInteraction, hydrate = false) => {
+    if (!hydrate) { openRecord('atividades', interaction.id); return; }
     const interactionDate = new Date(interaction.interaction_date || interaction.created_at);
     const safeDate = Number.isNaN(interactionDate.getTime()) ? new Date() : interactionDate;
     const isoDate = safeDate.toISOString();
@@ -956,7 +1099,7 @@ export const CRM: React.FC = () => {
 
       setAllInteractions(prev => prev.map(item => item.id === updated.id ? updated : item));
       setOppInteractions(prev => prev.map(item => item.id === updated.id ? updated : item));
-      setEditingInteraction(null);
+      navigate(`/crm/atividades/${updated.id}`, { replace: true });
       toast.success(
         isNote ? 'Nota atualizada com sucesso!' : 'Atividade atualizada com sucesso!',
         'Atualização salva'
@@ -983,7 +1126,7 @@ export const CRM: React.FC = () => {
 
     setIsSavingStage(true);
     try {
-      const generatedCode = newStageForm.code.trim() 
+      const generatedCode = newStageForm.code.trim()
         ? newStageForm.code.trim().toUpperCase().replace(/\s+/g, '_')
         : newStageForm.name.trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Z0-9]/g, '_');
 
@@ -1139,13 +1282,13 @@ export const CRM: React.FC = () => {
 
   // Handlers do Formulário Dedicado de Cotação
   const handleOpenNewQuoteModal = () => {
-    setEditingQuote(null);
-    setIsDedicatedQuoteModalOpen(true);
+    const params = new URLSearchParams(); if (selectedOpp?.id) params.set('opportunityId', selectedOpp.id); if (linkedCustomer?.id) params.set('customerId', linkedCustomer.id); navigate('/vendas/cotacoes/novo?' + params, { state: { returnTo: location.pathname } });
+
   };
 
   const handleOpenEditQuoteModal = (quote: SalesQuote) => {
-    setEditingQuote(quote);
-    setIsDedicatedQuoteModalOpen(true);
+    navigate('/vendas/cotacoes/' + quote.id, { state: { returnTo: location.pathname } });
+
   };
 
   const handleSetMainQuote = async (quote: SalesQuote) => {
@@ -1177,12 +1320,13 @@ export const CRM: React.FC = () => {
 
   // Handlers do Wizard de Cadastro e Vinculação de Clientes (Módulo de Vendas)
   const handleOpenEditCustomerModal = () => {
-    setIsCustomerModalOpen(true);
+    if (linkedCustomer?.id) navigate('/vendas/clientes/' + linkedCustomer.id, { state: { returnTo: location.pathname } });
+
   };
 
   const handleOpenNewCustomerModal = () => {
-    setLinkedCustomer(null);
-    setIsCustomerModalOpen(true);
+    navigate('/vendas/clientes/novo', { state: { returnTo: location.pathname, opportunityId: selectedOpp?.id, selectCustomerOnReturn: true } });
+
   };
 
 
@@ -1232,6 +1376,7 @@ export const CRM: React.FC = () => {
     }
 
     setIsSavingQuote(true);
+    let savedId = selectedOppForQuote?.id;
     try {
       if (selectedOppForQuote) {
         // Atualiza oportunidade existente no funil
@@ -1245,7 +1390,7 @@ export const CRM: React.FC = () => {
           priority: proposalForm.priority,
           assigned_to_id: proposalForm.assigned_to_id || undefined,
         });
-        
+
         // Emite/atualiza itens cotados
         if (quoteItems.length > 0) {
           await crmService.createQuoteFromOpportunity(selectedOppForQuote.id, quoteItems);
@@ -1300,6 +1445,8 @@ export const CRM: React.FC = () => {
           lead_id: convertingLead ? convertingLead.id : undefined
         });
 
+        savedId = created.id;
+
         if (quoteItems.length > 0) {
           await crmService.createQuoteFromOpportunity(created.id, quoteItems);
         }
@@ -1333,9 +1480,8 @@ export const CRM: React.FC = () => {
         toast.success(`Oportunidade '${proposalForm.title}' criada e adicionada ao funil!`, "Negócio Criado");
       }
 
-      setIsQuoteModalOpen(false);
-      setSelectedOpp(null);
-      setSelectedOppForQuote(null);
+      setRecordDirty(false);
+      navigate(`/crm/oportunidades/${savedId}`, { replace: true });
       void loadCRMData();
     } catch (err: any) {
       toast.error(formatApiError(err, "Falha ao salvar oportunidade comercial."));
@@ -1495,8 +1641,8 @@ export const CRM: React.FC = () => {
       }
       setProposalForm(prev => ({ ...prev, status: 'APPROVED', pipeline_stage: 'WON' }));
       toast.success(`🏆 Parabéns! Oportunidade marcada como Ganha no Pipeline!`, "Negócio Ganho");
-      setIsQuoteModalOpen(false);
-      void loadCRMData();
+      setRecordDirty(false);
+      navigate(`/crm/oportunidades/${targetOppId}`, { replace: true });
     } catch (err: any) {
       toast.error(formatApiError(err, "Falha ao marcar oportunidade como ganha."));
     }
@@ -1570,17 +1716,10 @@ export const CRM: React.FC = () => {
   };
 
   const handleScheduleUrgentFollowUp = (opp: Opportunity) => {
-    setGlobalActivityForm({
-      type: 'CALL',
-      linked_type: 'OPPORTUNITY',
-      linked_id: opp.id,
-      summary: `🚨 Follow-up Emergencial: ${opp.title}`,
-      details: `Contato prioritário devido à estagnação de negociação no CRM. Retomar contato comercial com ${opp.customer_name}.`,
-      date: new Date().toISOString().split('T')[0],
-      time: '10:00',
-      responsible_id: opp.assigned_to_id || ''
-    });
-    setIsGlobalActivityModalOpen(true);
+    openRecord('atividades', 'novo', '?opportunityId=' + opp.id);
+    return;
+
+
   };
 
   const selectedOppCustomerLTV = useMemo(() => {
@@ -1822,6 +1961,43 @@ export const CRM: React.FC = () => {
       .slice(0, 5);
   }, [opportunities]);
 
+  const hydrateRecord = useRef<() => Promise<void>>(async () => {});
+  hydrateRecord.current = async () => {
+    if (!recordId || !recordKind) return;
+      try {
+        if (recordKind === 'leads') {
+          if (recordId === 'novo') setIsLeadModalOpen(true);
+          else { const item = leads.find(row => row.id === recordId); if (!item) throw new Error('Lead não encontrado ou sem acesso.'); handleOpenEditLead(item, true); }
+        } else if (recordKind === 'atividades') {
+          if (recordId === 'novo') {
+            setIsGlobalActivityModalOpen(true);
+            const oppId = searchParams.get('opportunityId');
+            if (oppId) setGlobalActivityForm(prev => ({ ...prev, linked_type: 'OPPORTUNITY', linked_id: oppId }));
+          } else { const item = allInteractions.find(row => row.id === recordId); if (!item) throw new Error('Atividade não encontrada ou sem acesso.'); handleOpenInteractionEditor(item, true); }
+        } else if (recordId === 'novo') {
+          const leadId = searchParams.get('leadId');
+          const lead = leads.find(row => row.id === leadId);
+          if (leadId && !lead) throw new Error('Lead de origem não encontrado.');
+          handleOpenNewOppStudio(lead, searchParams.get('stage') || undefined, true);
+        } else {
+          await loadOpportunityDetails(await crmService.getOpportunity(recordId, true), true);
+        }
+        const returnedCustomerId = searchParams.get('selectedCustomer');
+        if (recordKind === 'oportunidades' && returnedCustomerId) {
+          const customer = await salesService.getCustomer(returnedCustomerId);
+          setLinkedCustomer(customer);
+          setProposalForm(prev => ({ ...prev, customer_id: customer.id, customer_name: customer.trade_name || customer.name, customer_document: customer.document || '', customer_email: customer.email || '', customer_phone: customer.phone || '' }));
+        }
+        setRecordReady(true);
+      } catch (err) { setRecordError(formatApiError(err, 'Não foi possível abrir o registro CRM.')); }
+  };
+  useEffect(() => {
+    if (!recordKind || !recordId || loading || recordInitialized.current) return;
+    recordInitialized.current = true;
+    setRecordError(null);
+    void hydrateRecord.current();
+  }, [recordKind, recordId, loading, recordAttempt]);
+
   const recentActivities = useMemo(() => {
     return [...allInteractions]
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -1830,7 +2006,9 @@ export const CRM: React.FC = () => {
 
   return (
     <div className="crm-page">
-      <div className="crm-layout">
+      {recordKind && !recordReady && <RecordFormPage title="Registro CRM" isLoading={!recordError} error={recordError} onBack={closeRecord} onRetry={() => { recordInitialized.current = false; setRecordAttempt(n => n + 1); }} />}
+
+      {!recordKind && <div className="crm-layout">
         {/* =================================================================== */}
         {/* 1. SIDEBAR LATERAL DO CRM                                           */}
         {/* =================================================================== */}
@@ -1995,7 +2173,7 @@ export const CRM: React.FC = () => {
                 <button
                   type="button"
                   className="btn-primary ui-button ui-button--primary"
-                  onClick={() => setIsLeadModalOpen(true)}
+                  onClick={() => openRecord('leads')}
                 >
                   <UserPlus size={16} />
                   <span>Novo Lead</span>
@@ -2006,7 +2184,7 @@ export const CRM: React.FC = () => {
                 <button
                   type="button"
                   className="btn-primary ui-button ui-button--primary"
-                  onClick={() => setIsGlobalActivityModalOpen(true)}
+                  onClick={() => openRecord('atividades')}
                 >
                   <Plus size={16} />
                   <span>+ Agendar Atividade</span>
@@ -2018,7 +2196,7 @@ export const CRM: React.FC = () => {
                   <button
                     type="button"
                     className="btn-secondary ui-button ui-button--secondary"
-                    onClick={() => setIsLeadModalOpen(true)}
+                    onClick={() => openRecord('leads')}
                   >
                     <UserPlus size={16} />
                     <span>+ Novo Lead</span>
@@ -2675,8 +2853,8 @@ export const CRM: React.FC = () => {
                                 <button
                                   type="button"
                                   className="btn-quick-contact whatsapp"
-                                  onClick={() => handleOpenWhatsApp(lead.phone, lead.name)}
-                                  title="Chamar no WhatsApp Web"
+                                  onClick={() => handleOpenWhatsApp(lead.phone, lead.name, lead.contact_id)}
+                                  title="Chamar no WhatsApp"
                                 >
                                   <MessageSquare size={13} />
                                   <span>WhatsApp</span>
@@ -2724,11 +2902,11 @@ export const CRM: React.FC = () => {
                               <button
                                 type="button"
                                 className="btn-action-convert"
-                                onClick={() => handleStartConvertLead(lead)}
-                                title="Converter este Lead em Oportunidade no Funil"
+                                onClick={() => handleConvertLeadToOpp(lead)}
+                                title="Converter este Lead em Oportunidade no Funil de Vendas"
                               >
                                 <ArrowUpRight size={14} />
-                                <span>Criar Negócio</span>
+                                <span>Converter em Oportunidade</span>
                               </button>
                             )}
                             <button
@@ -3302,7 +3480,7 @@ export const CRM: React.FC = () => {
             </div>
           )}
         </main>
-      </div>
+      </div>}
 
 
 
@@ -3310,9 +3488,10 @@ export const CRM: React.FC = () => {
       {/* MODAL DE AGENDAR ATIVIDADE GLOBAL (FASE 2)                          */}
       {/* =================================================================== */}
       {isGlobalActivityModalOpen && (
-        <Modal
+        <RecordEditorSurface page saving={recordSaving || isSavingGlobalActivity || isSavingInteractionEdit}
+
           isOpen={true}
-          onClose={() => setIsGlobalActivityModalOpen(false)}
+          onClose={closeRecord}
           title="Agendar Ação Comercial / Follow-up"
           subtitle="Programe ligações, reuniões, follow-ups ou conversas de WhatsApp com prazos definidos"
           size="md"
@@ -3456,7 +3635,7 @@ export const CRM: React.FC = () => {
               <button
                 type="button"
                 className="btn-secondary ui-button ui-button--secondary"
-                onClick={() => setIsGlobalActivityModalOpen(false)}
+                onClick={closeRecord}
               >
                 Cancelar
               </button>
@@ -3469,13 +3648,14 @@ export const CRM: React.FC = () => {
               </button>
             </div>
           </form>
-        </Modal>
+        </RecordEditorSurface>
       )}
 
       {/* MODAL DE EDIÇÃO DE NOTA / ATIVIDADE */}
-      <Modal
+      <RecordEditorSurface page saving={recordSaving || isSavingGlobalActivity || isSavingInteractionEdit}
+
         isOpen={Boolean(editingInteraction)}
-        onClose={() => setEditingInteraction(null)}
+        onClose={closeRecord}
         title={interactionEditForm.type === 'NOTE' ? 'Editar nota' : 'Editar atividade'}
         subtitle="A alteração será registrada na trilha de auditoria da oportunidade"
         size="md"
@@ -3598,7 +3778,7 @@ export const CRM: React.FC = () => {
             <button
               type="button"
               className="btn-secondary ui-button ui-button--secondary"
-              onClick={() => setEditingInteraction(null)}
+              onClick={closeRecord}
             >
               Cancelar
             </button>
@@ -3611,20 +3791,45 @@ export const CRM: React.FC = () => {
             </button>
           </div>
         </form>
-      </Modal>
+      </RecordEditorSurface>
 
       {/* =================================================================== */}
       {/* MODAL DE EDITAR LEAD (FASE 2)                                       */}
       {/* =================================================================== */}
       {editingLead && (
-        <Modal
+        <RecordEditorSurface page saving={recordSaving || isSavingGlobalActivity || isSavingInteractionEdit}
+          tabs={[{id: 'identity', label: 'Identificação'}, {id: 'contact', label: 'Contato e endereço'}, {id: 'origin', label: 'Origem e qualificação'}]} activeTab={leadTab} onTabChange={setLeadTab}
           isOpen={true}
-          onClose={() => setEditingLead(null)}
+          onClose={closeRecord}
           title={`Editar Lead: ${editingLead.name}`}
           subtitle="Atualize os dados cadastrais, origem e status de qualificação"
           size="md"
         >
           <form onSubmit={handleSaveEditLead} className="wizard-form">
+            <section data-record-tab="identity" hidden={leadTab !== 'identity'} className="record-fields-section">
+<CustomerPicker
+              value={editLeadForm.customer_id}
+              onChange={(customer: Customer | null) => {
+                if (customer) {
+                  setEditLeadForm(prev => ({
+                    ...prev,
+                    customer_id: customer.id,
+                    name: prev.name || customer.trade_name || customer.name,
+                    company_name: prev.company_name || customer.name,
+                    document: prev.document || customer.document || '',
+                    email: prev.email || customer.email || '',
+                    phone: prev.phone || customer.phone || '',
+                    secondary_phone: prev.secondary_phone || customer.secondary_phone || '',
+                    segment: prev.segment || customer.segment || ''
+                  }));
+                } else {
+                  setEditLeadForm(prev => ({ ...prev, customer_id: '' }));
+                }
+              }}
+              label="Cliente Vinculado (Opcional)"
+              placeholder="Pesquise cliente existente ou altere o vínculo..."
+            />
+
             <div className="form-group">
               <label>Nome do Contato *</label>
               <input
@@ -3664,6 +3869,31 @@ export const CRM: React.FC = () => {
 
             <div className="form-row cols-2">
               <div className="form-group flex-1">
+                <label>Cargo / Posição</label>
+                <input
+                  type="text"
+                  className="ui-input"
+                  placeholder="Ex: Diretor de Compras"
+                  value={editLeadForm.position}
+                  onChange={(e) => setEditLeadForm({ ...editLeadForm, position: e.target.value })}
+                />
+              </div>
+              <div className="form-group flex-1">
+                <label>Segmento / Nicho</label>
+                <input
+                  type="text"
+                  className="ui-input"
+                  placeholder="Ex: Construção Civil"
+                  value={editLeadForm.segment}
+                  onChange={(e) => setEditLeadForm({ ...editLeadForm, segment: e.target.value })}
+                />
+              </div>
+            </div>
+</section>
+
+            <section data-record-tab="contact" hidden={leadTab !== 'contact'} className="record-fields-section">
+<div className="form-row cols-2">
+              <div className="form-group flex-1">
                 <label>E-mail</label>
                 <input
                   type="email"
@@ -3673,7 +3903,7 @@ export const CRM: React.FC = () => {
                 />
               </div>
               <div className="form-group flex-1">
-                <label>Telefone / WhatsApp</label>
+                <label>Telefone / WhatsApp Principal</label>
                 <input
                   type="text"
                   className="ui-input"
@@ -3683,19 +3913,123 @@ export const CRM: React.FC = () => {
               </div>
             </div>
 
-            <div className="form-group">
-              <label>Origem do Lead</label>
-              <select
-                value={editLeadForm.source}
-                onChange={(e) => setEditLeadForm({ ...editLeadForm, source: e.target.value })}
-                className="ui-input"
-              >
-                <option value="Site / Formulário">Site / Formulário</option>
-                <option value="Indicação">Indicação</option>
-                <option value="Contato Telefônico">Contato Telefônico</option>
-                <option value="Evento / Feira">Evento / Feira</option>
-                <option value="Outro">Outro</option>
-              </select>
+            <div className="form-row cols-2">
+              <div className="form-group flex-1">
+                <label>Telefone Secundário</label>
+                <input
+                  type="text"
+                  className="ui-input"
+                  placeholder="(00) 0000-0000"
+                  value={editLeadForm.secondary_phone}
+                  onChange={(e) => setEditLeadForm({ ...editLeadForm, secondary_phone: e.target.value })}
+                />
+              </div>
+              <div className="form-group flex-1">
+                <label>Faturamento Anual (R$)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="ui-input"
+                  placeholder="0,00"
+                  value={editLeadForm.annual_revenue}
+                  onChange={(e) => setEditLeadForm({ ...editLeadForm, annual_revenue: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="form-row cols-2">
+              <div className="form-group flex-1">
+                <label>Cidade</label>
+                <input
+                  type="text"
+                  className="ui-input"
+                  placeholder="Ex: São Paulo"
+                  value={editLeadForm.address_city}
+                  onChange={(e) => setEditLeadForm({ ...editLeadForm, address_city: e.target.value })}
+                />
+              </div>
+              <div className="form-group flex-1">
+                <label>UF / Estado</label>
+                <input
+                  type="text"
+                  maxLength={2}
+                  className="ui-input"
+                  placeholder="SP"
+                  value={editLeadForm.address_state}
+                  onChange={(e) => setEditLeadForm({ ...editLeadForm, address_state: e.target.value.toUpperCase() })}
+                />
+              </div>
+            </div>
+</section>
+
+            <section data-record-tab="origin" hidden={leadTab !== 'origin'} className="record-fields-section">
+<div className="form-group">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                <label style={{ margin: 0 }}>Origem do Lead / Canal de Aquisição</label>
+                {!isCreatingOrigin && (
+                  <button
+                    type="button"
+                    className="btn-link"
+                    onClick={() => { setIsCreatingOrigin(true); setNewOriginName(''); }}
+                    style={{ fontSize: '0.78rem', color: 'var(--color-primary, #3b82f6)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                  >
+                    <Plus size={12} />
+                    <span>Nova Origem</span>
+                  </button>
+                )}
+              </div>
+
+              {isCreatingOrigin ? (
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    className="ui-input"
+                    placeholder="Ex: Instagram, Indicação, Evento, Site..."
+                    value={newOriginName}
+                    onChange={(e) => setNewOriginName(e.target.value)}
+                    disabled={isSavingOrigin}
+                    autoFocus
+                    maxLength={100}
+                  />
+                  <button
+                    type="button"
+                    className="btn-primary ui-button ui-button--primary sm"
+                    onClick={() => void handleCreateNewOrigin('edit')}
+                    disabled={isSavingOrigin || !newOriginName.trim()}
+                  >
+                    {isSavingOrigin ? 'Salvando...' : 'Salvar'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary ui-button ui-button--secondary sm"
+                    onClick={() => { setIsCreatingOrigin(false); setNewOriginName(''); }}
+                    disabled={isSavingOrigin}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={editLeadForm.contact_origin_id || ''}
+                  onChange={(e) => {
+                    const originId = e.target.value;
+                    const origin = contactOrigins.find(o => o.id === originId);
+                    setEditLeadForm(prev => ({
+                      ...prev,
+                      contact_origin_id: originId,
+                      source: origin ? origin.name : (originId ? prev.source : 'Indicação')
+                    }));
+                  }}
+                  className="ui-input"
+                >
+                  <option value="">-- Selecione ou mantenha ({editLeadForm.source || 'Padrão'}) --</option>
+                  {contactOrigins.map(origin => (
+                    <option key={origin.id} value={origin.id}>
+                      {origin.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="form-group">
@@ -3707,24 +4041,25 @@ export const CRM: React.FC = () => {
                 onChange={(e) => setEditLeadForm({ ...editLeadForm, notes: e.target.value })}
               />
             </div>
+</section>
 
             <div className="modal-footer ui-form__actions">
               <button
                 type="button"
                 className="btn-secondary ui-button ui-button--secondary"
-                onClick={() => setEditingLead(null)}
+                onClick={closeRecord}
               >
                 Cancelar
               </button>
               <button
-                type="submit"
+                type="submit" disabled={recordSaving}
                 className="btn-primary ui-button ui-button--primary"
               >
                 Salvar Alterações
               </button>
             </div>
           </form>
-        </Modal>
+        </RecordEditorSurface>
       )}
 
       {/* =================================================================== */}
@@ -3799,15 +4134,17 @@ export const CRM: React.FC = () => {
       {/* =================================================================== */}
       {/* MODAL NOVO LEAD                                                     */}
       {/* =================================================================== */}
-      <Modal
+      <RecordEditorSurface page saving={recordSaving || isSavingGlobalActivity || isSavingInteractionEdit}
+          tabs={[{id: 'identity', label: 'Identificação'}, {id: 'contact', label: 'Contato e endereço'}, {id: 'origin', label: 'Origem e qualificação'}]} activeTab={leadTab} onTabChange={setLeadTab}
         isOpen={isLeadModalOpen}
-        onClose={() => setIsLeadModalOpen(false)}
+        onClose={closeRecord}
         title="Novo Lead / Prospect"
-        subtitle="Cadastro integrado com a base centralizada de clientes de Vendas"
+        subtitle="Cadastro de prospecção comercial (vínculo com cliente é opcional)"
         size="md"
       >
         <form onSubmit={handleCreateLead} className="wizard-form">
-          <CustomerPicker
+          <section data-record-tab="identity" hidden={leadTab !== 'identity'} className="record-fields-section">
+<CustomerPicker
             value={leadForm.customer_id}
             onChange={(customer: Customer | null) => {
               if (customer) {
@@ -3818,14 +4155,16 @@ export const CRM: React.FC = () => {
                   company_name: customer.name,
                   document: customer.document || '',
                   email: customer.email || '',
-                  phone: customer.phone || ''
+                  phone: customer.phone || '',
+                  secondary_phone: customer.secondary_phone || '',
+                  segment: customer.segment || ''
                 }));
               } else {
                 setLeadForm(prev => ({ ...prev, customer_id: '' }));
               }
             }}
-            label="Vincular a Cliente Existente ou Cadastrar Novo *"
-            placeholder="Pesquise cliente existente ou clique em + Novo Cliente..."
+            label="Vincular a Cliente Existente (Opcional)"
+            placeholder="Pesquise cliente existente ou deixe em branco se for novo prospect..."
           />
 
           <div className="form-group">
@@ -3866,6 +4205,32 @@ export const CRM: React.FC = () => {
 
           <div className="form-row cols-2">
             <div className="form-group flex-1">
+              <label>Cargo / Posição</label>
+              <input
+                type="text"
+                className="ui-input"
+                placeholder="Ex: Gerente de Operações"
+                value={leadForm.position}
+                onChange={(e) => setLeadForm({ ...leadForm, position: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Segmento / Nicho</label>
+              <input
+                type="text"
+                className="ui-input"
+                placeholder="Ex: Varejo / Supermercados"
+                value={leadForm.segment}
+                onChange={(e) => setLeadForm({ ...leadForm, segment: e.target.value })}
+              />
+            </div>
+          </div>
+</section>
+
+          <section data-record-tab="contact" hidden={leadTab !== 'contact'} className="record-fields-section">
+<div className="form-row cols-2">
+            <div className="form-group flex-1">
               <label>E-mail</label>
               <input
                 type="email"
@@ -3877,7 +4242,7 @@ export const CRM: React.FC = () => {
             </div>
 
             <div className="form-group flex-1">
-              <label>Telefone / WhatsApp</label>
+              <label>Telefone / WhatsApp Principal</label>
               <input
                 type="text"
                 className="ui-input"
@@ -3888,19 +4253,125 @@ export const CRM: React.FC = () => {
             </div>
           </div>
 
-          <div className="form-group">
-            <label>Origem do Lead</label>
-            <select
-              value={leadForm.lead_source}
-              onChange={(e) => setLeadForm({ ...leadForm, lead_source: e.target.value })}
-              className="ui-input"
-            >
-              <option value="Site / Formulário">Site / Formulário</option>
-              <option value="Indicação">Indicação</option>
-              <option value="Contato Telefônico">Contato Telefônico</option>
-              <option value="Evento / Feira">Evento / Feira</option>
-              <option value="Outro">Outro</option>
-            </select>
+          <div className="form-row cols-2">
+            <div className="form-group flex-1">
+              <label>Telefone Secundário</label>
+              <input
+                type="text"
+                className="ui-input"
+                placeholder="(00) 0000-0000"
+                value={leadForm.secondary_phone}
+                onChange={(e) => setLeadForm({ ...leadForm, secondary_phone: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>Faturamento Anual Estimado (R$)</label>
+              <input
+                type="number"
+                step="0.01"
+                className="ui-input"
+                placeholder="0,00"
+                value={leadForm.annual_revenue}
+                onChange={(e) => setLeadForm({ ...leadForm, annual_revenue: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="form-row cols-2">
+            <div className="form-group flex-1">
+              <label>Cidade</label>
+              <input
+                type="text"
+                className="ui-input"
+                placeholder="Ex: Curitiba"
+                value={leadForm.address_city}
+                onChange={(e) => setLeadForm({ ...leadForm, address_city: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group flex-1">
+              <label>UF / Estado</label>
+              <input
+                type="text"
+                maxLength={2}
+                className="ui-input"
+                placeholder="PR"
+                value={leadForm.address_state}
+                onChange={(e) => setLeadForm({ ...leadForm, address_state: e.target.value.toUpperCase() })}
+              />
+            </div>
+          </div>
+</section>
+
+          <section data-record-tab="origin" hidden={leadTab !== 'origin'} className="record-fields-section">
+<div className="form-group">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+              <label style={{ margin: 0 }}>Origem do Lead / Canal de Aquisição</label>
+              {!isCreatingOrigin && (
+                <button
+                  type="button"
+                  className="btn-link"
+                  onClick={() => { setIsCreatingOrigin(true); setNewOriginName(''); }}
+                  style={{ fontSize: '0.78rem', color: 'var(--color-primary, #3b82f6)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                >
+                  <Plus size={12} />
+                  <span>Nova Origem</span>
+                </button>
+              )}
+            </div>
+
+            {isCreatingOrigin ? (
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  className="ui-input"
+                  placeholder="Ex: Instagram, Indicação, Evento, Site..."
+                  value={newOriginName}
+                  onChange={(e) => setNewOriginName(e.target.value)}
+                  disabled={isSavingOrigin}
+                  autoFocus
+                  maxLength={100}
+                />
+                <button
+                  type="button"
+                  className="btn-primary ui-button ui-button--primary sm"
+                  onClick={() => void handleCreateNewOrigin('new')}
+                  disabled={isSavingOrigin || !newOriginName.trim()}
+                >
+                  {isSavingOrigin ? 'Salvando...' : 'Salvar'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary ui-button ui-button--secondary sm"
+                  onClick={() => { setIsCreatingOrigin(false); setNewOriginName(''); }}
+                  disabled={isSavingOrigin}
+                >
+                  Cancelar
+                </button>
+              </div>
+            ) : (
+              <select
+                value={leadForm.contact_origin_id || ''}
+                onChange={(e) => {
+                  const originId = e.target.value;
+                  const origin = contactOrigins.find(o => o.id === originId);
+                  setLeadForm(prev => ({
+                    ...prev,
+                    contact_origin_id: originId,
+                    lead_source: origin ? origin.name : (originId ? prev.lead_source : 'Indicação')
+                  }));
+                }}
+                className="ui-input"
+              >
+                <option value="">-- Selecione a Origem ({leadForm.lead_source || 'Indicação'}) --</option>
+                {contactOrigins.map(origin => (
+                  <option key={origin.id} value={origin.id}>
+                    {origin.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div className="form-group">
@@ -3913,32 +4384,33 @@ export const CRM: React.FC = () => {
               onChange={(e) => setLeadForm({ ...leadForm, notes: e.target.value })}
             />
           </div>
+</section>
 
           <div className="modal-footer ui-form__actions">
             <button
               type="button"
               className="btn-secondary ui-button ui-button--secondary"
-              onClick={() => setIsLeadModalOpen(false)}
+              onClick={closeRecord}
             >
               Cancelar
             </button>
             <button
-              type="submit"
+              type="submit" disabled={recordSaving}
               className="btn-primary ui-button ui-button--primary"
             >
               Salvar Lead
             </button>
           </div>
         </form>
-      </Modal>
+      </RecordEditorSurface>
 
       {/* =================================================================== */}
       {/* OPPORTUNITY STUDIO — WORKSPACE 360º DA OPORTUNIDADE COMERCIAL       */}
       {/* =================================================================== */}
       {isQuoteModalOpen && (
-        <div className="proposal-studio-overlay">
+        <div className="proposal-studio-overlay is-record-page" onChangeCapture={() => setRecordDirty(true)}>
           <div className="proposal-studio-modal">
-            
+
             {/* 1. Header Banner & Top Bar */}
             <div className="opp-studio-header">
               <div className="header-left">
@@ -4037,10 +4509,9 @@ export const CRM: React.FC = () => {
                   type="button"
                   className="btn-close-modal"
                   onClick={() => {
-                    setIsQuoteModalOpen(false);
-                    setSelectedOpp(null);
+                    closeRecord();
                   }}
-                  title="Fechar Workspace"
+                  title="Voltar ao CRM"
                 >
                   <X size={18} />
                 </button>
@@ -4106,10 +4577,10 @@ export const CRM: React.FC = () => {
 
             {/* 3. Main 2-Column Workspace */}
             <div className="proposal-workspace-grid">
-              
+
               {/* Left Column (70%) - Tabs & Enrichment Forms */}
               <div className="proposal-main-pane">
-                
+
                 {/* Modern Pill Tabs */}
                 <div className="opp-nav-tabs">
                   <button
@@ -4167,7 +4638,7 @@ export const CRM: React.FC = () => {
                 {/* Tab 1: Dados Gerais */}
                 {proposalActiveTab === 'general' && (
                   <div className="opp-tab-content">
-                    
+
                     {/* Card 1: Identificação & Cliente */}
                     <div className="form-section-card">
                       <div className="card-header">
@@ -4451,7 +4922,7 @@ export const CRM: React.FC = () => {
                 {/* Tab 2: Cliente & LTV 360º */}
                 {proposalActiveTab === 'customer' && (
                   <div className="opp-tab-content">
-                    
+
                     {/* Card Executivo de Dados do Cliente (Módulo de Vendas) */}
                     <div className="form-section-card customer-executive-card">
                       <div className="card-header customer-card-header">
@@ -4539,7 +5010,11 @@ export const CRM: React.FC = () => {
                                 <button
                                   type="button"
                                   className="btn-wa-direct"
-                                  onClick={() => handleOpenWhatsApp(linkedCustomer?.phone || proposalForm.customer_phone, linkedCustomer?.name || proposalForm.customer_name)}
+                                  onClick={() => handleOpenWhatsApp(
+                                    linkedCustomer?.phone || proposalForm.customer_phone,
+                                    linkedCustomer?.name || proposalForm.customer_name,
+                                    selectedOpp?.contact_id || (linkedCustomer as any)?.contact_id
+                                  )}
                                   title="Iniciar conversa no WhatsApp"
                                 >
                                   <MessageSquare size={13} />
@@ -5170,7 +5645,7 @@ export const CRM: React.FC = () => {
 
               {/* Right Column (30%) - Real-Time Follow-up & Activity Sidebar */}
               <div className="opp-sidebar-pane">
-                
+
                 {/* Header da Sidebar */}
                 <div className="sidebar-header-bar">
                   <div className="header-title-box">
@@ -5439,70 +5914,12 @@ export const CRM: React.FC = () => {
       {/* =================================================================== */}
       {/* MODAL DEDICADO DE COTAÇÃO / PROPOSTA COMERCIAL (UNIFICADO)          */}
       {/* =================================================================== */}
-      <QuoteModal
-        isOpen={isDedicatedQuoteModalOpen}
-        onClose={() => {
-          setIsDedicatedQuoteModalOpen(false);
-          setEditingQuote(null);
-        }}
-        quote={editingQuote}
-        fixedCustomerId={selectedOpp?.customer_id || linkedCustomer?.id || null}
-        fixedOpportunityId={selectedOpp?.id || null}
-        fixedCustomerName={selectedOpp?.customer_name || linkedCustomer?.name || ''}
-        onSuccess={async (_savedQuote) => {
-          if (selectedOpp) {
-            try {
-              const quotes = await crmService.getOpportunityQuotations(selectedOpp.id, true);
-              setOppQuotations(quotes);
-              await loadCRMData();
-            } catch (e) {
-              console.error("Erro ao sincronizar cotações:", e);
-            }
-          }
-        }}
-      />
+
 
       {/* ========================================================================= */}
       {/* MODAL / WIZARD DEDICADO: CADASTRO DO CLIENTE (UNIFICADO MÓDULO DE VENDAS)  */}
       {/* ========================================================================= */}
-      <CustomerModal
-        isOpen={isCustomerModalOpen}
-        onClose={() => setIsCustomerModalOpen(false)}
-        customer={linkedCustomer}
-        onSuccess={async (savedCust) => {
-          setLinkedCustomer(savedCust);
-          setProposalForm(prev => ({
-            ...prev,
-            customer_id: savedCust.id,
-            customer_name: savedCust.trade_name || savedCust.name,
-            customer_document: savedCust.document || '',
-            customer_email: savedCust.email || '',
-            customer_phone: savedCust.phone || ''
-          }));
 
-          const targetOppId = selectedOpp?.id || selectedOppForQuote?.id;
-          if (targetOppId) {
-            try {
-              await crmService.updateOpportunity(targetOppId, {
-                customer_id: savedCust.id,
-                customer_name: savedCust.trade_name || savedCust.name
-              });
-              setOpportunities(prev => prev.map(o => o.id === targetOppId ? {
-                ...o,
-                customer_id: savedCust.id,
-                customer_name: savedCust.trade_name || savedCust.name
-              } : o));
-              setSelectedOpp(prev => prev ? {
-                ...prev,
-                customer_id: savedCust.id,
-                customer_name: savedCust.trade_name || savedCust.name
-              } : null);
-            } catch (err: any) {
-              console.error("Erro ao sincronizar oportunidade com cliente:", err);
-            }
-          }
-        }}
-      />
 
       {/* ========================================================================= */}
       {/* 6. MODAL / WIZARD: SELECIONAR / VINCULAR CLIENTE DA BASE COMERCIAL        */}
@@ -5572,6 +5989,7 @@ export const CRM: React.FC = () => {
         )}
       </Modal>
 
+      {recordKind === 'oportunidades' && <UnsavedChangesGuard when={recordDirty && !isSavingQuote} />}
       <ConfirmModal
         isOpen={confirmModal.isOpen}
         title={confirmModal.title}
@@ -5588,3 +6006,12 @@ export const CRM: React.FC = () => {
     </div>
   );
 };
+
+
+export function CRMRoute() {
+  const [params] = useSearchParams();
+  const ref = parseRecordReference(params);
+  const href = ref ? buildRecordHref(ref.type, ref.id) : null;
+  if (href?.startsWith('/crm/')) return <Navigate to={href} replace />;
+  return <CRM />;
+}
